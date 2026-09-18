@@ -3,6 +3,7 @@ import type { Doc } from "@/convex/_generated/dataModel";
 import {
   Loader2,
   Maximize,
+  Minimize,
   Pause,
   Play,
   RotateCcw,
@@ -272,6 +273,17 @@ export default function VideoPlayer({
               />
             </div>
           </div>
+
+          {/* Fullscreen */}
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="ml-auto rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+            aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+            title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+          >
+            {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
+          </button>
         </div>
       </div>
     </div>
