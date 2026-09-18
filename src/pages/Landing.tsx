@@ -5,23 +5,20 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
-import MovieFormDialog from "@/components/MovieFormDialog";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "convex/react";
-import { Dices, Film, LogOut, Play, Search, Sparkles, Tv } from "lucide-react";
+import { Dices, Film, LogOut, Play, Search, ShieldCheck, Tv } from "lucide-react";
 import { motion } from "framer-motion";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 export default function Landing() {
-  const { user, signOut, isAuthenticated } = useAuth();
+  const { signOut, isAuthenticated } = useAuth();
   const movies = useQuery(api.movies.list);
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [genre, setGenre] = useState<string | null>(null);
-  const [contributeOpen, setContributeOpen] = useState(false);
-  const isAdmin = user?.role === "admin";
 
   const genres = useMemo(() => {
     const set = new Set<string>();
@@ -87,29 +84,18 @@ export default function Landing() {
             </Link>
           </nav>
           <div className="flex items-center gap-2">
-            {isAdmin ? (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-2"
-                  onClick={() => setContributeOpen(true)}
-                >
-                  <Sparkles className="size-4" />
-                  <span className="hidden sm:inline">Add title</span>
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="gap-2 text-muted-foreground"
-                  onClick={async () => {
-                    await signOut();
-                  }}
-                  aria-label="Sign out"
-                >
-                  <LogOut className="size-4" />
-                </Button>
-              </>
+            {isAuthenticated ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2 text-muted-foreground"
+                onClick={async () => {
+                  await signOut();
+                }}
+                aria-label="Sign out"
+              >
+                <LogOut className="size-4" />
+              </Button>
             ) : (
               <Button asChild size="sm" className="gap-2">
                 <Link to="/auth?returnTo=%2F">
@@ -202,17 +188,6 @@ export default function Landing() {
                   : "Watch new releases for free — pick a poster and press play."}
               </p>
             </div>
-            {isAdmin && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => setContributeOpen(true)}
-              >
-                <Sparkles className="size-4" />
-                Add title
-              </Button>
-            )}
           </div>
 
           {!movies ? (
@@ -233,7 +208,7 @@ export default function Landing() {
                 <p className="max-w-sm text-sm text-muted-foreground">
                   {query.trim() || genre
                     ? "Try a different search term or genre."
-                    : "The catalog is empty. Add the first title to get the team started."}
+                    : "The catalog is empty — check back soon."}
                 </p>
               </CardContent>
             </Card>
@@ -264,25 +239,12 @@ export default function Landing() {
           </Card>
           <Card className="card-lift border-border/60 bg-card/70">
             <CardContent className="flex flex-col gap-2 p-5">
-              <Film className="size-5 text-primary" />
-              <p className="font-display font-semibold">${isAdmin ? "Grow the catalog" : "Curated by admins"}</p>
+              <ShieldCheck className="size-5 text-primary" />
+              <p className="font-display font-semibold">Curated by admins</p>
               <p className="text-sm text-muted-foreground">
-                ${isAdmin
-                  ? "Add new titles from here or the admin panel — you have full control."
-                  : "Only admins add movies, so every title in the catalog is vetted."}
+                Only admins manage the catalog, so every title is vetted and
+                ready to watch.
               </p>
-              ${isAdmin
-                ? `<Button
-                variant="ghost"
-                size="sm"
-                className="mt-1 self-start px-0 text-primary hover:text-primary"
-                onClick={() => setContributeOpen(true)}
-              >
-                Add a movie →
-              </Button>`
-                : `<Button asChild variant="ghost" size="sm" className="mt-1 self-start px-0 text-primary hover:text-primary">
-                <Link to="/nazmul">Admin panel →</Link>
-              </Button>`}
             </CardContent>
           </Card>
           <Card className="card-lift border-border/60 bg-card/70">
@@ -317,8 +279,6 @@ export default function Landing() {
           our internal team.
         </p>
       </footer>
-
-      <MovieFormDialog open={contributeOpen} onOpenChange={setContributeOpen} movie={null} />
     </div>
   );
 }
