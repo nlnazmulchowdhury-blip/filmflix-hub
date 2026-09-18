@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
 import Logo from "@/components/Logo";
 import MovieFormDialog from "@/components/MovieFormDialog";
 import { api } from "@/convex/_generated/api";
@@ -23,6 +24,7 @@ import {
   Clapperboard,
   CreditCard,
   Film,
+  KeyRound,
   Loader2,
   LogOut,
   MessageSquare,
@@ -57,24 +59,30 @@ function AdminContent() {
   const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
 
   const removeMovie = useMutation(api.movies.remove);
-  const claimAdmin = useMutation(api.movies.claimAdmin);
+  const verifyAdminCode = useMutation(api.movies.verifyAdminCode);
   const removeComment = useMutation(api.comments.remove);
   const setRole = useMutation(api.admin.setRole);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Doc<"movies"> | null>(null);
   const [deleting, setDeleting] = useState<Doc<"movies"> | null>(null);
-  const [isClaiming, setIsClaiming] = useState(false);
+  const [adminCode, setAdminCode] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
 
-  const handleClaim = async () => {
-    setIsClaiming(true);
+  const handleVerifyCode = async () => {
+    if (!adminCode.trim()) {
+      toast.error("Enter the admin access code");
+      return;
+    }
+    setIsVerifying(true);
     try {
-      await claimAdmin();
-      toast.success("You now have admin access");
+      await verifyAdminCode({ code: adminCode });
+      toast.success("Admin access granted");
+      setAdminCode("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to claim admin");
+      toast.error(err instanceof Error ? err.message : "Verification failed");
     } finally {
-      setIsClaiming(false);
+      setIsVerifying(false);
     }
   };
 
@@ -132,19 +140,44 @@ function AdminContent() {
           <Card className="mx-auto mt-12 max-w-md border-primary/25 shadow-[0_24px_64px_-32px_rgba(0,0,0,0.9)]">
             <CardHeader className="items-center text-center">
               <span className="mx-auto mb-2 flex size-12 items-center justify-center rounded-full bg-primary/12 text-primary">
-                <ShieldCheck className="size-6" />
+                <KeyRound className="size-6" />
               </span>
-              <CardTitle className="font-display">Admin access</CardTitle>
+              <CardTitle className="font-display">Admin sign-in</CardTitle>
               <CardDescription>
-                You are signed in as {user?.email ?? "a guest"}. Claim the admin
-                role to manage the FilmFlix workspace.
+                This area is restricted. Enter the admin access code to manage
+                the FilmFlix workspace.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <Button onClick={handleClaim} disabled={isClaiming} className="w-full gap-2">
-                {isClaiming && <Loader2 className="size-4 animate-spin" />}
-                Claim admin access
-              </Button>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleVerifyCode();
+                }}
+                className="space-y-3"
+              >
+                <Input
+                  type="password"
+                  value={adminCode}
+                  onChange={(e) => setAdminCode(e.target.value)}
+                  placeholder="Admin access code"
+                  autoComplete="off"
+                  disabled={isVerifying}
+                />
+                <Button
+                  type="submit"
+                  disabled={isVerifying || !adminCode.trim()}
+                  className="w-full gap-2"
+                >
+                  {isVerifying && <Loader2 className="size-4 animate-spin" />}
+                  <ShieldCheck className="size-4" />
+                  Unlock admin panel
+                </Button>
+              </form>
+              <p className="mt-3 text-center text-xs text-muted-foreground">
+                Signed in as {user?.email ?? "a guest"} — the code is held only
+                by workspace admins.
+              </p>
             </CardContent>
           </Card>
         ) : (

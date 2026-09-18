@@ -88,12 +88,27 @@ export const listByContributor = query({
       .collect(),
 });
 
-export const claimAdmin = mutation({
-  args: {},
-  handler: async (ctx) => {
+/**
+ * Verify the shared admin access code. The code lives only on the server
+ * (ADMIN_ACCESS_CODE env var, set from the project's Keys/API keys page).
+ * On success the signed-in user is promoted to the admin role.
+ */
+export const verifyAdminCode = mutation({
+  args: { code: v.string() },
+  handler: async (ctx, { code }) => {
     const user = await getCurrentUser(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Sign in first, then enter the admin code");
     if (user.role === "admin") return "already-admin";
+
+    const expected = process.env.ADMIN_ACCESS_CODE;
+    if (!expected) {
+      throw new Error(
+        "ADMIN_ACCESS_CODE is not configured. Set it in the project's API keys page.",
+      );
+    }
+    if (code.trim() !== expected) {
+      throw new Error("Incorrect admin access code");
+    }
     await ctx.db.patch(user._id, { role: "admin" });
     return "claimed";
   },
