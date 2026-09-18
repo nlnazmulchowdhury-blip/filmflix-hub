@@ -634,30 +634,32 @@ function AdminContent() {
         mode="admin"
       />
 
-      <dialog
-        open={deleting != null}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-        onClick={(e) => {
-          if (e.target === e.currentTarget) setDeleting(null);
-        }}
-      >
-        <div className="mx-4 w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-xl">
-          <h3 className="font-display text-lg font-semibold">Delete movie?</h3>
-          <p className="mt-2 text-sm text-muted-foreground">
-            "{deleting?.title}" will be permanently removed from the catalog.
-            This cannot be undone.
-          </p>
-          <div className="mt-5 flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setDeleting(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleDelete} className="gap-2">
-              <Trash2 className="size-4" />
-              Delete
-            </Button>
+      {deleting && (
+        <dialog
+          open
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDeleting(null);
+          }}
+        >
+          <div className="mx-4 w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-xl">
+            <h3 className="font-display text-lg font-semibold">Delete movie?</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              "{deleting.title}" will be permanently removed from the catalog.
+              This cannot be undone.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="outline" autoFocus onClick={() => setDeleting(null)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={handleDelete} className="gap-2">
+                <Trash2 className="size-4" />
+                Delete
+              </Button>
+            </div>
           </div>
-        </div>
-      </dialog>
+        </dialog>
+      )}
     </div>
   );
 }
