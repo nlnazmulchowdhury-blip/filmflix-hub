@@ -10,6 +10,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -24,7 +31,7 @@ import {
 } from "lucide-react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 
 const episodeSchema = z.object({
@@ -62,6 +69,23 @@ export default function MovieFormDialog({
   const addMovie = useMutation(api.movies.add);
   const updateMovie = useMutation(api.movies.update);
   const isEdit = Boolean(movie);
+
+  /* "select" = pick an existing category, "new" = type a fresh one. */
+  const [categoryMode, setCategoryMode] = useState<"select" | "new">("select");
+  const [selectedCategory, setSelectedCategory] = useState<string>("");
+
+  /* Sync the picker state each time the dialog opens. */
+  useEffect(() => {
+    if (!open) return;
+    const current = movie?.category?.trim() ?? "";
+    if (current && categories.includes(current)) {
+      setCategoryMode("select");
+      setSelectedCategory(current);
+    } else {
+      setCategoryMode("new");
+      setSelectedCategory("");
+    }
+  }, [open, movie?._id, categories]);
 
   const emptyValues: MovieFormValues = {
     title: "",
@@ -101,6 +125,7 @@ export default function MovieFormDialog({
     control,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<MovieFormValues>({
     resolver: zodResolver(movieSchema),
@@ -226,20 +251,80 @@ export default function MovieFormDialog({
               <Input id="genre" placeholder="Sci-Fi" {...register("genre")} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="category">Category</Label>
-              <Input
-                id="category"
-                list="category-options"
-                placeholder="e.g. Hollywood"
-                {...register("category")}
-              />
+              <Label>Category</Label>
+              {/* Mode switch: pick an existing category, or create a new one. */}
+              <div className="flex gap-1 rounded-lg border border-border/60 bg-secondary/40 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCategoryMode("select");
+                    setValue("category", selectedCategory || undefined);
+                  }}
+                  className={`flex-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
+                    categoryMode === "select"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Select existing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCategoryMode("new");
+                    setValue("category", "");
+                  }}
+                  className={`flex-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
+                    categoryMode === "new"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  New category
+                </button>
+              </div>
+
+              {categoryMode === "select" ? (
+                <Select
+                  value={selectedCategory}
+                  onValueChange={(v) => {
+                    setSelectedCategory(v);
+                    setValue("category", v);
+                  }}
+                >
+                  <SelectTrigger aria-label="Select category">
+                    <SelectValue placeholder="Choose a category…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-muted-foreground">
+                        No categories yet — switch to “New category”.
+                      </div>
+                    ) : (
+                      categories.map((c) => (
+                        <SelectItem key={c} value={c}>
+                          {c}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  id="category"
+                  list="category-options"
+                  placeholder="e.g. Hollywood"
+                  {...register("category")}
+                />
+              )}
               <datalist id="category-options">
                 {categories.map((c) => (
                   <option key={c} value={c} />
                 ))}
               </datalist>
               <p className="text-xs text-muted-foreground">
-                Visitors browse the catalog by these category sections.
+                Pick where this movie lives — visitors browse the catalog by
+                these category sections.
               </p>
             </div>
           </div>
