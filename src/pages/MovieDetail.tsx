@@ -15,11 +15,13 @@ import {
   CalendarPlus,
   Loader2,
   MessageSquare,
+  Play,
   Send,
   Star,
   Tag,
   Trash2,
   Calendar,
+  ListVideo,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
@@ -118,6 +120,43 @@ export default function MovieDetail() {
 
   const defaultWhen = toLocalInputValue(Date.now() + 24 * 60 * 60 * 1000);
 
+  /* Playlist: main video (if any) first, then the admin-ordered episodes. */
+  const playlist = movie
+    ? [
+        ...(movie.videoUrl
+          ? [
+              {
+                key: "main",
+                title: movie.title,
+                videoUrl: movie.videoUrl,
+                durationSec: undefined as number | undefined,
+              },
+            ]
+          : []),
+        ...(movie.episodes ?? []).map((e, i) => ({
+          key: `ep-${i}`,
+          title: e.title,
+          videoUrl: e.videoUrl,
+          durationSec: e.durationSec,
+        })),
+      ]
+    : [];
+
+  const nowPlayingUrl = miniMovie?.videoUrl;
+  const playItem = (item: (typeof playlist)[number]) => {
+    if (!movie) return;
+    start(
+      {
+        movieId: movie._id,
+        title: item.title,
+        videoUrl: item.videoUrl,
+        posterUrl: movie.posterUrl,
+        backdropUrl: movie.backdropUrl,
+      },
+      true,
+    );
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="pointer-events-none fixed inset-0 -z-10">
@@ -155,6 +194,66 @@ export default function MovieDetail() {
               posterUrl={movie.posterUrl}
               backdropUrl={movie.backdropUrl}
             />
+
+            {/* Episode / parts playlist */}
+            {playlist.length > 1 && (
+              <section aria-label="Episodes">
+                <h2 className="font-display flex items-center gap-2 text-lg font-bold tracking-tight">
+                  <ListVideo className="size-5 text-primary" />
+                  More episodes
+                  <span className="text-sm font-medium text-muted-foreground">
+                    ({playlist.length})
+                  </span>
+                </h2>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {playlist.map((item, i) => {
+                    const isPlaying = nowPlayingUrl === item.videoUrl;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => playItem(item)}
+                        className={`flex items-center gap-3 rounded-xl border p-2.5 text-left transition-colors ${
+                          isPlaying
+                            ? "border-primary/60 bg-primary/10"
+                            : "border-border/50 bg-card/60 hover:border-foreground/25 hover:bg-card"
+                        }`}
+                      >
+                        <span
+                          className={`flex size-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold ${
+                            isPlaying
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-primary/12 text-primary"
+                          }`}
+                        >
+                          {isPlaying ? (
+                            <Play className="size-4 fill-current" />
+                          ) : (
+                            i + 1
+                          )}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-semibold">
+                            {item.title}
+                          </span>
+                          {item.durationSec != null && (
+                            <span className="text-xs text-muted-foreground">
+                              {Math.floor(item.durationSec / 60)}m{" "}
+                              {item.durationSec % 60}s
+                            </span>
+                          )}
+                        </span>
+                        {isPlaying && (
+                          <span className="shrink-0 text-xs font-semibold text-primary">
+                            Now playing
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
 
             {/* Meta */}
             <div className="grid gap-10 lg:grid-cols-[1fr_280px]">

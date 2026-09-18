@@ -15,6 +15,12 @@ const seasonObj = v.object({
   episodes: v.array(episodeObj),
 });
 
+const episodeInput = v.object({
+  title: v.string(),
+  videoUrl: v.string(),
+  durationSec: v.optional(v.number()),
+});
+
 const movieFields = {
   title: v.string(),
   description: v.optional(v.string()),
@@ -25,6 +31,7 @@ const movieFields = {
   year: v.optional(v.number()),
   rating: v.optional(v.number()),
   kind: v.optional(v.union(v.literal("movie"), v.literal("series"))),
+  episodes: v.optional(v.array(episodeInput)),
   seasons: v.optional(v.array(seasonObj)),
   order: v.optional(v.number()),
 };

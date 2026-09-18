@@ -44,6 +44,17 @@ const schema = defineSchema(
       year: v.optional(v.number()),
       rating: v.optional(v.number()),
       kind: v.optional(v.union(v.literal("movie"), v.literal("series"))),
+      /** Ordered list of episodes/extra parts. Played from the playlist under
+       *  the player on the movie page. */
+      episodes: v.optional(
+        v.array(
+          v.object({
+            title: v.string(),
+            videoUrl: v.string(),
+            durationSec: v.optional(v.number()),
+          }),
+        ),
+      ),
       seasons: v.optional(
         v.array(
           v.object({
