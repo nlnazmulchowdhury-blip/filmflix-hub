@@ -21,6 +21,7 @@ export default function Landing() {
   const [query, setQuery] = useState("");
   const [genre, setGenre] = useState<string | null>(null);
   const [contributeOpen, setContributeOpen] = useState(false);
+  const isAdmin = user?.role === "admin";
 
   const genres = useMemo(() => {
     const set = new Set<string>();
@@ -86,7 +87,7 @@ export default function Landing() {
             </Link>
           </nav>
           <div className="flex items-center gap-2">
-            {isAuthenticated ? (
+            {isAdmin ? (
               <>
                 <Button
                   variant="outline"
@@ -201,7 +202,7 @@ export default function Landing() {
                   : "Watch new releases for free — pick a poster and press play."}
               </p>
             </div>
-            {isAuthenticated && (
+            {isAdmin && (
               <Button
                 variant="outline"
                 size="sm"
@@ -264,20 +265,24 @@ export default function Landing() {
           <Card className="card-lift border-border/60 bg-card/70">
             <CardContent className="flex flex-col gap-2 p-5">
               <Film className="size-5 text-primary" />
-              <p className="font-display font-semibold">Contribute titles</p>
+              <p className="font-display font-semibold">${isAdmin ? "Grow the catalog" : "Curated by admins"}</p>
               <p className="text-sm text-muted-foreground">
-                Members add movies to the shared catalog in seconds.
+                ${isAdmin
+                  ? "Add new titles from here or the admin panel — you have full control."
+                  : "Only admins add movies, so every title in the catalog is vetted."}
               </p>
-              <Button
+              ${isAdmin
+                ? `<Button
                 variant="ghost"
                 size="sm"
                 className="mt-1 self-start px-0 text-primary hover:text-primary"
-                onClick={() =>
-                  isAuthenticated ? setContributeOpen(true) : navigate("/auth?returnTo=%2F")
-                }
+                onClick={() => setContributeOpen(true)}
               >
-                Share a movie →
-              </Button>
+                Add a movie →
+              </Button>`
+                : `<Button asChild variant="ghost" size="sm" className="mt-1 self-start px-0 text-primary hover:text-primary">
+                <Link to="/nazmul">Admin panel →</Link>
+              </Button>`}
             </CardContent>
           </Card>
           <Card className="card-lift border-border/60 bg-card/70">
@@ -313,7 +318,7 @@ export default function Landing() {
         </p>
       </footer>
 
-      <MovieFormDialog open={contributeOpen} onOpenChange={setContributeOpen} movie={null} mode="contribute" />
+      <MovieFormDialog open={contributeOpen} onOpenChange={setContributeOpen} movie={null} />
     </div>
   );
 }

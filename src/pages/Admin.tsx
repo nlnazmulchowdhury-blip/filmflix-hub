@@ -631,7 +631,6 @@ function AdminContent() {
           if (!o) setEditing(null);
         }}
         movie={editing}
-        mode="admin"
       />
 
       {deleting && (

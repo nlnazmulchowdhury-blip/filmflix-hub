@@ -36,18 +36,14 @@ export default function MovieFormDialog({
   open,
   onOpenChange,
   movie,
-  mode = "admin",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   movie: Doc<"movies"> | null;
-  mode?: "admin" | "contribute";
 }) {
   const addMovie = useMutation(api.movies.add);
-  const contributeMovie = useMutation(api.movies.contribute);
   const updateMovie = useMutation(api.movies.update);
   const isEdit = Boolean(movie);
-  const isMemberFlow = mode === "contribute" && !isEdit;
 
   const {
     register,
@@ -94,9 +90,6 @@ export default function MovieFormDialog({
       if (isEdit && movie) {
         await updateMovie({ id: movie._id, ...payload });
         toast.success("Movie updated");
-      } else if (isMemberFlow) {
-        await contributeMovie(payload);
-        toast.success("Thanks! Your title is now in the team catalog.");
       } else {
         await addMovie(payload);
         toast.success("Movie added to the catalog");
@@ -112,14 +105,12 @@ export default function MovieFormDialog({
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            {isEdit ? "Edit movie" : isMemberFlow ? "Add a title to the catalog" : "Add movie"}
+            {isEdit ? "Edit movie" : "Add movie"}
           </DialogTitle>
           <DialogDescription>
             {isEdit
               ? "Update the details of this catalog entry."
-              : isMemberFlow
-                ? "Share a film with the team. It goes live in the catalog right away."
-                : "New movies appear in the public catalog instantly."}
+              : "New movies appear in the catalog instantly."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -186,7 +177,7 @@ export default function MovieFormDialog({
             </Button>
             <Button type="submit" disabled={isSubmitting} className="gap-2">
               {isSubmitting && <Loader2 className="size-4 animate-spin" />}
-              {isEdit ? "Save changes" : isMemberFlow ? "Share with the team" : "Add movie"}
+              {isEdit ? "Save changes" : "Add movie"}
             </Button>
           </DialogFooter>
         </form>
