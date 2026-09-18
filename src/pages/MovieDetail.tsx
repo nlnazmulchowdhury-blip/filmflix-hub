@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
-import VideoPlayer from "@/components/VideoPlayer";
+import PlayerStage from "@/components/PlayerStage";
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -15,14 +15,13 @@ import {
   CalendarPlus,
   Loader2,
   MessageSquare,
-  Minimize2,
   Send,
   Star,
   Tag,
   Trash2,
   Calendar,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -36,7 +35,7 @@ export default function MovieDetail() {
   const { id } = useParams<{ id: string }>();
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
-  const { show: showMini, close: closeMini, isActive: miniActive } = useMiniPlayer();
+  const { movie: miniMovie, isActive: miniActive, start } = useMiniPlayer();
   const movie = useQuery(api.movies.get, {
     id: id as Id<"movies">,
   });
@@ -56,6 +55,25 @@ export default function MovieDetail() {
   const [commentText, setCommentText] = useState("");
   const [isPosting, setIsPosting] = useState(false);
 
+  /* Register this movie with the persistent player as soon as it loads:
+     - fresh visit → poster overlay (no autoplay)
+     - returning from miniplayer → playback continues seamlessly */
+  useEffect(() => {
+    if (!movie) return;
+    if (miniActive && miniMovie?.movieId === movie._id) return; // already playing
+    start(
+      {
+        movieId: movie._id,
+        title: movie.title,
+        videoUrl: movie.videoUrl ?? "",
+        posterUrl: movie.posterUrl,
+        backdropUrl: movie.backdropUrl,
+      },
+      false,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [movie?._id]);
+
   const handleSchedule = async () => {
     if (!movie) return;
     const ts = new Date(when).getTime();
@@ -70,7 +88,7 @@ export default function MovieDetail() {
         scheduledFor: ts,
         note: note || undefined,
       });
-      toast.success("Screening scheduled — see it in your library");
+      toast.success("Screening scheduled — see it in your dashboard");
       setWhen("");
       setNote("");
     } catch (err) {
@@ -129,37 +147,14 @@ export default function MovieDetail() {
           </div>
         ) : (
           <div className="space-y-10">
-            {/* Player */}
-            {!miniActive ? (
-              <VideoPlayer
-                movie={movie}
-                videoUrl={movie.videoUrl}
-                title={movie.title}
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={closeMini}
-                className="group relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl border border-border/60 bg-black"
-              >
-                {movie.backdropUrl || movie.posterUrl ? (
-                  <img
-                    src={movie.backdropUrl ?? movie.posterUrl}
-                    alt=""
-                    className="absolute inset-0 size-full object-cover opacity-50"
-                  />
-                ) : null}
-                <span className="relative z-10 flex flex-col items-center gap-3 text-center">
-                  <span className="rounded-full bg-black/70 px-4 py-1.5 text-xs font-medium text-white/90 backdrop-blur-sm">
-                    Playing in miniplayer — keep browsing anywhere on the site
-                  </span>
-                  <span className="glow-accent flex items-center gap-2 rounded-full bg-primary/95 px-5 py-2.5 font-display text-sm font-semibold text-primary-foreground">
-                    <Minimize2 className="size-4" />
-                    Bring video back here
-                  </span>
-                </span>
-              </button>
-            )}
+            {/* Persistent player stage */}
+            <PlayerStage
+              movieId={movie._id}
+              videoUrl={movie.videoUrl ?? ""}
+              title={movie.title}
+              posterUrl={movie.posterUrl}
+              backdropUrl={movie.backdropUrl}
+            />
 
             {/* Meta */}
             <div className="grid gap-10 lg:grid-cols-[1fr_280px]">
