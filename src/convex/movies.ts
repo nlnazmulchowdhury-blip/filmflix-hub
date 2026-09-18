@@ -87,6 +87,29 @@ export const remove = mutation({
   },
 });
 
+/**
+ * Delete a category: strips the category field from every movie that uses
+ * it. The movies themselves stay in the catalog — they just become
+ * uncategorized. Admin-only.
+ */
+export const removeCategory = mutation({
+  args: { category: v.string() },
+  handler: async (ctx, { category }) => {
+    await requireAdmin(ctx);
+    const trimmed = category.trim();
+    if (!trimmed) throw new Error("Category name is required");
+    const rows = await ctx.db.query("movies").withIndex("order").collect();
+    let changed = 0;
+    for (const m of rows) {
+      if ((m.category ?? "").trim() === trimmed) {
+        await ctx.db.patch(m._id, { category: undefined });
+        changed++;
+      }
+    }
+    return changed;
+  },
+});
+
 export const listByContributor = query({
   args: { userId: v.id("users") },
   handler: (ctx, { userId }) =>

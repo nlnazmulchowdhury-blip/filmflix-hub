@@ -61,6 +61,7 @@ function AdminContent() {
   const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
 
   const removeMovie = useMutation(api.movies.remove);
+  const removeCategory = useMutation(api.movies.removeCategory);
   const verifyAdminCode = useMutation(api.movies.verifyAdminCode);
   const removeComment = useMutation(api.comments.remove);
   const setRole = useMutation(api.admin.setRole);
@@ -68,6 +69,10 @@ function AdminContent() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Doc<"movies"> | null>(null);
   const [deleting, setDeleting] = useState<Doc<"movies"> | null>(null);
+  const [deletingCategory, setDeletingCategory] = useState<{
+    name: string;
+    count: number;
+  } | null>(null);
   const [adminCode, setAdminCode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [movieSearch, setMovieSearch] = useState("");
@@ -130,6 +135,19 @@ function AdminContent() {
       setDeleting(null);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete");
+    }
+  };
+
+  const handleDeleteCategory = async () => {
+    if (!deletingCategory) return;
+    try {
+      const changed = await removeCategory({ category: deletingCategory.name });
+      toast.success(
+        `Category "${deletingCategory.name}" removed — ${changed} ${changed === 1 ? "movie" : "movies"} kept in the catalog as uncategorized.`,
+      );
+      setDeletingCategory(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete category");
     }
   };
 
@@ -318,6 +336,48 @@ function AdminContent() {
 
               {/* Movies */}
               <TabsContent value="movies">
+                {/* Category management */}
+                {categories.length > 0 && (
+                  <Card className="mb-4 border-border/60 bg-card/60 p-4">
+                    <div className="mb-2.5 flex items-center justify-between">
+                      <p className="font-display text-sm font-semibold">
+                        Categories ({categories.length})
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Deleting a category keeps its movies in the catalog as
+                        uncategorized.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {categories.map((c) => {
+                        const count = (movies ?? []).filter(
+                          (m) => (m.category ?? "").trim() === c,
+                        ).length;
+                        return (
+                          <span
+                            key={c}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 py-1 pl-3 pr-1.5 text-xs font-semibold text-primary"
+                          >
+                            {c}
+                            <span className="text-[10px] font-medium text-primary/70">
+                              {count}
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={`Delete category ${c}`}
+                              title="Delete category"
+                              onClick={() => setDeletingCategory({ name: c, count })}
+                              className="rounded-full p-0.5 text-primary/70 transition-colors hover:bg-primary/20 hover:text-destructive"
+                            >
+                              <Trash2 className="size-3" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </Card>
+                )}
+
                 <div className="mb-3 flex items-center gap-2">
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -767,6 +827,37 @@ function AdminContent() {
               <Button variant="destructive" onClick={handleDelete} className="gap-2">
                 <Trash2 className="size-4" />
                 Delete
+              </Button>
+            </div>
+          </div>
+        </dialog>
+      )}
+
+      {deletingCategory && (
+        <dialog
+          open
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDeletingCategory(null);
+          }}
+        >
+          <div className="mx-4 w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-xl">
+            <h3 className="font-display text-lg font-semibold">
+              Delete category "{deletingCategory.name}"?
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {deletingCategory.count > 0
+                ? `${deletingCategory.count} ${deletingCategory.count === 1 ? "movie" : "movies"} will become uncategorized but stay in the catalog.`
+                : "This category has no movies."}{" "}
+              The category pill will disappear from the public site.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="outline" autoFocus onClick={() => setDeletingCategory(null)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={handleDeleteCategory} className="gap-2">
+                <Trash2 className="size-4" />
+                Delete category
               </Button>
             </div>
           </div>
