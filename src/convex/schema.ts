@@ -61,7 +61,35 @@ const schema = defineSchema(
         ),
       ),
       order: v.optional(v.number()),
-    }).index("order", ["order"]),
+      contributorId: v.optional(v.id("users")),
+    })
+      .index("order", ["order"])
+      .index("by_contributor", ["contributorId"]),
+
+    screenings: defineTable({
+      movieId: v.id("movies"),
+      userId: v.id("users"),
+      scheduledFor: v.number(), // epoch ms
+      note: v.optional(v.string()),
+      createdAt: v.number(),
+    })
+      .index("by_movie", ["movieId"])
+      .index("by_user", ["userId"]),
+
+    comments: defineTable({
+      movieId: v.id("movies"),
+      userId: v.id("users"),
+      text: v.string(),
+      createdAt: v.number(),
+    }).index("by_movie", ["movieId"]),
+
+    orders: defineTable({
+      userId: v.id("users"),
+      plan: v.string(), // "crew" | "premiere"
+      amountCents: v.number(),
+      status: v.string(),
+      createdAt: v.number(),
+    }).index("by_user", ["userId"]),
   },
   {
     schemaValidation: false,

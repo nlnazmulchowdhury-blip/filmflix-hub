@@ -79,6 +79,32 @@ export const remove = mutation({
   },
 });
 
+/** Any signed-in team member can contribute a title to the catalog. */
+export const contribute = mutation({
+  args: movieFields,
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not authenticated");
+    const order =
+      args.order ??
+      (await ctx.db.query("movies").withIndex("order").collect()).length;
+    return await ctx.db.insert("movies", {
+      ...args,
+      order,
+      contributorId: userId,
+    });
+  },
+});
+
+export const listByContributor = query({
+  args: { userId: v.id("users") },
+  handler: (ctx, { userId }) =>
+    ctx.db
+      .query("movies")
+      .withIndex("by_contributor", (q) => q.eq("contributorId", userId))
+      .collect(),
+});
+
 export const claimAdmin = mutation({
   args: {},
   handler: async (ctx) => {

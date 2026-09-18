@@ -1,26 +1,106 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import VideoPlayer from "@/components/VideoPlayer";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
-import { ArrowLeft, Calendar, Star, Tag } from "lucide-react";
-import { Link, useParams } from "react-router";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
+import {
+  ArrowLeft,
+  CalendarPlus,
+  Loader2,
+  MessageSquare,
+  Send,
+  Star,
+  Tag,
+  Trash2,
+  Calendar,
+} from "lucide-react";
+import { useState } from "react";
+import { Link, useNavigate, useParams } from "react-router";
+import { toast } from "sonner";
+
+function toLocalInputValue(ms: number) {
+  const d = new Date(ms);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 export default function MovieDetail() {
   const { id } = useParams<{ id: string }>();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  const navigate = useNavigate();
   const movie = useQuery(api.movies.get, {
     id: id as Id<"movies">,
   });
 
+  const comments = useQuery(
+    api.comments.listByMovie,
+    movie ? { movieId: movie._id } : "skip",
+  );
+  const addComment = useMutation(api.comments.add);
+  const removeComment = useMutation(api.comments.remove);
+
+  const scheduleScreening = useMutation(api.screenings.schedule);
+  const [when, setWhen] = useState("");
+  const [note, setNote] = useState("");
+  const [isScheduling, setIsScheduling] = useState(false);
+
+  const [commentText, setCommentText] = useState("");
+  const [isPosting, setIsPosting] = useState(false);
+
+  const handleSchedule = async () => {
+    if (!movie) return;
+    const ts = new Date(when).getTime();
+    if (!when || Number.isNaN(ts)) {
+      toast.error("Pick a date and time first");
+      return;
+    }
+    setIsScheduling(true);
+    try {
+      await scheduleScreening({
+        movieId: movie._id,
+        scheduledFor: ts,
+        note: note || undefined,
+      });
+      toast.success("Screening scheduled — see it in your library");
+      setWhen("");
+      setNote("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to schedule");
+    } finally {
+      setIsScheduling(false);
+    }
+  };
+
+  const handlePostComment = async () => {
+    if (!movie) return;
+    if (!isAuthenticated) {
+      navigate(`/auth?returnTo=${encodeURIComponent(`/movie/${movie._id}`)}`);
+      return;
+    }
+    if (!commentText.trim()) return;
+    setIsPosting(true);
+    try {
+      await addComment({ movieId: movie._id, text: commentText });
+      setCommentText("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to comment");
+    } finally {
+      setIsPosting(false);
+    }
+  };
+
+  const defaultWhen = toLocalInputValue(Date.now() + 24 * 60 * 60 * 1000);
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/10 blur-[130px]" />
+        <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
       </div>
 
       <header className="sticky top-0 z-40 glass-panel border-b">
@@ -45,7 +125,7 @@ export default function MovieDetail() {
             <Skeleton className="h-4 w-full max-w-xl" />
           </div>
         ) : (
-          <div className="space-y-8">
+          <div className="space-y-10">
             {/* Player */}
             <VideoPlayer
               movie={movie}
@@ -54,11 +134,11 @@ export default function MovieDetail() {
             />
 
             {/* Meta */}
-            <div className="grid gap-8 lg:grid-cols-[1fr_280px]">
+            <div className="grid gap-10 lg:grid-cols-[1fr_280px]">
               <div>
                 <div className="flex flex-wrap items-center gap-2.5">
                   {movie.kind === "series" && (
-                    <Badge className="bg-primary/15 text-primary border-primary/40" variant="outline">
+                    <Badge className="border-primary/40 bg-primary/15 text-primary" variant="outline">
                       Series
                     </Badge>
                   )}
@@ -95,20 +175,55 @@ export default function MovieDetail() {
                   </p>
                 )}
 
-                {isAuthenticated ? null : (
-                  <div className="mt-6 rounded-xl border border-primary/30 bg-primary/8 p-4 text-sm">
-                    <p className="font-medium">Want to keep watching?</p>
-                    <p className="mt-1 text-muted-foreground">
-                      <Link
-                        to={`/auth?returnTo=${encodeURIComponent(`/movie/${movie._id}`)}`}
-                        className="text-primary underline underline-offset-4 hover:text-primary/85"
-                      >
-                        Sign in
-                      </Link>{" "}
-                      to save your place across devices.
-                    </p>
-                  </div>
-                )}
+                {/* Schedule a screening */}
+                <Card className="mt-8 border-border/60 bg-card/70">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <CalendarPlus className="size-4 text-primary" />
+                      Schedule a team screening
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {isAuthenticated ? (
+                      <div className="space-y-3">
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <Input
+                            type="datetime-local"
+                            value={when || defaultWhen}
+                            min={toLocalInputValue(Date.now())}
+                            onChange={(e) => setWhen(e.target.value)}
+                            className="sm:max-w-xs"
+                            aria-label="Screening date and time"
+                          />
+                          <Input
+                            value={note}
+                            onChange={(e) => setNote(e.target.value)}
+                            placeholder="Note (optional) — e.g. “room B, snacks on me”"
+                            className="flex-1"
+                          />
+                        </div>
+                        <Button
+                          onClick={handleSchedule}
+                          disabled={isScheduling}
+                          className="glow-accent gap-2"
+                        >
+                          {isScheduling && <Loader2 className="size-4 animate-spin" />}
+                          Book this time
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        <Link
+                          to={`/auth?returnTo=${encodeURIComponent(`/movie/${movie._id}`)}`}
+                          className="text-primary underline underline-offset-4 hover:text-primary/85"
+                        >
+                          Sign in
+                        </Link>{" "}
+                        to schedule a screening and join the discussion.
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
               </div>
 
               {/* Poster card */}
@@ -130,6 +245,105 @@ export default function MovieDetail() {
                 </div>
               </aside>
             </div>
+
+            {/* Team discussion */}
+            <section>
+              <h2 className="font-display flex items-center gap-2 text-xl font-bold tracking-tight">
+                <MessageSquare className="size-5 text-primary" />
+                Team discussion
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Notes, reactions, and timecodes from the crew.
+              </p>
+
+              <div className="mt-5 flex gap-2">
+                <Input
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handlePostComment();
+                    }
+                  }}
+                  placeholder={
+                    isAuthenticated
+                      ? "Share a thought about this movie…"
+                      : "Sign in to join the discussion"
+                  }
+                  disabled={!isAuthenticated}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handlePostComment}
+                  disabled={!isAuthenticated || isPosting || !commentText.trim()}
+                  className="gap-2"
+                >
+                  {isPosting ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Send className="size-4" />
+                  )}
+                  Post
+                </Button>
+              </div>
+
+              <div className="mt-6 space-y-3">
+                {comments === undefined ? (
+                  <>
+                    <Skeleton className="h-14 w-full rounded-xl" />
+                    <Skeleton className="h-14 w-full rounded-xl" />
+                  </>
+                ) : comments.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
+                    No comments yet — start the conversation.
+                  </p>
+                ) : (
+                  comments.map((c) => (
+                    <div
+                      key={c._id}
+                      className="flex items-start gap-3 rounded-xl border border-border/50 bg-card/60 p-4"
+                    >
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary">
+                        {(c.authorName ?? "M").slice(0, 1).toUpperCase()}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold">
+                            {c.authorName ?? "Team member"}
+                          </p>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(c.createdAt).toLocaleString()}
+                          </span>
+                          {c.userId === user?._id && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="ml-auto size-7 text-muted-foreground hover:text-destructive"
+                              aria-label="Delete comment"
+                              onClick={async () => {
+                                try {
+                                  await removeComment({ id: c._id });
+                                } catch (err) {
+                                  toast.error(
+                                    err instanceof Error ? err.message : "Failed",
+                                  );
+                                }
+                              }}
+                            >
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                        <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90">
+                          {c.text}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
           </div>
         )}
       </main>

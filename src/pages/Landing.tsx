@@ -1,21 +1,26 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
+import MovieFormDialog from "@/components/MovieFormDialog";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
-import { Clapperboard, Film, Play, Sparkles, Tv } from "lucide-react";
+import { useQuery } from "convex/react";
+import { Dices, Film, LogOut, Play, Search, Sparkles, Tv } from "lucide-react";
 import { motion } from "framer-motion";
 import { useMemo, useState } from "react";
-import { Link } from "react-router";
-import { useQuery } from "convex/react";
+import { Link, useNavigate } from "react-router";
 
 export default function Landing() {
   const { user, signOut, isAuthenticated } = useAuth();
   const movies = useQuery(api.movies.list);
+  const navigate = useNavigate();
+  const [query, setQuery] = useState("");
   const [genre, setGenre] = useState<string | null>(null);
+  const [contributeOpen, setContributeOpen] = useState(false);
 
   const genres = useMemo(() => {
     const set = new Set<string>();
@@ -23,47 +28,85 @@ export default function Landing() {
       const g = (m.genre ?? "").trim();
       if (g) set.add(g);
     }
-    return Array.from(set).slice(0, 8);
+    return Array.from(set).sort();
   }, [movies]);
 
   const filtered = useMemo(() => {
     if (!movies) return null;
-    if (!genre) return movies;
-    return movies.filter((m) => (m.genre ?? "").trim() === genre);
-  }, [movies, genre]);
+    let rows = movies;
+    if (genre) rows = rows.filter((m) => (m.genre ?? "").trim() === genre);
+    const q = query.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter(
+        (m) =>
+          m.title.toLowerCase().includes(q) ||
+          (m.description ?? "").toLowerCase().includes(q),
+      );
+    }
+    return rows;
+  }, [movies, genre, query]);
 
-  const featured = movies?.[0];
   const catalog = filtered ?? [];
+
+  const surprise = () => {
+    if (!movies || movies.length === 0) return;
+    const pick = movies[Math.floor(Math.random() * movies.length)];
+    navigate(`/movie/${pick._id}`);
+  };
+
+  const navLinkClass =
+    "text-sm font-medium text-muted-foreground transition-colors hover:text-foreground";
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Ambient background */}
       <div className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute left-1/2 top-[-20%] h-[520px] w-[820px] -translate-x-1/2 rounded-full bg-primary/12 blur-[140px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] h-[380px] w-[520px] rounded-full bg-primary/6 blur-[120px]" />
+        <div className="absolute left-1/2 top-[-20%] h-[520px] w-[820px] -translate-x-1/2 rounded-full bg-primary/14 blur-[140px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] h-[380px] w-[520px] rounded-full bg-primary/8 blur-[120px]" />
+        <div className="absolute bottom-[10%] left-[-12%] h-[300px] w-[400px] rounded-full bg-chart-2/10 blur-[120px]" />
       </div>
 
       {/* Header */}
       <header className="sticky top-0 z-40 glass-panel border-b">
-        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6">
+        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
           <Link to="/" aria-label="FilmFlix home">
             <Logo />
           </Link>
-          <nav className="flex items-center gap-2">
+          <nav className="hidden items-center gap-6 md:flex">
+            <Link to="/" className={navLinkClass}>Home</Link>
+            <button type="button" onClick={surprise} className={navLinkClass}>
+              Random
+            </button>
+            <a href="#catalog" className={navLinkClass}>Genres</a>
+            <Link
+              to={isAuthenticated ? "/dashboard" : `/auth?returnTo=%2Fdashboard`}
+              className={navLinkClass}
+            >
+              Library
+            </Link>
+          </nav>
+          <div className="flex items-center gap-2">
             {isAuthenticated ? (
               <>
-                <span className="mr-1 hidden text-sm text-muted-foreground sm:inline">
-                  {user?.email ?? "Signed in"}
-                </span>
                 <Button
                   variant="outline"
                   size="sm"
                   className="gap-2"
+                  onClick={() => setContributeOpen(true)}
+                >
+                  <Sparkles className="size-4" />
+                  <span className="hidden sm:inline">Add title</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-2 text-muted-foreground"
                   onClick={async () => {
                     await signOut();
                   }}
+                  aria-label="Sign out"
                 >
-                  Sign out
+                  <LogOut className="size-4" />
                 </Button>
               </>
             ) : (
@@ -74,142 +117,106 @@ export default function Landing() {
                 </Link>
               </Button>
             )}
-          </nav>
+          </div>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-7xl px-4 pb-24 sm:px-6">
-        {/* Hero */}
-        <section className="relative py-12 sm:py-16">
-          <div className="grid items-center gap-10 lg:grid-cols-[1.1fr_0.9fr]">
-            <motion.div
-              initial={{ opacity: 0, y: 24 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.55, ease: "easeOut" }}
+        {/* Search */}
+        <section className="pt-10 sm:pt-14">
+          <motion.div
+            initial={{ opacity: 0, y: 18 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
+            className="mx-auto flex w-full max-w-2xl items-center gap-2"
+          >
+            <div className="relative flex-1">
+              <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search movies…"
+                className="h-11 rounded-xl bg-card/80 pl-10 text-base"
+                aria-label="Search movies"
+              />
+            </div>
+            <Button
+              size="lg"
+              className="glow-accent h-11 rounded-xl px-5"
+              onClick={surprise}
+              aria-label="Surprise me"
             >
-              <Badge variant="outline" className="mb-5 gap-1.5 border-primary/40 bg-primary/10 text-primary">
-                <Sparkles className="size-3.5" />
-                Movie streaming, made simple
-              </Badge>
-              <h1 className="font-display text-4xl font-extrabold leading-[1.08] tracking-tight sm:text-5xl lg:text-6xl">
-                Your movies. <span className="text-gradient">One beautiful</span> place.
-              </h1>
-              <p className="mt-5 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-                Browse the FilmFlix catalog, pick a poster, and press play — a
-                crisp custom player with full volume control, built for
-                distraction-free viewing.
-              </p>
-              <div className="mt-8 flex flex-wrap items-center gap-3">
-                <Button asChild size="lg" className="glow-accent gap-2 font-semibold">
-                  <a href="#catalog">
-                    <Play className="size-4 fill-current" />
-                    Browse catalog
-                  </a>
-                </Button>
-                {featured && (
-                  <Button asChild size="lg" variant="outline" className="gap-2">
-                    <Link to={`/movie/${featured._id}`}>
-                      <Clapperboard className="size-4" />
-                      Watch featured
-                    </Link>
-                  </Button>
-                )}
-              </div>
-
-              <div className="mt-10 flex items-center gap-6 text-sm text-muted-foreground">
-                <span className="inline-flex items-center gap-2">
-                  <Film className="size-4 text-primary" />
-                  {movies ? `${movies.length} titles` : "Loading…"}
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  <Tv className="size-4 text-primary" />
-                  Custom player
-                </span>
-              </div>
-            </motion.div>
-
-            {/* Featured poster preview */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.55, delay: 0.12, ease: "easeOut" }}
-              className="relative mx-auto w-full max-w-sm"
-            >
-              {featured ? (
-                <Link to={`/movie/${featured._id}`} className="group block">
-                  <Card className="overflow-hidden rounded-2xl border-border/60 bg-card p-0 shadow-[0_32px_80px_-32px_rgba(0,0,0,0.9)] transition-transform duration-300 group-hover:scale-[1.02]">
-                    <div className="relative aspect-[2/3] bg-muted">
-                      {featured.posterUrl ? (
-                        <img
-                          src={featured.posterUrl}
-                          alt={featured.title}
-                          className="size-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex size-full items-center justify-center">
-                          <Film className="size-12 text-muted-foreground/40" />
-                        </div>
-                      )}
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
-                      <div className="absolute bottom-4 left-4 right-4">
-                        <p className="font-display text-lg font-bold text-white">Featured</p>
-                        <p className="line-clamp-1 text-sm text-white/75">{featured.title}</p>
-                      </div>
-                    </div>
-                  </Card>
-                </Link>
-              ) : (
-                <Skeleton className="aspect-[2/3] w-full rounded-2xl" />
-              )}
-            </motion.div>
-          </div>
+              <Dices className="size-4" />
+            </Button>
+          </motion.div>
         </section>
 
+        {/* Genre pills */}
+        {genres.length > 0 && (
+          <section className="mt-6">
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => setGenre(null)}
+                className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
+                  genre === null
+                    ? "border-primary/60 bg-primary/20 text-primary"
+                    : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                }`}
+              >
+                All
+              </button>
+              {genres.map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => setGenre(genre === g ? null : g)}
+                  className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
+                    genre === g
+                      ? "border-primary/60 bg-primary/20 text-primary"
+                      : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                  }`}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Catalog */}
-        <section id="catalog" className="scroll-mt-24 pt-6">
+        <section id="catalog" className="scroll-mt-24 pt-10">
           <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
             <div>
               <h2 className="font-display text-2xl font-bold tracking-tight sm:text-3xl">
-                The catalog
+                {query.trim()
+                  ? "Search results"
+                  : genre
+                    ? `${genre} movies`
+                    : "New Releases"}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Click a poster to open details and start streaming.
+                {query.trim()
+                  ? `Showing matches for “${query.trim()}”.`
+                  : "Watch new releases for free — pick a poster and press play."}
               </p>
             </div>
-            {genres.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setGenre(null)}
-                  className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
-                    genre === null
-                      ? "border-primary/50 bg-primary/15 text-primary"
-                      : "border-border/70 text-muted-foreground hover:border-foreground/25 hover:text-foreground"
-                  }`}
-                >
-                  All
-                </button>
-                {genres.map((g) => (
-                  <button
-                    key={g}
-                    type="button"
-                    onClick={() => setGenre(g)}
-                    className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
-                      genre === g
-                        ? "border-primary/50 bg-primary/15 text-primary"
-                        : "border-border/70 text-muted-foreground hover:border-foreground/25 hover:text-foreground"
-                    }`}
-                  >
-                    {g}
-                  </button>
-                ))}
-              </div>
+            {isAuthenticated && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => setContributeOpen(true)}
+              >
+                <Sparkles className="size-4" />
+                Add title
+              </Button>
             )}
           </div>
 
           {!movies ? (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-              {Array.from({ length: 10 }).map((_, i) => (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+              {Array.from({ length: 16 }).map((_, i) => (
                 <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
               ))}
             </div>
@@ -219,20 +226,76 @@ export default function Landing() {
                 <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
                   <Film className="size-6" />
                 </span>
-                <p className="font-display text-lg font-semibold">No movies yet</p>
+                <p className="font-display text-lg font-semibold">
+                  {query.trim() || genre ? "Nothing matched" : "No movies yet"}
+                </p>
                 <p className="max-w-sm text-sm text-muted-foreground">
-                  The catalog is empty. An admin can add movies from the admin
-                  panel and they will appear here instantly.
+                  {query.trim() || genre
+                    ? "Try a different search term or genre."
+                    : "The catalog is empty. Add the first title to get the team started."}
                 </p>
               </CardContent>
             </Card>
           ) : (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
               {catalog.map((m, i) => (
                 <MovieCard key={m._id} movie={m} index={i} />
               ))}
             </div>
           )}
+        </section>
+
+        {/* Quick links row */}
+        <section className="mt-14 grid gap-4 sm:grid-cols-3">
+          <Card className="card-lift border-border/60 bg-card/70">
+            <CardContent className="flex flex-col gap-2 p-5">
+              <Tv className="size-5 text-primary" />
+              <p className="font-display font-semibold">Schedule a screening</p>
+              <p className="text-sm text-muted-foreground">
+                Pick a time, invite the team, and watch together.
+              </p>
+              <Button asChild variant="ghost" size="sm" className="mt-1 self-start px-0 text-primary hover:text-primary">
+                <Link to={isAuthenticated ? "/dashboard" : "/auth?returnTo=%2Fdashboard"}>
+                  Open your library →
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+          <Card className="card-lift border-border/60 bg-card/70">
+            <CardContent className="flex flex-col gap-2 p-5">
+              <Film className="size-5 text-primary" />
+              <p className="font-display font-semibold">Contribute titles</p>
+              <p className="text-sm text-muted-foreground">
+                Members add movies to the shared catalog in seconds.
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-1 self-start px-0 text-primary hover:text-primary"
+                onClick={() =>
+                  isAuthenticated ? setContributeOpen(true) : navigate("/auth?returnTo=%2F")
+                }
+              >
+                Share a movie →
+              </Button>
+            </CardContent>
+          </Card>
+          <Card className="card-lift border-border/60 bg-card/70">
+            <CardContent className="flex flex-col gap-2 p-5">
+              <Badge className="size-5 rounded-md bg-primary/12 p-0.5 text-primary" variant="outline">
+                ★
+              </Badge>
+              <p className="font-display font-semibold">Upgrade the crew</p>
+              <p className="text-sm text-muted-foreground">
+                Support the catalog and unlock the premiere plan.
+              </p>
+              <Button asChild variant="ghost" size="sm" className="mt-1 self-start px-0 text-primary hover:text-primary">
+                <Link to={isAuthenticated ? "/checkout" : "/auth?returnTo=%2Fcheckout"}>
+                  See plans →
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
         </section>
       </main>
 
@@ -244,7 +307,13 @@ export default function Landing() {
             © {new Date().getFullYear()} FilmFlix. Stream responsibly.
           </p>
         </div>
+        <p className="mx-auto mt-4 w-full max-w-7xl px-4 text-center text-[11px] text-muted-foreground/70 sm:px-6">
+          No movies are hosted on our server — FilmFlix is a shared catalog for
+          our internal team.
+        </p>
       </footer>
+
+      <MovieFormDialog open={contributeOpen} onOpenChange={setContributeOpen} movie={null} mode="contribute" />
     </div>
   );
 }
