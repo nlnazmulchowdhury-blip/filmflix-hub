@@ -2,7 +2,8 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FilmFlix — Stream Movies</title>
@@ -41,14 +42,143 @@
         document.addEventListener("click", loadAds, true);
       })();
     </script>
-    <script type="module" crossorigin src="/assets/index-Ca53tgjs.js"></script>
+    <style>
+      /* Pre-React branded splash: paints instantly, replaced by the app. */
+      html {
+        background: #0b0b14;
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background:
+          radial-gradient(560px 320px at 50% 28%, rgba(225, 29, 72, 0.14), transparent 70%),
+          #0b0b14;
+        transition: opacity 0.35s ease;
+      }
+      #boot-splash.ff-hide {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .ff-logo {
+        position: relative;
+        width: 64px;
+        height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #f43f5e, #be123c);
+        box-shadow: 0 12px 48px -12px rgba(225, 29, 72, 0.65);
+        animation: ff-float 2.2s ease-in-out infinite;
+      }
+      .ff-logo::after {
+        content: "";
+        position: absolute;
+        inset: -8px;
+        border-radius: 22px;
+        border: 2px solid rgba(225, 29, 72, 0.4);
+        animation: ff-ring 2s ease-out infinite;
+      }
+      .ff-logo svg {
+        width: 30px;
+        height: 30px;
+      }
+      .ff-word {
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        font-weight: 800;
+        font-size: 20px;
+        letter-spacing: -0.02em;
+        color: #fafafa;
+      }
+      .ff-word span {
+        color: #fb7185;
+      }
+      .ff-bar {
+        position: relative;
+        width: 180px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      .ff-bar::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 40%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, transparent, #fb7185, transparent);
+        animation: ff-slide 1.2s ease-in-out infinite;
+      }
+      @keyframes ff-float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-6px); }
+      }
+      @keyframes ff-ring {
+        0% { transform: scale(0.9); opacity: 0.8; }
+        100% { transform: scale(1.25); opacity: 0; }
+      }
+      @keyframes ff-slide {
+        0% { left: -40%; }
+        100% { left: 100%; }
+      }
+    </style>
+    <script type="module" crossorigin src="/assets/index-IMhggPUF.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/react-vendor-Dd3oHVHB.js">
     <link rel="modulepreload" crossorigin href="/assets/framer-motion-BzfLEFPV.js">
-    <link rel="modulepreload" crossorigin href="/assets/radix-ui-DdiMDydf.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-CBjd_FMt.css">
+    <link rel="modulepreload" crossorigin href="/assets/radix-ui-pNagF9V3.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-CeQcOb0z.css">
   </head>
 
   <body>
     <div id="root"></div>
+    <div id="boot-splash">
+      <div class="ff-logo">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path
+            d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 18.5v-13Z"
+            stroke="#ffffff"
+            stroke-width="1.8"
+          />
+          <path d="M4 9h16M9.5 3.5v5.2M14.5 3.5v5.2" stroke="#ffffff" stroke-width="1.8" />
+          <path d="m11 13.2 4 2.3-4 2.3v-4.6Z" fill="#ffffff" />
+        </svg>
+      </div>
+      <div class="ff-word">Film<span>Flix</span></div>
+      <div class="ff-bar"></div>
+    </div>
+    <script>
+      // Fade the splash away once the React app has mounted.
+      (function () {
+        var splash = document.getElementById("boot-splash");
+        if (!splash) return;
+        var done = false;
+        function hide() {
+          if (done) return;
+          done = true;
+          splash.classList.add("ff-hide");
+          setTimeout(function () {
+            splash.remove();
+          }, 400);
+        }
+        // As soon as the app renders anything into #root, fade out.
+        var observer = new MutationObserver(function () {
+          if (document.getElementById("root").childElementCount > 0) {
+            observer.disconnect();
+            hide();
+          }
+        });
+        observer.observe(document.getElementById("root"), { childList: true });
+        // Safety: never show it longer than 4s even if something fails.
+        setTimeout(hide, 4000);
+      })();
+    </script>
   </body>
 </html>
