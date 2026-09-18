@@ -19,11 +19,30 @@ const Checkout = lazy(() => import("./pages/Checkout.tsx"));
 const Admin = lazy(() => import("./pages/Admin.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
-// Simple loading fallback for route transitions
+// Branded loading fallback for route transitions — mirrors the boot splash.
 function RouteLoading() {
   return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="animate-pulse text-muted-foreground">Loading...</div>
+    <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-background">
+      <div className="pointer-events-none fixed inset-0">
+        <div className="absolute left-1/2 top-[30%] h-[300px] w-[520px] -translate-x-1/2 rounded-full bg-primary/10 blur-[120px]" />
+      </div>
+      <div className="relative flex size-16 items-center justify-center rounded-2xl bg-gradient-to-br from-rose-500 to-rose-700 shadow-[0_12px_48px_-12px_var(--primary)]">
+        <svg viewBox="0 0 24 24" fill="none" className="size-8 animate-pulse">
+          <path
+            d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 18.5v-13Z"
+            stroke="white"
+            strokeWidth="1.8"
+          />
+          <path d="M4 9h16M9.5 3.5v5.2M14.5 3.5v5.2" stroke="white" strokeWidth="1.8" />
+          <path d="m11 13.2 4 2.3-4 2.3v-4.6Z" fill="white" />
+        </svg>
+      </div>
+      <p className="font-display text-lg font-bold tracking-tight">
+        Film<span className="text-primary">Flix</span>
+      </p>
+      <div className="relative h-1 w-44 overflow-hidden rounded-full bg-white/10">
+        <div className="ff-shimmer absolute inset-y-0 w-2/5 rounded-full bg-gradient-to-r from-transparent via-primary to-transparent" />
+      </div>
     </div>
   );
 }
@@ -44,6 +63,12 @@ class ToolbarErrorBoundary extends React.Component<
   render() {
     return this.state.hasError ? null : this.props.children;
   }
+}
+
+/** Wraps the whole route tree so every page fades in smoothly instead of
+ *  popping in. Pure CSS — no extra renders. */
+function PageFade({ children }: { children: React.ReactNode }) {
+  return <div className="ff-page-fade min-h-screen">{children}</div>;
 }
 
 /** Hard guard so runtime errors never leave the preview as a blank page. */
@@ -123,6 +148,7 @@ createRoot(document.getElementById("root")!).render(
           <MiniPlayerProvider>
           <RouteSyncer />
           <Suspense fallback={<RouteLoading />}>
+            <PageFade>
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route
@@ -149,6 +175,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/nazmul" element={<Admin />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
+            </PageFade>
           </Suspense>
           </MiniPlayerProvider>
         </BrowserRouter>

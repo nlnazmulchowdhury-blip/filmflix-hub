@@ -160,4 +160,32 @@
   .card-lift:hover {
     transform: translateY(-4px);
   }
+
+  /* Page fade-in: every route mounts with a soft rise + fade. */
+  .ff-page-fade {
+    animation: ff-page-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes ff-page-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Shimmer sweep used by the route loading bar. */
+  .ff-shimmer {
+    animation: ff-shimmer-slide 1.2s ease-in-out infinite;
+  }
+  @keyframes ff-shimmer-slide {
+    0% {
+      transform: translateX(-120%);
+    }
+    100% {
+      transform: translateX(320%);
+    }
+  }
 }
