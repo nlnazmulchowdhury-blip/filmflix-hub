@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { toast } from "sonner";
+import { useEffect } from "react";
 import { z } from "zod";
 
 const episodeSchema = z.object({
@@ -59,46 +60,60 @@ export default function MovieFormDialog({
   const updateMovie = useMutation(api.movies.update);
   const isEdit = Boolean(movie);
 
-  const {
-    register,
-    control,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<MovieFormValues>({
-    resolver: zodResolver(movieSchema),
-    defaultValues: movie
+  const emptyValues: MovieFormValues = {
+    title: "",
+    description: "",
+    posterUrl: "",
+    backdropUrl: "",
+    videoUrl: "",
+    genre: "",
+    year: "",
+    rating: "",
+    episodes: [],
+  };
+
+  const valuesFor = (m: Doc<"movies"> | null): MovieFormValues =>
+    m
       ? {
-          title: movie.title,
-          description: movie.description ?? "",
-          posterUrl: movie.posterUrl ?? "",
-          backdropUrl: movie.backdropUrl ?? "",
-          videoUrl: movie.videoUrl ?? "",
-          genre: movie.genre ?? "",
-          year: movie.year?.toString() ?? "",
-          rating: movie.rating?.toString() ?? "",
-          episodes: (movie.episodes ?? []).map((e) => ({
+          title: m.title,
+          description: m.description ?? "",
+          posterUrl: m.posterUrl ?? "",
+          backdropUrl: m.backdropUrl ?? "",
+          videoUrl: m.videoUrl ?? "",
+          genre: m.genre ?? "",
+          year: m.year?.toString() ?? "",
+          rating: m.rating?.toString() ?? "",
+          episodes: (m.episodes ?? []).map((e) => ({
             title: e.title,
             videoUrl: e.videoUrl,
             durationSec: e.durationSec?.toString() ?? "",
           })),
         }
-      : {
-          title: "",
-          description: "",
-          posterUrl: "",
-          backdropUrl: "",
-          videoUrl: "",
-          genre: "",
-          year: "",
-          rating: "",
-          episodes: [],
-        },
+      : emptyValues;
+
+  const {
+    register,
+    control,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<MovieFormValues>({
+    resolver: zodResolver(movieSchema),
+    defaultValues: valuesFor(movie),
   });
 
   const { fields, append, remove, move } = useFieldArray({
     control,
     name: "episodes",
   });
+
+  /* Every time the dialog opens, re-fill the form with THIS movie's current
+     values — so editing only touches the fields you actually change and all
+     the rest are saved back untouched. */
+  useEffect(() => {
+    if (open) reset(valuesFor(movie));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, movie?._id, reset]);
 
   const onSubmit = async (values: MovieFormValues) => {
     const payload = {
