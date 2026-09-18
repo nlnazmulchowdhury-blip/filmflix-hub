@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import VideoPlayer from "@/components/VideoPlayer";
+import { useMiniPlayer } from "@/components/mini-player-context";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
@@ -14,6 +15,7 @@ import {
   CalendarPlus,
   Loader2,
   MessageSquare,
+  Minimize2,
   Send,
   Star,
   Tag,
@@ -34,6 +36,7 @@ export default function MovieDetail() {
   const { id } = useParams<{ id: string }>();
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
+  const { show: showMini, close: closeMini, isActive: miniActive } = useMiniPlayer();
   const movie = useQuery(api.movies.get, {
     id: id as Id<"movies">,
   });
@@ -127,11 +130,36 @@ export default function MovieDetail() {
         ) : (
           <div className="space-y-10">
             {/* Player */}
-            <VideoPlayer
-              movie={movie}
-              videoUrl={movie.videoUrl}
-              title={movie.title}
-            />
+            {!miniActive ? (
+              <VideoPlayer
+                movie={movie}
+                videoUrl={movie.videoUrl}
+                title={movie.title}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={closeMini}
+                className="group relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl border border-border/60 bg-black"
+              >
+                {movie.backdropUrl || movie.posterUrl ? (
+                  <img
+                    src={movie.backdropUrl ?? movie.posterUrl}
+                    alt=""
+                    className="absolute inset-0 size-full object-cover opacity-50"
+                  />
+                ) : null}
+                <span className="relative z-10 flex flex-col items-center gap-3 text-center">
+                  <span className="rounded-full bg-black/70 px-4 py-1.5 text-xs font-medium text-white/90 backdrop-blur-sm">
+                    Playing in miniplayer — keep browsing anywhere on the site
+                  </span>
+                  <span className="glow-accent flex items-center gap-2 rounded-full bg-primary/95 px-5 py-2.5 font-display text-sm font-semibold text-primary-foreground">
+                    <Minimize2 className="size-4" />
+                    Bring video back here
+                  </span>
+                </span>
+              </button>
+            )}
 
             {/* Meta */}
             <div className="grid gap-10 lg:grid-cols-[1fr_280px]">

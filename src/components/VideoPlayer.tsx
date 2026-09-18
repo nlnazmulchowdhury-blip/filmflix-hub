@@ -1,9 +1,11 @@
 import { Slider } from "@/components/ui/slider";
+import { useMiniPlayer } from "@/components/mini-player-context";
 import type { Doc } from "@/convex/_generated/dataModel";
 import {
   Loader2,
   Maximize,
   Minimize,
+  Minimize2,
   Pause,
   Play,
   RotateCcw,
@@ -35,6 +37,7 @@ export default function VideoPlayer({
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { show: showMini, isActive: miniActive } = useMiniPlayer();
 
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(false);
@@ -84,6 +87,33 @@ export default function VideoPlayer({
       document.exitFullscreen?.().catch(() => undefined);
     }
   }, []);
+
+  const sendToMini = useCallback(() => {
+    if (!movie || !videoUrl) return;
+    const v = videoRef.current;
+    const time = v?.currentTime ?? 0;
+    showMini({
+      movieId: movie._id,
+      title,
+      videoUrl,
+      posterUrl: movie.posterUrl,
+      backdropUrl: movie.backdropUrl,
+    });
+    // resume near the same position once the miniplayer video mounts
+    requestAnimationFrame(() => {
+      const mini = document.querySelector<HTMLVideoElement>(
+        '[data-slot="mini-player"] video',
+      );
+      if (mini && time > 1) {
+        const seek = () => {
+          if (Number.isFinite(mini.duration)) mini.currentTime = Math.min(time, mini.duration - 1);
+          mini.removeEventListener("loadedmetadata", seek);
+        };
+        mini.addEventListener("loadedmetadata", seek);
+        if (Number.isFinite(mini.duration)) seek();
+      }
+    });
+  }, [movie, videoUrl, title, showMini]);
 
   useEffect(() => {
     const onFsChange = () => setFullscreen(Boolean(document.fullscreenElement));
@@ -274,11 +304,24 @@ export default function VideoPlayer({
             </div>
           </div>
 
+          {/* Miniplayer hand-off */}
+          {!miniActive && (
+            <button
+              type="button"
+              onClick={sendToMini}
+              className="ml-auto rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              aria-label="Play in miniplayer"
+              title="Play in miniplayer — keep browsing"
+            >
+              <Minimize2 className="size-5" />
+            </button>
+          )}
+
           {/* Fullscreen */}
           <button
             type="button"
             onClick={toggleFullscreen}
-            className="ml-auto rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+            className={miniActive ? "" : "ml-auto"}
             aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
             title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
           >
