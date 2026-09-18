@@ -28,6 +28,7 @@ const movieFields = {
   backdropUrl: v.optional(v.string()),
   videoUrl: v.optional(v.string()),
   genre: v.optional(v.string()),
+  category: v.optional(v.string()),
   year: v.optional(v.number()),
   rating: v.optional(v.number()),
   kind: v.optional(v.union(v.literal("movie"), v.literal("series"))),

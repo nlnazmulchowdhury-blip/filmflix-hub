@@ -74,6 +74,15 @@ function AdminContent() {
 
   /* Admin catalog search: matches title, description, genre, year, kind —
      every word must appear somewhere, forgiving of order and punctuation. */
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of movies ?? []) {
+      const c = (m.category ?? "").trim();
+      if (c) set.add(c);
+    }
+    return Array.from(set).sort();
+  }, [movies]);
+
   const filteredMovies = useMemo(() => {
     if (!movies) return null;
     const raw = movieSearch.trim();
@@ -88,7 +97,7 @@ function AdminContent() {
     if (tokens.length === 0) return movies;
     return movies.filter((m) => {
       const hay = norm(
-        [m.title, m.description, m.genre, m.year?.toString(), m.kind]
+        [m.title, m.description, m.genre, m.category, m.year?.toString(), m.kind]
           .filter(Boolean)
           .join(" "),
       );
@@ -364,7 +373,8 @@ function AdminContent() {
                           <TableHead className="w-16">Poster</TableHead>
                           <TableHead>Title</TableHead>
                           <TableHead className="hidden sm:table-cell">Genre</TableHead>
-                          <TableHead className="hidden md:table-cell">Year</TableHead>
+                          <TableHead className="hidden md:table-cell">Category</TableHead>
+                          <TableHead className="hidden lg:table-cell">Year</TableHead>
                           <TableHead className="hidden md:table-cell">Rating</TableHead>
                           <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -397,9 +407,21 @@ function AdminContent() {
                               )}
                             </TableCell>
                             <TableCell className="hidden md:table-cell">
+                              {m.category ? (
+                                <Badge
+                                  variant="outline"
+                                  className="border-primary/40 bg-primary/10 text-primary"
+                                >
+                                  {m.category}
+                                </Badge>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="hidden lg:table-cell">
                               {m.year ?? "—"}
                             </TableCell>
-                            <TableCell className="hidden md:table-cell">
+                            <TableCell className="hidden lg:table-cell">
                               {m.rating != null ? m.rating.toFixed(1) : "—"}
                             </TableCell>
                             <TableCell>
@@ -721,6 +743,7 @@ function AdminContent() {
           if (!o) setEditing(null);
         }}
         movie={editing}
+        categories={categories}
       />
 
       {deleting && (

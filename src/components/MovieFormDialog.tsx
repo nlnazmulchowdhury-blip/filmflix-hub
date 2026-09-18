@@ -40,6 +40,7 @@ const movieSchema = z.object({
   backdropUrl: z.string().optional(),
   videoUrl: z.string().optional(),
   genre: z.string().optional(),
+  category: z.string().optional(),
   year: z.string().optional(),
   rating: z.string().optional(),
   episodes: z.array(episodeSchema),
@@ -51,10 +52,12 @@ export default function MovieFormDialog({
   open,
   onOpenChange,
   movie,
+  categories = [],
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   movie: Doc<"movies"> | null;
+  categories?: string[];
 }) {
   const addMovie = useMutation(api.movies.add);
   const updateMovie = useMutation(api.movies.update);
@@ -67,6 +70,7 @@ export default function MovieFormDialog({
     backdropUrl: "",
     videoUrl: "",
     genre: "",
+    category: "",
     year: "",
     rating: "",
     episodes: [],
@@ -81,6 +85,7 @@ export default function MovieFormDialog({
           backdropUrl: m.backdropUrl ?? "",
           videoUrl: m.videoUrl ?? "",
           genre: m.genre ?? "",
+          category: m.category ?? "",
           year: m.year?.toString() ?? "",
           rating: m.rating?.toString() ?? "",
           episodes: (m.episodes ?? []).map((e) => ({
@@ -123,6 +128,7 @@ export default function MovieFormDialog({
       backdropUrl: values.backdropUrl || undefined,
       videoUrl: values.videoUrl || undefined,
       genre: values.genre || undefined,
+      category: values.category?.trim() || undefined,
       year: values.year ? Number(values.year) : undefined,
       rating: values.rating ? Number(values.rating) : undefined,
       kind: values.episodes.length > 0 ? ("series" as const) : ("movie" as const),
@@ -214,9 +220,28 @@ export default function MovieFormDialog({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="genre">Genre</Label>
-            <Input id="genre" placeholder="Sci-Fi" {...register("genre")} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="genre">Genre</Label>
+              <Input id="genre" placeholder="Sci-Fi" {...register("genre")} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="category">Category</Label>
+              <Input
+                id="category"
+                list="category-options"
+                placeholder="e.g. Hollywood"
+                {...register("category")}
+              />
+              <datalist id="category-options">
+                {categories.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+              <p className="text-xs text-muted-foreground">
+                Visitors browse the catalog by these category sections.
+              </p>
+            </div>
           </div>
 
           {/* Episodes / parts playlist */}

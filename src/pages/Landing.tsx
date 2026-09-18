@@ -27,11 +27,12 @@ function searchableText(m: {
   title: string;
   description?: string;
   genre?: string;
+  category?: string;
   year?: number;
   kind?: string;
 }) {
   return normalizeText(
-    [m.title, m.description, m.genre, m.year?.toString(), m.kind]
+    [m.title, m.description, m.genre, m.category, m.year?.toString(), m.kind]
       .filter(Boolean)
       .join(" "),
   );
@@ -42,6 +43,7 @@ export default function Landing() {
   const movies = useQuery(api.movies.list);
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState<string | null>(null);
   const [genre, setGenre] = useState<string | null>(null);
 
   const genres = useMemo(() => {
@@ -53,9 +55,20 @@ export default function Landing() {
     return Array.from(set).sort();
   }, [movies]);
 
+  /** Distinct display categories (Hollywood, Bengali, Anime, …) in catalog order. */
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of movies ?? []) {
+      const c = (m.category ?? "").trim();
+      if (c) set.add(c);
+    }
+    return Array.from(set);
+  }, [movies]);
+
   const filtered = useMemo(() => {
     if (!movies) return null;
     let rows = movies;
+    if (category) rows = rows.filter((m) => (m.category ?? "").trim() === category);
     if (genre) rows = rows.filter((m) => (m.genre ?? "").trim() === genre);
     const raw = query.trim();
     if (raw) {
@@ -80,7 +93,7 @@ export default function Landing() {
       }
     }
     return rows;
-  }, [movies, genre, query]);
+  }, [movies, category, genre, query]);
 
   const catalog = filtered ?? [];
 
@@ -186,6 +199,39 @@ export default function Landing() {
           </motion.div>
         </section>
 
+        {/* Category sections */}
+        {categories.length > 0 && (
+          <section className="mt-8">
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCategory(null)}
+                className={`rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
+                  category === null
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                }`}
+              >
+                All categories
+              </button>
+              {categories.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategory(category === c ? null : c)}
+                  className={`rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
+                    category === c
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Genre pills */}
         {genres.length > 0 && (
           <section className="mt-6">
@@ -228,12 +274,18 @@ export default function Landing() {
                   ? "Search results"
                   : genre
                     ? `${genre} movies`
-                    : "New Releases"}
+                    : category
+                      ? category
+                      : "New Releases"}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 {query.trim()
                   ? `${catalog.length} ${catalog.length === 1 ? "movie" : "movies"} found for “${query.trim()}”`
-                  : "Watch new releases for free — pick a poster and press play."}
+                  : category && genre
+                    ? `Filtered by ${category} · ${genre}.`
+                    : category
+                      ? `Browsing the ${category} collection.`
+                      : "Watch new releases for free — pick a poster and press play."}
               </p>
             </div>
           </div>
@@ -254,8 +306,8 @@ export default function Landing() {
                   {query.trim() || genre ? "Nothing matched" : "No movies yet"}
                 </p>
                 <p className="max-w-sm text-sm text-muted-foreground">
-                  {query.trim() || genre
-                    ? "Try fewer words, a different spelling, or clear the genre filter."
+                  {query.trim() || genre || category
+                    ? "Try fewer words, a different spelling, or clear the filters."
                     : "The catalog is empty — check back soon."}
                 </p>
               </CardContent>
