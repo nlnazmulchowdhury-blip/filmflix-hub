@@ -30,12 +30,14 @@ import {
   MessageSquare,
   Pencil,
   Plus,
+  Search,
   ShieldCheck,
   ShieldOff,
   Trash2,
   Users,
+  X,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router";
 import { toast } from "sonner";
 
@@ -68,6 +70,31 @@ function AdminContent() {
   const [deleting, setDeleting] = useState<Doc<"movies"> | null>(null);
   const [adminCode, setAdminCode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
+  const [movieSearch, setMovieSearch] = useState("");
+
+  /* Admin catalog search: matches title, description, genre, year, kind —
+     every word must appear somewhere, forgiving of order and punctuation. */
+  const filteredMovies = useMemo(() => {
+    if (!movies) return null;
+    const raw = movieSearch.trim();
+    if (!raw) return movies;
+    const norm = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    const tokens = norm(raw).split(" ").filter(Boolean);
+    if (tokens.length === 0) return movies;
+    return movies.filter((m) => {
+      const hay = norm(
+        [m.title, m.description, m.genre, m.year?.toString(), m.kind]
+          .filter(Boolean)
+          .join(" "),
+      );
+      return tokens.every((t) => hay.includes(t));
+    });
+  }, [movies, movieSearch]);
 
   const handleVerifyCode = async () => {
     if (!adminCode.trim()) {
@@ -282,22 +309,52 @@ function AdminContent() {
 
               {/* Movies */}
               <TabsContent value="movies">
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={movieSearch}
+                      onChange={(e) => setMovieSearch(e.target.value)}
+                      placeholder="Search movies by title, genre, year…"
+                      className="pl-9 pr-9"
+                      aria-label="Search movies in admin panel"
+                    />
+                    {movieSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setMovieSearch("")}
+                        aria-label="Clear search"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                      >
+                        <X className="size-4" />
+                      </button>
+                    )}
+                  </div>
+                  {filteredMovies !== null && movieSearch.trim() && (
+                    <span className="whitespace-nowrap text-xs text-muted-foreground">
+                      {filteredMovies.length} of {movies?.length ?? 0} movies
+                    </span>
+                  )}
+                </div>
                 <Card className="overflow-hidden p-0">
-                  {!movies ? (
+                  {!filteredMovies ? (
                     <div className="space-y-3 p-6">
                       {Array.from({ length: 4 }).map((_, i) => (
                         <Skeleton key={i} className="h-12 w-full" />
                       ))}
                     </div>
-                  ) : movies.length === 0 ? (
+                  ) : filteredMovies.length === 0 ? (
                     <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
                       <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
                         <Film className="size-6" />
                       </span>
-                      <p className="font-display text-lg font-semibold">No movies yet</p>
+                      <p className="font-display text-lg font-semibold">
+                        {movieSearch.trim() ? "Nothing matched" : "No movies yet"}
+                      </p>
                       <p className="max-w-sm text-sm text-muted-foreground">
-                        Add your first movie and it will show up in the catalog right
-                        away.
+                        {movieSearch.trim()
+                          ? "Try fewer words or a different spelling."
+                          : "Add your first movie and it will show up in the catalog right away."}
                       </p>
                     </CardContent>
                   ) : (
@@ -313,7 +370,7 @@ function AdminContent() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {movies.map((m) => (
+                        {filteredMovies.map((m) => (
                           <TableRow key={m._id}>
                             <TableCell>
                               <div className="h-14 w-10 overflow-hidden rounded-md bg-muted">
