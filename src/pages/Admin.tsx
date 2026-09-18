@@ -47,11 +47,14 @@ const fmtDateTime = (ms: number) =>
 
 function AdminContent() {
   const { user, signOut } = useAuth();
+  const isAdmin = user?.role === "admin";
   const movies = useQuery(api.movies.list);
-  const allScreenings = useQuery(api.screenings.listAll);
-  const allComments = useQuery(api.comments.listAll);
-  const allOrders = useQuery(api.orders.listAll);
-  const users = useQuery(api.admin.listUsers);
+  // Admin-only feeds: don't run them until the admin role is confirmed,
+  // otherwise the server rejects the query and crashes the whole page.
+  const allScreenings = useQuery(api.screenings.listAll, isAdmin ? {} : "skip");
+  const allComments = useQuery(api.comments.listAll, isAdmin ? {} : "skip");
+  const allOrders = useQuery(api.orders.listAll, isAdmin ? {} : "skip");
+  const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
 
   const removeMovie = useMutation(api.movies.remove);
   const claimAdmin = useMutation(api.movies.claimAdmin);
@@ -62,8 +65,6 @@ function AdminContent() {
   const [editing, setEditing] = useState<Doc<"movies"> | null>(null);
   const [deleting, setDeleting] = useState<Doc<"movies"> | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
-
-  const isAdmin = user?.role === "admin";
 
   const handleClaim = async () => {
     setIsClaiming(true);
