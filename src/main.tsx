@@ -118,9 +118,9 @@ createRoot(document.getElementById("root")!).render(
       <ToolbarErrorBoundary>
         <VlyToolbar />
       </ToolbarErrorBoundary>
-      <MiniPlayerProvider>
       <ConvexAuthProvider client={convex}>
         <BrowserRouter>
+          <MiniPlayerProvider>
           <RouteSyncer />
           <Suspense fallback={<RouteLoading />}>
             <Routes>
@@ -150,10 +150,10 @@ createRoot(document.getElementById("root")!).render(
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
+          </MiniPlayerProvider>
         </BrowserRouter>
         <Toaster />
       </ConvexAuthProvider>
-      </MiniPlayerProvider>
     </RootErrorBoundary>
   </StrictMode>,
 );
