@@ -8,10 +8,34 @@ import MovieCard from "@/components/MovieCard";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "convex/react";
-import { Dices, Film, LogOut, Play, Search, ShieldCheck, Tv } from "lucide-react";
+import { Dices, Film, LogOut, Play, Search, ShieldCheck, Tv, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
+
+/** Lowercase, strip punctuation, collapse whitespace — forgiving matching. */
+function normalizeText(s: string) {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Everything a movie can be found by: title, description, genre, year, kind. */
+function searchableText(m: {
+  title: string;
+  description?: string;
+  genre?: string;
+  year?: number;
+  kind?: string;
+}) {
+  return normalizeText(
+    [m.title, m.description, m.genre, m.year?.toString(), m.kind]
+      .filter(Boolean)
+      .join(" "),
+  );
+}
 
 export default function Landing() {
   const { signOut, isAuthenticated } = useAuth();
@@ -33,13 +57,27 @@ export default function Landing() {
     if (!movies) return null;
     let rows = movies;
     if (genre) rows = rows.filter((m) => (m.genre ?? "").trim() === genre);
-    const q = query.trim().toLowerCase();
-    if (q) {
-      rows = rows.filter(
-        (m) =>
-          m.title.toLowerCase().includes(q) ||
-          (m.description ?? "").toLowerCase().includes(q),
-      );
+    const raw = query.trim();
+    if (raw) {
+      const tokens = normalizeText(raw).split(" ").filter(Boolean);
+      if (tokens.length > 0) {
+        rows = rows.filter((m) => {
+          const hay = searchableText(m);
+          // Every word in the query must match somewhere (order doesn't matter).
+          return tokens.every((t) => hay.includes(t));
+        });
+        // Most relevant first: full-phrase title match > word in title > word in genre > elsewhere.
+        const score = (m: (typeof rows)[number]) => {
+          const title = normalizeText(m.title);
+          const g = normalizeText(m.genre ?? "");
+          const phrase = normalizeText(raw);
+          if (title.includes(phrase)) return 3;
+          if (tokens.some((t) => title.includes(t))) return 2;
+          if (tokens.some((t) => g.includes(t))) return 1;
+          return 0;
+        };
+        rows = [...rows].sort((a, b) => score(b) - score(a));
+      }
     }
     return rows;
   }, [movies, genre, query]);
@@ -122,10 +160,20 @@ export default function Landing() {
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search movies…"
-                className="h-11 rounded-xl bg-card/80 pl-10 text-base"
+                placeholder="Search by title, genre, year…"
+                className="h-11 rounded-xl bg-card/80 pl-10 pr-10 text-base"
                 aria-label="Search movies"
               />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                >
+                  <X className="size-4" />
+                </button>
+              )}
             </div>
             <Button
               size="lg"
@@ -184,7 +232,7 @@ export default function Landing() {
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 {query.trim()
-                  ? `Showing matches for “${query.trim()}”.`
+                  ? `${catalog.length} ${catalog.length === 1 ? "movie" : "movies"} found for “${query.trim()}”`
                   : "Watch new releases for free — pick a poster and press play."}
               </p>
             </div>
@@ -207,7 +255,7 @@ export default function Landing() {
                 </p>
                 <p className="max-w-sm text-sm text-muted-foreground">
                   {query.trim() || genre
-                    ? "Try a different search term or genre."
+                    ? "Try fewer words, a different spelling, or clear the genre filter."
                     : "The catalog is empty — check back soon."}
                 </p>
               </CardContent>
