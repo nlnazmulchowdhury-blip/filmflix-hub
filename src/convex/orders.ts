@@ -39,3 +39,28 @@ export const listMine = query({
     return rows;
   },
 });
+
+export const listAll = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not authenticated");
+    const me = await ctx.db.get(userId);
+    if (me?.role !== "admin") throw new Error("Admin access required");
+    const rows = await ctx.db.query("orders").collect();
+    rows.sort((a, b) => b.createdAt - a.createdAt);
+    return await Promise.all(
+      rows.map(async (o) => {
+        const member = await ctx.db.get(o.userId);
+        return {
+          _id: o._id,
+          plan: o.plan,
+          amountCents: o.amountCents,
+          status: o.status,
+          createdAt: o.createdAt,
+          memberName: member?.name ?? member?.email ?? "Member",
+        };
+      }),
+    );
+  },
+});

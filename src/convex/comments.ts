@@ -23,6 +23,32 @@ export const listByMovie = query({
   },
 });
 
+export const listAll = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not authenticated");
+    const me = await ctx.db.get(userId);
+    if (me?.role !== "admin") throw new Error("Admin access required");
+    const rows = await ctx.db.query("comments").collect();
+    rows.sort((a, b) => b.createdAt - a.createdAt);
+    return await Promise.all(
+      rows.map(async (c) => {
+        const movie = await ctx.db.get(c.movieId);
+        const author = await ctx.db.get(c.userId);
+        return {
+          _id: c._id,
+          text: c.text,
+          createdAt: c.createdAt,
+          movieId: c.movieId,
+          movieTitle: movie?.title ?? "Removed movie",
+          authorName: author?.name ?? author?.email ?? "Member",
+        };
+      }),
+    );
+  },
+});
+
 export const add = mutation({
   args: { movieId: v.id("movies"), text: v.string() },
   handler: async (ctx, { movieId, text }) => {
@@ -44,9 +70,13 @@ export const remove = mutation({
   handler: async (ctx, { id }) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Not authenticated");
+    const me = await ctx.db.get(userId);
     const comment = await ctx.db.get(id);
     if (!comment) throw new Error("Comment not found");
-    if (comment.userId !== userId) throw new Error("Not your comment");
+    const isAdmin = me?.role === "admin";
+    if (comment.userId !== userId && !isAdmin) {
+      throw new Error("Not allowed to delete this comment");
+    }
     await ctx.db.delete(id);
   },
 });
