@@ -20,7 +20,6 @@ import {
   Clapperboard,
   CreditCard,
   LogOut,
-  Settings2,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -30,7 +29,6 @@ import { toast } from "sonner";
 export default function Dashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
-  const isAdmin = user?.role === "admin";
   const screenings = useQuery(api.screenings.listMine);
   const myOrders = useQuery(api.orders.listMine);
   const contributions = useQuery(
@@ -78,14 +76,6 @@ export default function Dashboard() {
             </Badge>
           </div>
           <div className="flex items-center gap-2">
-            {isAdmin && (
-              <Button asChild variant="ghost" size="sm" className="gap-2 text-primary">
-                <Link to="/nazmul">
-                  <Settings2 className="size-4" />
-                  <span className="hidden sm:inline">Admin</span>
-                </Link>
-              </Button>
-            )}
             <Button asChild variant="ghost" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />
