@@ -210,7 +210,7 @@ export default function PlayerStage({
 
       {/* Controls */}
       <div
-        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-3 pb-2.5 pt-10 transition-opacity duration-300 sm:px-4 ${
+        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2 pb-2.5 pt-10 transition-opacity duration-300 sm:px-4 ${
           controlsVisible || !playing ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
       >
@@ -251,7 +251,7 @@ export default function PlayerStage({
           <button
             type="button"
             onClick={() => seekBy(-10)}
-            className="hidden rounded-lg p-2 text-white transition-colors hover:bg-white/15 sm:block"
+            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
             aria-label="Back 10 seconds"
           >
             <RotateCcw className="size-4" />
@@ -259,13 +259,14 @@ export default function PlayerStage({
           <button
             type="button"
             onClick={() => seekBy(10)}
-            className="hidden rounded-lg p-2 text-white transition-colors hover:bg-white/15 sm:block"
+            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
             aria-label="Forward 10 seconds"
           >
             <RotateCw className="size-4" />
           </button>
 
-          <div className="group/vol flex items-center">
+          {/* Volume: hover-expand on desktop, plain mute toggle on touch. */}
+          <div className="group/vol flex items-center max-sm:hidden">
             <button
               type="button"
               onClick={() => controls.toggleMute()}
@@ -291,6 +292,21 @@ export default function PlayerStage({
               />
             </div>
           </div>
+          {/* Touch devices have no hover — show the mute toggle here instead. */}
+          <button
+            type="button"
+            onClick={() => controls.toggleMute()}
+            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15 sm:hidden"
+            aria-label={muted ? "Unmute" : "Mute"}
+          >
+            {muted || volume === 0 ? (
+              <VolumeX className="size-5" />
+            ) : volume < 0.5 ? (
+              <Volume1 className="size-5" />
+            ) : (
+              <Volume2 className="size-5" />
+            )}
+          </button>
 
           <span className="w-10 text-[11px] font-medium tabular-nums text-white/80">
             {formatTime(duration)}

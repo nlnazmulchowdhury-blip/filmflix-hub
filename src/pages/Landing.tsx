@@ -118,8 +118,8 @@ export default function Landing() {
 
       {/* Header */}
       <header className="sticky top-0 z-40 glass-panel border-b">
-        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
-          <Link to="/" aria-label="FilmFlix home">
+        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-2 px-3 sm:gap-4 sm:px-6">
+          <Link to="/" aria-label="FilmFlix home" className="shrink-0">
             <Logo />
           </Link>
           <nav className="hidden items-center gap-6 md:flex">
@@ -135,25 +135,38 @@ export default function Landing() {
               Library
             </Link>
           </nav>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5 sm:gap-2">
+            {/* Random pick stays reachable on phones where the nav is hidden. */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden text-muted-foreground hover:text-foreground"
+              onClick={surprise}
+              aria-label="Random movie"
+              title="Random movie"
+            >
+              <Dices className="size-4" />
+            </Button>
             <ThemeToggle />
             {isAuthenticated ? (
               <Button
                 variant="ghost"
-                size="sm"
-                className="gap-2 text-muted-foreground"
+                size="icon"
+                className="text-muted-foreground"
                 onClick={async () => {
                   await signOut();
                 }}
                 aria-label="Sign out"
+                title="Sign out"
               >
                 <LogOut className="size-4" />
               </Button>
             ) : (
-              <Button asChild size="sm" className="gap-2">
+              <Button asChild size="sm" className="gap-2 px-3 sm:px-4">
                 <Link to="/auth?returnTo=%2F">
                   <Play className="size-4 fill-current" />
-                  Start watching
+                  <span className="hidden sm:inline">Start watching</span>
+                  <span className="sm:hidden">Watch</span>
                 </Link>
               </Button>
             )}
@@ -163,14 +176,14 @@ export default function Landing() {
 
       <main className="mx-auto w-full max-w-7xl px-4 pb-24 sm:px-6">
         {/* Search */}
-        <section className="pt-10 sm:pt-14">
+        <section className="pt-6 sm:pt-14">
           <motion.div
             initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, ease: "easeOut" }}
             className="mx-auto flex w-full max-w-2xl items-center gap-2"
           >
-            <div className="relative flex-1">
+            <div className="relative min-w-0 flex-1">
               <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}
@@ -190,9 +203,11 @@ export default function Landing() {
                 </button>
               )}
             </div>
+            {/* The dice button in the header covers phones, so this big
+                companion only shows from sm up. */}
             <Button
               size="lg"
-              className="glow-accent h-11 rounded-xl px-5"
+              className="glow-accent hidden h-11 rounded-xl px-5 sm:inline-flex"
               onClick={surprise}
               aria-label="Surprise me"
             >
@@ -203,12 +218,12 @@ export default function Landing() {
 
         {/* Category sections */}
         {categories.length > 0 && (
-          <section className="mt-8">
-            <div className="flex flex-wrap items-center justify-center gap-2">
+          <section className="mt-6 sm:mt-8">
+            <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0">
               <button
                 type="button"
                 onClick={() => setCategory(null)}
-                className={`rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
+                className={`shrink-0 rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
                   category === null
                     ? "border-primary bg-primary text-primary-foreground"
                     : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
@@ -221,7 +236,7 @@ export default function Landing() {
                   key={c}
                   type="button"
                   onClick={() => setCategory(category === c ? null : c)}
-                  className={`rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
+                  className={`shrink-0 rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
                     category === c
                       ? "border-primary bg-primary text-primary-foreground"
                       : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
@@ -236,12 +251,12 @@ export default function Landing() {
 
         {/* Genre pills */}
         {genres.length > 0 && (
-          <section className="mt-6">
-            <div className="flex flex-wrap justify-center gap-2">
+          <section className="mt-4 sm:mt-6">
+            <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0">
               <button
                 type="button"
                 onClick={() => setGenre(null)}
-                className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
+                className={`shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
                   genre === null
                     ? "border-primary/60 bg-primary/20 text-primary"
                     : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
@@ -254,7 +269,7 @@ export default function Landing() {
                   key={g}
                   type="button"
                   onClick={() => setGenre(genre === g ? null : g)}
-                  className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
+                  className={`shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
                     genre === g
                       ? "border-primary/60 bg-primary/20 text-primary"
                       : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
@@ -324,7 +339,7 @@ export default function Landing() {
         </section>
 
         {/* Quick links row */}
-        <section className="mt-14 grid gap-4 sm:grid-cols-3">
+        <section className="mt-10 grid gap-4 sm:mt-14 sm:grid-cols-3">
           <Card className="card-lift border-border/60 bg-card/70">
             <CardContent className="flex flex-col gap-2 p-5">
               <Tv className="size-5 text-primary" />

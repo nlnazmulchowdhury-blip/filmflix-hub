@@ -159,7 +159,7 @@ function AdminContent() {
       </div>
 
       <header className="sticky top-0 z-40 glass-panel border-b">
-        <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
+        <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-2 px-3 sm:px-6">
           <div className="flex items-center gap-3">
             <Link to="/" aria-label="FilmFlix home">
               <Logo />
@@ -191,7 +191,7 @@ function AdminContent() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl px-4 pb-24 pt-8 sm:px-6">
+      <main className="mx-auto w-full max-w-6xl px-3 pb-24 pt-4 sm:px-6 sm:pt-8">
         {!isAdmin ? (
           <Card className="mx-auto mt-12 max-w-md border-primary/25 shadow-[0_24px_64px_-32px_rgba(0,0,0,0.9)]">
             <CardHeader className="items-center text-center">
@@ -239,7 +239,7 @@ function AdminContent() {
         ) : (
           <>
             {/* Heading */}
-            <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+            <div className="mb-6 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-end">
               <div>
                 <h1 className="font-display text-2xl font-bold tracking-tight sm:text-3xl">
                   Workspace overview
@@ -317,8 +317,10 @@ function AdminContent() {
             </div>
 
             {/* Tabs */}
-            <Tabs defaultValue="movies" className="mt-8">
-              <TabsList className="flex w-full flex-wrap gap-1 bg-card/60 sm:w-auto">
+            <Tabs defaultValue="movies" className="mt-6 sm:mt-8">
+              {/* Horizontally scrollable on phones — all five tabs stay reachable. */}
+              <div className="-mx-3 overflow-x-auto px-3 pb-1 sm:mx-0 sm:overflow-visible sm:px-0">
+              <TabsList className="flex w-max min-w-full gap-1 bg-card/60 sm:w-auto">
                 <TabsTrigger value="movies" className="gap-1.5">
                   <Film className="size-3.5" /> Movies
                 </TabsTrigger>
@@ -335,13 +337,14 @@ function AdminContent() {
                   <CreditCard className="size-3.5" /> Orders
                 </TabsTrigger>
               </TabsList>
+              </div>
 
               {/* Movies */}
               <TabsContent value="movies">
                 {/* Category management */}
                 {categories.length > 0 && (
                   <Card className="mb-4 border-border/60 bg-card/60 p-4">
-                    <div className="mb-2.5 flex items-center justify-between">
+                    <div className="mb-2.5 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                       <p className="font-display text-sm font-semibold">
                         Categories ({categories.length})
                       </p>
@@ -380,8 +383,8 @@ function AdminContent() {
                   </Card>
                 )}
 
-                <div className="mb-3 flex items-center gap-2">
-                  <div className="relative flex-1">
+                <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="relative min-w-0 flex-1">
                     <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       value={movieSearch}
@@ -402,7 +405,7 @@ function AdminContent() {
                     )}
                   </div>
                   {filteredMovies !== null && movieSearch.trim() && (
-                    <span className="whitespace-nowrap text-xs text-muted-foreground">
+                    <span className="text-xs text-muted-foreground sm:whitespace-nowrap">
                       {filteredMovies.length} of {movies?.length ?? 0} movies
                     </span>
                   )}
@@ -455,7 +458,7 @@ function AdminContent() {
                                 )}
                               </div>
                             </TableCell>
-                            <TableCell className="max-w-[200px]">
+                            <TableCell className="max-w-[38vw] sm:max-w-[200px]">
                               <p className="truncate font-medium">{m.title}</p>
                               <p className="truncate text-xs text-muted-foreground">
                                 {m.videoUrl ? "Video ready" : "No video"}
@@ -552,8 +555,12 @@ function AdminContent() {
                           .sort((a, b) => a.scheduledFor - b.scheduledFor)
                           .map((s) => (
                             <TableRow key={s._id}>
-                              <TableCell className="font-medium">{s.movieTitle}</TableCell>
-                              <TableCell>{s.ownerName}</TableCell>
+                              <TableCell className="max-w-[32vw] font-medium">
+                                <span className="block truncate">{s.movieTitle}</span>
+                              </TableCell>
+                              <TableCell className="max-w-[26vw]">
+                                <span className="block truncate">{s.ownerName}</span>
+                              </TableCell>
                               <TableCell className="whitespace-nowrap">
                                 {fmtDateTime(s.scheduledFor)}
                               </TableCell>
@@ -768,7 +775,9 @@ function AdminContent() {
                       <TableBody>
                         {allOrders.map((o) => (
                           <TableRow key={o._id}>
-                            <TableCell className="font-medium">{o.memberName}</TableCell>
+                            <TableCell className="max-w-[40vw] font-medium">
+                              <span className="block truncate">{o.memberName}</span>
+                            </TableCell>
                             <TableCell>
                               <Badge variant="secondary" className="capitalize">
                                 {o.plan}

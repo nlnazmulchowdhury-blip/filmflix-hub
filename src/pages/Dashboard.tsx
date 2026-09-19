@@ -110,7 +110,7 @@ export default function Dashboard() {
         </div>
 
         {/* Summary cards */}
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
           <Card className="border-border/60 bg-card/70">
             <CardHeader className="pb-2">
               <CardDescription className="flex items-center gap-1.5">
@@ -137,7 +137,7 @@ export default function Dashboard() {
               Movies you have added to the shared catalog.
             </CardContent>
           </Card>
-          <Card className="border-primary/30 bg-card/70">
+          <Card className="col-span-2 border-primary/30 bg-card/70 sm:col-span-1">
             <CardHeader className="pb-2">
               <CardDescription className="flex items-center gap-1.5">
                 <CreditCard className="size-3.5" /> Current plan
@@ -185,7 +185,7 @@ export default function Dashboard() {
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead>Movie</TableHead>
+                  <TableHead className="max-w-[45vw]">Movie</TableHead>
                   <TableHead>When</TableHead>
                   <TableHead className="hidden sm:table-cell">Note</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -194,10 +194,10 @@ export default function Dashboard() {
               <TableBody>
                 {[...upcoming, ...past].map((s) => (
                   <TableRow key={s._id}>
-                    <TableCell>
+                    <TableCell className="max-w-[45vw]">
                       <Link
                         to={`/movie/${s.movieId}`}
-                        className="font-medium hover:text-primary"
+                        className="block truncate font-medium hover:text-primary"
                       >
                         {s.movieTitle}
                       </Link>

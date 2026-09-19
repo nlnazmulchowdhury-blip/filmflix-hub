@@ -182,7 +182,7 @@ export default function MovieFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[92dvh] w-[calc(100%-1.5rem)] max-w-lg overflow-y-auto rounded-xl sm:w-full">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit movie" : "Add movie"}</DialogTitle>
           <DialogDescription>
@@ -331,7 +331,7 @@ export default function MovieFormDialog({
 
           {/* Episodes / parts playlist */}
           <div className="space-y-2 rounded-xl border border-border/60 bg-secondary/30 p-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
               <Label className="flex items-center gap-1.5">
                 <Clapperboard className="size-3.5 text-primary" />
                 Episodes / parts ({fields.length})
@@ -365,12 +365,12 @@ export default function MovieFormDialog({
                     className="rounded-lg border border-border/50 bg-card/60 p-2.5"
                   >
                     <div className="flex items-center gap-1.5">
-                      <span className="w-12 shrink-0 text-center text-xs font-semibold text-muted-foreground">
+                      <span className="w-8 shrink-0 text-center text-xs font-semibold text-muted-foreground sm:w-12">
                         #{index + 1}
                       </span>
                       <Input
                         placeholder={`Episode ${index + 1} title`}
-                        className="h-8 text-sm"
+                        className="h-8 min-w-0 text-sm"
                         {...register(`episodes.${index}.title` as const)}
                       />
                       <div className="flex shrink-0 gap-0.5">
@@ -408,21 +408,21 @@ export default function MovieFormDialog({
                         </Button>
                       </div>
                     </div>
-                    <div className="mt-1.5 flex items-start gap-1.5 pl-[54px]">
+                    <div className="mt-1.5 flex flex-col gap-1.5 pl-0 min-[420px]:flex-row min-[420px]:items-start min-[420px]:pl-[50px]">
                       <Input
                         placeholder="Episode video URL (https://…/ep1.mp4)"
-                        className="h-8 text-sm"
+                        className="h-8 min-w-0 flex-1 text-sm"
                         {...register(`episodes.${index}.videoUrl` as const)}
                       />
                       <Input
                         placeholder="Sec"
                         inputMode="numeric"
-                        className="h-8 w-16 text-sm"
+                        className="h-8 w-full text-sm min-[420px]:w-16"
                         {...register(`episodes.${index}.durationSec` as const)}
                       />
                     </div>
                     {errors.episodes?.[index] && (
-                      <p className="mt-1 pl-[54px] text-xs text-destructive">
+                      <p className="mt-1 text-xs text-destructive min-[420px]:pl-[50px]">
                         {errors.episodes[index]?.title?.message ??
                           errors.episodes[index]?.videoUrl?.message}
                       </p>

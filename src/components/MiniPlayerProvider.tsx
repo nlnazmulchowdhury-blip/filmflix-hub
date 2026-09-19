@@ -241,7 +241,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       {miniActive && movie && (
         <div
           data-slot="mini-player"
-          className="fixed bottom-4 right-4 z-[60] w-[280px] overflow-hidden rounded-xl border border-white/15 bg-black/95 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.95)] backdrop-blur sm:w-[340px]"
+          className="fixed bottom-3 right-3 z-[60] w-[45vw] max-w-[340px] min-w-[180px] overflow-hidden rounded-xl border border-white/15 bg-black/95 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.95)] backdrop-blur max-sm:bottom-[max(0.75rem,env(safe-area-inset-bottom))] max-sm:right-[max(0.75rem,env(safe-area-inset-right))] sm:bottom-4 sm:right-4 sm:w-[340px]"
         >
           <div className="group/mp relative aspect-video bg-black">
             {/* Portal target for the persistent video */}

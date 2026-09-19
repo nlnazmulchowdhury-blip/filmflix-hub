@@ -165,23 +165,24 @@ export default function MovieDetail() {
       </div>
 
       <header className="sticky top-0 z-40 glass-panel border-b">
-        <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
-          <Link to="/" aria-label="FilmFlix home">
+        <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-2 px-3 sm:px-6">
+          <Link to="/" aria-label="FilmFlix home" className="shrink-0">
             <Logo />
           </Link>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             <ThemeToggle />
             <Button asChild variant="outline" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />
-                Back to catalog
+                <span className="hidden sm:inline">Back to catalog</span>
+                <span className="sm:hidden">Back</span>
               </Link>
             </Button>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl px-4 pb-24 pt-8 sm:px-6">
+      <main className="mx-auto w-full max-w-6xl px-3 pb-24 pt-4 sm:px-6 sm:pt-8">
         {!movie ? (
           <div className="space-y-6">
             <Skeleton className="aspect-video w-full rounded-xl" />
@@ -260,7 +261,7 @@ export default function MovieDetail() {
             )}
 
             {/* Meta */}
-            <div className="grid gap-10 lg:grid-cols-[1fr_280px]">
+            <div className="grid gap-8 lg:grid-cols-[1fr_280px] lg:gap-10">
               <div>
                 <div className="flex flex-wrap items-center gap-2.5">
                   {movie.kind === "series" && (
@@ -325,7 +326,7 @@ export default function MovieDetail() {
                             value={note}
                             onChange={(e) => setNote(e.target.value)}
                             placeholder="Note (optional) — e.g. “room B, snacks on me”"
-                            className="flex-1"
+                            className="min-w-0 flex-1"
                           />
                         </div>
                         <Button
@@ -354,7 +355,7 @@ export default function MovieDetail() {
 
               {/* Poster card */}
               <aside className="hidden lg:block">
-                <div className="overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_16px_48px_-20px_rgba(0,0,0,0.8)]">
+                <div className="sticky top-20 overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_16px_48px_-20px_rgba(0,0,0,0.8)]">
                   <div className="aspect-[2/3] bg-muted">
                     {movie.posterUrl ? (
                       <img
@@ -382,7 +383,7 @@ export default function MovieDetail() {
                 Notes, reactions, and timecodes from the crew.
               </p>
 
-              <div className="mt-5 flex gap-2">
+              <div className="mt-5 flex flex-col gap-2 sm:flex-row">
                 <Input
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
@@ -398,12 +399,12 @@ export default function MovieDetail() {
                       : "Sign in to join the discussion"
                   }
                   disabled={!isAuthenticated}
-                  className="flex-1"
+                  className="min-w-0 flex-1"
                 />
                 <Button
                   onClick={handlePostComment}
                   disabled={!isAuthenticated || isPosting || !commentText.trim()}
-                  className="gap-2"
+                  className="gap-2 sm:w-auto"
                 >
                   {isPosting ? (
                     <Loader2 className="size-4 animate-spin" />
