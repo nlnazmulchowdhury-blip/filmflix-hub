@@ -247,137 +247,268 @@ export default function MovieFormDialog({
               : "New movies appear in the catalog instantly."}
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="title">Title *</Label>
-            <Input id="title" placeholder="e.g. Interstellar" {...register("title")} />
-            {errors.title && (
-              <p className="text-xs text-destructive">{errors.title.message}</p>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="description">Description</Label>
-            <Textarea
-              id="description"
-              rows={3}
-              placeholder="Short synopsis…"
-              {...register("description")}
-            />
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          {/* ---- Section: Basics ------------------------------------ */}
+          <section className="space-y-4">
+            <h3 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              <Clapperboard className="size-3.5 text-primary" />
+              Basics
+            </h3>
             <div className="space-y-2">
-              <Label htmlFor="posterUrl">Poster URL</Label>
-              <Input id="posterUrl" placeholder="https://…" {...register("posterUrl")} />
+              <Label htmlFor="title">Title *</Label>
+              <Input id="title" placeholder="e.g. Interstellar" {...register("title")} />
+              {errors.title && (
+                <p className="text-xs text-destructive">{errors.title.message}</p>
+              )}
             </div>
+
             <div className="space-y-2">
-              <Label htmlFor="backdropUrl">Backdrop URL</Label>
-              <Input id="backdropUrl" placeholder="https://…" {...register("backdropUrl")} />
+              <Label htmlFor="description">Description</Label>
+              <Textarea
+                id="description"
+                rows={3}
+                placeholder="Short synopsis…"
+                {...register("description")}
+              />
             </div>
-          </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="videoUrl">Main video URL (mp4 link)</Label>
-            <Input
-              id="videoUrl"
-              placeholder="https://…/movie.mp4"
-              {...register("videoUrl")}
-            />
-            <p className="text-xs text-muted-foreground">
-              The trailer or main feature. Episodes listed below get their own
-              playlist. Shortener links (tinyurl/is.gd…) are automatically
-              resolved to the real video URL before saving.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="year">Year</Label>
-              <Input id="year" inputMode="numeric" placeholder="2024" {...register("year")} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="rating">Rating (0–10)</Label>
-              <Input id="rating" inputMode="decimal" placeholder="8.5" {...register("rating")} />
-            </div>
-          </div>
-
-          {/* Language dubs — alternate video versions */}
-          <div className="space-y-2 rounded-xl border border-border/60 bg-secondary/30 p-3">
-            <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
-              <Label className="flex items-center gap-1.5">
-                <Languages className="size-3.5 text-primary" />
-                Language versions ({dubFields.length})
-              </Label>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                onClick={() => appendDub({ label: "", videoUrl: "" })}
-              >
-                <Plus className="size-3.5" />
-                Add language
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              The main video above is the original. Add Hindi/Bengali dubbed
-              versions here — viewers switch languages inside the player and
-              keep their playback position.
-            </p>
-
-            {dubFields.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border/60 p-4 text-center text-xs text-muted-foreground">
-                No extra languages yet — only the original audio will play.
-              </p>
-            ) : (
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                {dubFields.map((field, index) => (
-                  <div
-                    key={field.id}
-                    className="rounded-lg border border-border/50 bg-card/60 p-2.5"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <span className="flex w-16 shrink-0 items-center justify-center rounded-md bg-primary/10 px-1 py-1 text-xs font-semibold text-primary">
-                        <Languages className="size-3.5" />
-                      </span>
-                      <Input
-                        placeholder={`Language name (e.g. Hindi Dub)`}
-                        className="h-8 min-w-0 text-sm"
-                        {...register(`dubs.${index}.label` as const)}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-7 shrink-0 text-destructive hover:text-destructive"
-                        aria-label="Remove language"
-                        onClick={() => removeDub(index)}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </div>
-                    <div className="mt-1.5 flex min-[420px]:pl-[68px]">
-                      <Input
-                        placeholder="Dubbed video URL (https://…/hindi.mp4)"
-                        className="h-8 min-w-0 flex-1 text-sm"
-                        {...register(`dubs.${index}.videoUrl` as const)}
-                      />
-                    </div>
-                    {errors.dubs?.[index] && (
-                      <p className="mt-1 text-xs text-destructive min-[420px]:pl-[68px]">
-                        {errors.dubs[index]?.label?.message ??
-                          errors.dubs[index]?.videoUrl?.message}
-                      </p>
-                    )}
-                  </div>
-                ))}
+                <Label htmlFor="year">Year</Label>
+                <Input id="year" inputMode="numeric" placeholder="2024" {...register("year")} />
               </div>
-            )}
-          </div>
+              <div className="space-y-2">
+                <Label htmlFor="rating">Rating (0–10)</Label>
+                <Input id="rating" inputMode="decimal" placeholder="8.5" {...register("rating")} />
+              </div>
+            </div>
+          </section>
 
-          <div className="space-y-2">
-            <Label>Categories (multi-select)</Label>
+          <div className="border-t border-border/50" />
+
+          {/* ---- Section: Images ------------------------------------ */}
+          <section className="space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Images
+            </h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="posterUrl">Poster URL</Label>
+                <Input id="posterUrl" placeholder="https://…" {...register("posterUrl")} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="backdropUrl">Backdrop URL</Label>
+                <Input id="backdropUrl" placeholder="https://…" {...register("backdropUrl")} />
+              </div>
+            </div>
+          </section>
+
+          <div className="border-t border-border/50" />
+
+          {/* ---- Section: Video ------------------------------------- */}
+          <section className="space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Video
+            </h3>
+            <div className="space-y-2">
+              <Label htmlFor="videoUrl">Main video URL (mp4 link)</Label>
+              <Input
+                id="videoUrl"
+                placeholder="https://…/movie.mp4"
+                {...register("videoUrl")}
+              />
+              <p className="text-xs text-muted-foreground">
+                The trailer or main feature. Shortener links (tinyurl/is.gd…)
+                are automatically resolved to the real video URL before saving.
+              </p>
+            </div>
+
+            {/* Language dubs — alternate video versions */}
+            <div className="space-y-3 rounded-xl border border-border/60 bg-secondary/30 p-3.5">
+              <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
+                <Label className="flex items-center gap-1.5">
+                  <Languages className="size-3.5 text-primary" />
+                  Language versions ({dubFields.length})
+                </Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => appendDub({ label: "", videoUrl: "" })}
+                >
+                  <Plus className="size-3.5" />
+                  Add language
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                The main video above is the original. Add Hindi/Bengali dubbed
+                versions here — viewers switch languages inside the player.
+              </p>
+
+              {dubFields.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border/60 p-3.5 text-center text-xs text-muted-foreground">
+                  No extra languages yet — only the original audio will play.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {dubFields.map((field, index) => (
+                    <div
+                      key={field.id}
+                      className="rounded-lg border border-border/50 bg-card/60 p-2.5"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                          <Languages className="size-3.5" />
+                        </span>
+                        <Input
+                          placeholder="Language name (e.g. Hindi Dub)"
+                          className="h-8 min-w-0 text-sm"
+                          {...register(`dubs.${index}.label` as const)}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 shrink-0 text-destructive hover:text-destructive"
+                          aria-label="Remove language"
+                          onClick={() => removeDub(index)}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </div>
+                      <div className="mt-1.5 flex min-[420px]:pl-[38px]">
+                        <Input
+                          placeholder="Dubbed video URL (https://…/hindi.mp4)"
+                          className="h-8 min-w-0 flex-1 text-sm"
+                          {...register(`dubs.${index}.videoUrl` as const)}
+                        />
+                      </div>
+                      {errors.dubs?.[index] && (
+                        <p className="mt-1 text-xs text-destructive min-[420px]:pl-[38px]">
+                          {errors.dubs[index]?.label?.message ??
+                            errors.dubs[index]?.videoUrl?.message}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Episodes / parts playlist */}
+            <div className="space-y-3 rounded-xl border border-border/60 bg-secondary/30 p-3.5">
+              <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
+                <Label className="flex items-center gap-1.5">
+                  <Clapperboard className="size-3.5 text-primary" />
+                  Episodes / parts ({fields.length})
+                </Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => append({ title: "", videoUrl: "", durationSec: "" })}
+                >
+                  <Plus className="size-3.5" />
+                  Add episode
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Listed in order — viewers see them as a playlist under the
+                player. Add at least one episode to mark this entry as a series.
+              </p>
+
+              {fields.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border/60 p-3.5 text-center text-xs text-muted-foreground">
+                  No episodes yet — a single-movie entry needs only the main
+                  video URL above.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {fields.map((field, index) => (
+                    <div
+                      key={field.id}
+                      className="rounded-lg border border-border/50 bg-card/60 p-2.5"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-8 shrink-0 text-center text-xs font-semibold text-muted-foreground sm:w-10">
+                          #{index + 1}
+                        </span>
+                        <Input
+                          placeholder={`Episode ${index + 1} title`}
+                          className="h-8 min-w-0 text-sm"
+                          {...register(`episodes.${index}.title` as const)}
+                        />
+                        <div className="flex shrink-0 gap-0.5">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            aria-label="Move up"
+                            disabled={index === 0}
+                            onClick={() => move(index, index - 1)}
+                          >
+                            <ArrowUp className="size-3.5" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            aria-label="Move down"
+                            disabled={index === fields.length - 1}
+                            onClick={() => move(index, index + 1)}
+                          >
+                            <ArrowDown className="size-3.5" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 text-destructive hover:text-destructive"
+                            aria-label="Remove episode"
+                            onClick={() => remove(index)}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="mt-1.5 flex flex-col gap-1.5 pl-0 min-[420px]:flex-row min-[420px]:items-start min-[420px]:pl-[38px]">
+                        <Input
+                          placeholder="Episode video URL (https://…/ep1.mp4)"
+                          className="h-8 min-w-0 flex-1 text-sm"
+                          {...register(`episodes.${index}.videoUrl` as const)}
+                        />
+                        <Input
+                          placeholder="Sec"
+                          inputMode="numeric"
+                          className="h-8 w-full text-sm min-[420px]:w-16"
+                          {...register(`episodes.${index}.durationSec` as const)}
+                        />
+                      </div>
+                      {errors.episodes?.[index] && (
+                        <p className="mt-1 text-xs text-destructive min-[420px]:pl-[38px]">
+                          {errors.episodes[index]?.title?.message ??
+                            errors.episodes[index]?.videoUrl?.message}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <div className="border-t border-border/50" />
+
+          {/* ---- Section: Categories -------------------------------- */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Categories
+            </h3>
+            <div className="space-y-2">
 
             {/* Chosen categories as removable chips. */}
             {selectedCategories.length > 0 && (
@@ -449,112 +580,8 @@ export default function MovieFormDialog({
               A movie can live in several sections at once — pick from the
               existing ones or type new names and press Enter.
             </p>
-          </div>
-
-          {/* Episodes / parts playlist */}
-          <div className="space-y-2 rounded-xl border border-border/60 bg-secondary/30 p-3">
-            <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
-              <Label className="flex items-center gap-1.5">
-                <Clapperboard className="size-3.5 text-primary" />
-                Episodes / parts ({fields.length})
-              </Label>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                onClick={() => append({ title: "", videoUrl: "", durationSec: "" })}
-              >
-                <Plus className="size-3.5" />
-                Add episode
-              </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Listed in order — viewers see them as a playlist under the player.
-              Add at least one episode to mark this entry as a series.
-            </p>
-
-            {fields.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border/60 p-4 text-center text-xs text-muted-foreground">
-                No episodes yet — a single-movie entry needs only the main video
-                URL above.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {fields.map((field, index) => (
-                  <div
-                    key={field.id}
-                    className="rounded-lg border border-border/50 bg-card/60 p-2.5"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-8 shrink-0 text-center text-xs font-semibold text-muted-foreground sm:w-12">
-                        #{index + 1}
-                      </span>
-                      <Input
-                        placeholder={`Episode ${index + 1} title`}
-                        className="h-8 min-w-0 text-sm"
-                        {...register(`episodes.${index}.title` as const)}
-                      />
-                      <div className="flex shrink-0 gap-0.5">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          aria-label="Move up"
-                          disabled={index === 0}
-                          onClick={() => move(index, index - 1)}
-                        >
-                          <ArrowUp className="size-3.5" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          aria-label="Move down"
-                          disabled={index === fields.length - 1}
-                          onClick={() => move(index, index + 1)}
-                        >
-                          <ArrowDown className="size-3.5" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-7 text-destructive hover:text-destructive"
-                          aria-label="Remove episode"
-                          onClick={() => remove(index)}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="mt-1.5 flex flex-col gap-1.5 pl-0 min-[420px]:flex-row min-[420px]:items-start min-[420px]:pl-[50px]">
-                      <Input
-                        placeholder="Episode video URL (https://…/ep1.mp4)"
-                        className="h-8 min-w-0 flex-1 text-sm"
-                        {...register(`episodes.${index}.videoUrl` as const)}
-                      />
-                      {/* long URLs are resolved on save — no manual work needed */}
-                      <Input
-                        placeholder="Sec"
-                        inputMode="numeric"
-                        className="h-8 w-full text-sm min-[420px]:w-16"
-                        {...register(`episodes.${index}.durationSec` as const)}
-                      />
-                    </div>
-                    {errors.episodes?.[index] && (
-                      <p className="mt-1 text-xs text-destructive min-[420px]:pl-[50px]">
-                        {errors.episodes[index]?.title?.message ??
-                          errors.episodes[index]?.videoUrl?.message}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          </section>
 
           <DialogFooter className="gap-2 pt-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
