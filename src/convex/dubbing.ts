@@ -3,20 +3,9 @@ import { action, internalMutation, internalQuery, mutation, query } from "./_gen
 import { internal, api } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { DUB_LANGUAGES } from "../lib/dub-languages";
 
 const API_BASE = "https://api.elevenlabs.io";
-
-/** ISO codes → pretty labels shown in the admin UI and language menu. */
-export const DUB_LANGUAGES: { code: string; label: string }[] = [
-  { code: "bn", label: "Bengali" },
-  { code: "hi", label: "Hindi" },
-  { code: "ur", label: "Urdu" },
-  { code: "ta", label: "Tamil" },
-  { code: "te", label: "Telugu" },
-  { code: "mr", label: "Marathi" },
-  { code: "ne", label: "Nepali" },
-  { code: "en", label: "English" },
-];
 
 async function requireAdminId(ctx: { db: any } & Parameters<typeof getAuthUserId>[0]) {
   const userId = await getAuthUserId(ctx);

@@ -17,7 +17,7 @@ import MovieFormDialog from "@/components/MovieFormDialog";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { DUB_LANGUAGES } from "@/convex/dubbing";
+import { DUB_LANGUAGES } from "@/lib/dub-languages";
 import { movieCategoryNames } from "@/lib/categories";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
