@@ -16,6 +16,8 @@ import Logo from "@/components/Logo";
 import MovieFormDialog from "@/components/MovieFormDialog";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
+import { DUB_LANGUAGES } from "@/convex/dubbing";
 import { movieCategoryNames } from "@/lib/categories";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
@@ -39,6 +41,7 @@ import {
   Users,
   X,
   Link2,
+  Languages,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router";
@@ -71,6 +74,17 @@ function AdminContent() {
   const setRole = useMutation(api.admin.setRole);
   const migrateShortLinks = useAction(api.shortlinks.migrateAllShortLinks);
   const [isFixingLinks, setIsFixingLinks] = useState(false);
+
+  /* AI dubbing */
+  const [dubMovieId, setDubMovieId] = useState("");
+  const dubJobs = useQuery(api.dubbing.listJobsForMovie, dubMovieId ? { movieId: dubMovieId as Id<"movies"> } : "skip");
+  const startDubJob = useMutation(api.dubbing.startDub);
+  const submitDub = useAction(api.dubbing.submitDub);
+  const pollDub = useAction(api.dubbing.pollDub);
+  const removeDubJob = useMutation(api.dubbing.removeJob);
+  const [dubLang, setDubLang] = useState("bn");
+  const [isStartingDub, setIsStartingDub] = useState(false);
+  const [isPolling, setIsPolling] = useState<Id<"dubJobs"> | null>(null);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Doc<"movies"> | null>(null);
@@ -112,6 +126,30 @@ function AdminContent() {
       toast.error(err instanceof Error ? err.message : "Failed to create category");
     } finally {
       setIsAddingCategory(false);
+    }
+  };
+
+  const handleStartDub = async () => {
+    if (!dubMovieId) return;
+    setIsStartingDub(true);
+    try {
+      const jobId = await startDubJob({
+        movieId: dubMovieId as Id<"movies">,
+        targetLang: dubLang,
+      });
+      toast.success("Dub job queued — sending to ElevenLabs…");
+      try {
+        await submitDub({ jobId });
+        toast.success(
+          "Dubbing started on ElevenLabs. A full movie takes a while — use “check now” later.",
+        );
+      } catch {
+        toast.warning("Queued locally. ElevenLabs submit failed — press “send now” to retry.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not start the dub");
+    } finally {
+      setIsStartingDub(false);
     }
   };
 
@@ -623,6 +661,159 @@ function AdminContent() {
                         ))}
                       </TableBody>
                     </Table>
+                  )}
+                </Card>
+
+                {/* AI auto-dubbing */}
+                <Card className="mt-4 border-border/60 bg-card/60 p-4">
+                  <div className="mb-1 flex items-center gap-2">
+                    <Languages className="size-4 text-primary" />
+                    <p className="font-display text-sm font-semibold">AI auto-dubbing</p>
+                  </div>
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    Translate a movie's audio into another language with AI
+                    (ElevenLabs). The dub runs on their servers — a full movie
+                    can take a while. When it's done, the language appears in
+                    the player's language menu automatically. Costs credits
+                    based on duration.
+                  </p>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleStartDub();
+                    }}
+                    className="flex flex-col gap-2 sm:flex-row"
+                  >
+                    <select
+                      value={dubMovieId}
+                      onChange={(e) => setDubMovieId(e.target.value)}
+                      aria-label="Movie to dub"
+                      className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="">Pick a movie…</option>
+                      {(movies ?? [])
+                        .filter((m) => m.videoUrl)
+                        .map((m) => (
+                          <option key={m._id} value={m._id}>
+                            {m.title}
+                          </option>
+                        ))}
+                    </select>
+                    <select
+                      value={dubLang}
+                      onChange={(e) => setDubLang(e.target.value)}
+                      aria-label="Target language"
+                      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      {DUB_LANGUAGES.map((l) => (
+                        <option key={l.code} value={l.code}>
+                          {l.label}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="submit"
+                      className="gap-2"
+                      disabled={!dubMovieId || isStartingDub}
+                    >
+                      {isStartingDub && <Loader2 className="size-4 animate-spin" />}
+                      <Languages className="size-4" />
+                      Auto-dub
+                    </Button>
+                  </form>
+
+                  {(dubJobs ?? []).length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {dubJobs!.map((j) => (
+                        <div
+                          key={j._id}
+                          className="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 bg-secondary/30 px-3 py-2 text-xs"
+                        >
+                          <span className="font-semibold">{j.movieTitle}</span>
+                          <span className="text-muted-foreground">→</span>
+                          <span className="font-medium">
+                            {DUB_LANGUAGES.find((l) => l.code === j.targetLang)?.label ?? j.targetLang}
+                          </span>
+                          {j.status === "dubbing" && (
+                            <span className="inline-flex items-center gap-1.5 text-amber-500">
+                              <Loader2 className="size-3 animate-spin" />
+                              Dubbing on ElevenLabs…
+                              <button
+                                type="button"
+                                className="underline underline-offset-2 hover:text-foreground"
+                                onClick={async () => {
+                                  setIsPolling(j._id);
+                                  try {
+                                    const r = await pollDub({ jobId: j._id });
+                                    if (r.status === "dubbed") {
+                                      toast.success(`"${j.movieTitle}" ${j.targetLang} dub is ready — language added to the player.`);
+                                    } else if (r.status === "failed") {
+                                      toast.error("The dub failed — see the error.");
+                                    } else {
+                                      toast.info("Still dubbing — check again in a few minutes.");
+                                    }
+                                  } catch (err) {
+                                    toast.error(err instanceof Error ? err.message : "Check failed");
+                                  } finally {
+                                    setIsPolling(null);
+                                  }
+                                }}
+                              >
+                                check now
+                              </button>
+                            </span>
+                          )}
+                          {j.status === "queued" && (
+                            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                              Queued
+                              <button
+                                type="button"
+                                className="underline underline-offset-2 hover:text-foreground"
+                                onClick={async () => {
+                                  setIsPolling(j._id);
+                                  try {
+                                    await submitDub({ jobId: j._id });
+                                    toast.success("Submitted to ElevenLabs");
+                                  } catch (err) {
+                                    toast.error(err instanceof Error ? err.message : "Submit failed");
+                                  } finally {
+                                    setIsPolling(null);
+                                  }
+                                }}
+                              >
+                                send now
+                              </button>
+                            </span>
+                          )}
+                          {j.status === "dubbed" && (
+                            <span className="font-semibold text-emerald-500">
+                              ✓ Dub ready — added to the player
+                            </span>
+                          )}
+                          {j.status === "failed" && (
+                            <span
+                              className="max-w-[320px] truncate font-medium text-destructive"
+                              title={j.error ?? ""}
+                            >
+                              Failed: {j.error ?? "unknown error"}
+                            </span>
+                          )}
+                          <span className="ml-auto flex items-center gap-2">
+                            {isPolling === j._id && <Loader2 className="size-3 animate-spin" />}
+                            <button
+                              type="button"
+                              aria-label="Remove job"
+                              className="text-muted-foreground transition-colors hover:text-destructive"
+                              onClick={async () => {
+                                await removeDubJob({ jobId: j._id });
+                              }}
+                            >
+                              <X className="size-3.5" />
+                            </button>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </Card>
               </TabsContent>

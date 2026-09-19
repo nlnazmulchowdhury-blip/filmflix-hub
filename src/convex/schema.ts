@@ -132,6 +132,19 @@ const schema = defineSchema(
       realUrl: v.string(),
       resolvedAt: v.number(),
     }).index("by_short", ["shortUrl"]),
+
+    /** AI dubbing jobs (ElevenLabs): track auto-translation of a movie into
+     *  Bengali/Hindi etc. Status: queued → dubbing → dubbed | failed. */
+    dubJobs: defineTable({
+      movieId: v.id("movies"),
+      movieTitle: v.string(),
+      targetLang: v.string(), // "bn" | "hi" | …
+      status: v.string(),
+      dubbingId: v.optional(v.string()),
+      error: v.optional(v.string()),
+      createdAt: v.number(),
+      updatedAt: v.number(),
+    }).index("by_movie", ["movieId"]),
   },
   {
     schemaValidation: false,
