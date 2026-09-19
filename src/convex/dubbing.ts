@@ -151,6 +151,20 @@ export const submitDub = action({
     });
     if (!movie?.videoUrl) throw new Error("Movie has no main video URL");
 
+    // Fail fast and visibly when the key is missing — never leave the job
+    // stuck in "dubbing" without an id.
+    if (!process.env.ELEVENLABS_API_KEY) {
+      await ctx.runMutation(internal.dubbing.saveJob, {
+        jobId,
+        status: "failed",
+        error:
+          "ELEVENLABS_API_KEY is not configured. Add the key in the project's API keys page, then press “send now”.",
+      });
+      throw new Error(
+        "ELEVENLABS_API_KEY is not configured. Add the key in the project's API keys page, then retry.",
+      );
+    }
+
     await ctx.runMutation(internal.dubbing.saveJob, {
       jobId,
       status: "dubbing",
@@ -200,7 +214,17 @@ export const pollDub = action({
   handler: async (ctx, { jobId }) => {
     const job = await ctx.runQuery(internal.dubbing.jobById, { jobId });
     if (!job) throw new Error("Dubbing job not found");
-    if (!job.dubbingId) throw new Error("Job has no dubbing id yet");
+    if (!job.dubbingId) {
+      // The submit never completed (usually a missing API key or network
+      // failure). Mark the job failed instead of crashing the UI.
+      await ctx.runMutation(internal.dubbing.saveJob, {
+        jobId,
+        status: "failed",
+        error:
+          "The job was never submitted to ElevenLabs — press “send now” after the API key is configured.",
+      });
+      return { status: "failed" as const };
+    }
 
     const res = await elevenLabsFetch(`/v1/dubbing/${job.dubbingId}`);
     if (!res.ok) throw new Error(`Status check failed: ${res.status}`);
