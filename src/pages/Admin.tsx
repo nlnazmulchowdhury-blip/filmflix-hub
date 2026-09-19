@@ -75,9 +75,12 @@ function AdminContent() {
   const migrateShortLinks = useAction(api.shortlinks.migrateAllShortLinks);
   const [isFixingLinks, setIsFixingLinks] = useState(false);
 
-  /* AI dubbing */
+  /* AI dubbing (ElevenLabs auto-translation) */
   const [dubMovieId, setDubMovieId] = useState("");
-  const dubJobs = useQuery(api.dubbing.listJobsForMovie, dubMovieId ? { movieId: dubMovieId as Id<"movies"> } : "skip");
+  const dubJobs = useQuery(
+    api.dubbing.listJobsForMovie,
+    dubMovieId ? { movieId: dubMovieId as Id<"movies"> } : "skip",
+  );
   const startDubJob = useMutation(api.dubbing.startDub);
   const submitDub = useAction(api.dubbing.submitDub);
   const pollDub = useAction(api.dubbing.pollDub);
