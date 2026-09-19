@@ -145,6 +145,21 @@ const schema = defineSchema(
       createdAt: v.number(),
       updatedAt: v.number(),
     }).index("by_movie", ["movieId"]),
+
+    /** Web analytics: one row per page view. Written by a lightweight client
+     *  tracker on every route change; summarized in the admin panel. */
+    pageViews: defineTable({
+      path: v.string(),
+      movieId: v.optional(v.id("movies")),
+      userId: v.optional(v.id("users")),
+      referrer: v.optional(v.string()),
+      device: v.optional(v.string()), // "mobile" | "tablet" | "desktop"
+      country: v.optional(v.string()),
+      createdAt: v.number(),
+    })
+      .index("by_created", ["createdAt"])
+      .index("by_path", ["path"])
+      .index("by_movie", ["movieId"]),
   },
   {
     schemaValidation: false,
