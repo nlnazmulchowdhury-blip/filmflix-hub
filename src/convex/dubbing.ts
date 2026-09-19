@@ -183,12 +183,17 @@ export const submitDub = action({
     });
     if (!res.ok) {
       const text = await res.text();
+      // 401 = the stored key is wrong/revoked — say exactly what to do.
+      const friendly =
+        res.status === 401
+          ? "ElevenLabs says the API key is invalid. Paste a valid key (starts with sk_) in chat so it can be replaced, then press “send now”."
+          : `ElevenLabs rejected the job (${res.status}): ${text.slice(0, 300)}`;
       await ctx.runMutation(internal.dubbing.saveJob, {
         jobId,
         status: "failed",
-        error: `ElevenLabs rejected the job (${res.status}): ${text.slice(0, 300)}`,
+        error: friendly,
       });
-      throw new Error(`Dubbing submit failed: ${res.status}`);
+      throw new Error(friendly);
     }
     const data = (await res.json()) as { dubbing_id: string };
     await ctx.runMutation(internal.dubbing.saveJob, {
