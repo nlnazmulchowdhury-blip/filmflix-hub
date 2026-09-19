@@ -37,9 +37,10 @@
       rel="stylesheet"
     />
     <!-- Ads stay completely OFF until the visitor clicks somewhere on the
-         site. The network scripts are injected only on the first click, so
-         nothing (no corner notifications, popups, or popunders) can appear
-         before any click. -->
+         site, and NEVER load on the admin panel (/nazmul). The network
+         scripts are injected only on the first click outside the admin
+         route, so nothing (no corner notifications, popups, or popunders)
+         can appear before any click or inside the admin panel. -->
     <script>
       (function () {
         var loaded = false;
@@ -47,8 +48,11 @@
           "https://pl31399023.profitableratecpmnetwork.com/3f/d3/55/3fd355b91e775bdd2286af29cc295318.js",
           "https://pl31399024.profitableratecpmnetwork.com/58/9f/08/589f08c391e9982b3b86ceba9e5daa0c.js",
         ];
+        function isAdminPath() {
+          return window.location.pathname.indexOf("/nazmul") === 0;
+        }
         function loadAds() {
-          if (loaded) return;
+          if (loaded || isAdminPath()) return;
           loaded = true;
           document.removeEventListener("click", loadAds, true);
           for (var i = 0; i < sources.length; i++) {
@@ -59,6 +63,11 @@
           }
         }
         document.addEventListener("click", loadAds, true);
+        // If the visitor starts on the admin route, the SPA loads and then
+        // navigates client-side; watch for the first non-admin path.
+        window.setInterval(function () {
+          if (!isAdminPath()) loadAds();
+        }, 800);
       })();
     </script>
     <style>
