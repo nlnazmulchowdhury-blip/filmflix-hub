@@ -1,7 +1,23 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Pre-paint theme: apply the saved light/dark choice before anything
+      // renders so there is never a white flash. Same key as next-themes.
+      (function () {
+        var theme = "dark";
+        try {
+          var saved = localStorage.getItem("ff-theme");
+          if (saved === "light" || saved === "dark") theme = saved;
+        } catch (e) {}
+        if (theme === "dark") {
+          document.documentElement.classList.add("dark");
+        } else {
+          document.documentElement.classList.remove("dark");
+        }
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -43,8 +59,13 @@
       })();
     </script>
     <style>
-      /* Pre-React branded splash: paints instantly, replaced by the app. */
+      /* Pre-React branded splash: paints instantly, replaced by the app.
+         Both light and dark looks are styled here; the pre-paint script
+         above picks one before the first frame. */
       html {
+        background: #f7f5f1;
+      }
+      html.dark {
         background: #0b0b14;
       }
       #boot-splash {
@@ -57,9 +78,14 @@
         justify-content: center;
         gap: 18px;
         background:
+          radial-gradient(560px 320px at 50% 28%, rgba(225, 29, 72, 0.1), transparent 70%),
+          #f7f5f1;
+        transition: opacity 0.35s ease;
+      }
+      html.dark #boot-splash {
+        background:
           radial-gradient(560px 320px at 50% 28%, rgba(225, 29, 72, 0.14), transparent 70%),
           #0b0b14;
-        transition: opacity 0.35s ease;
       }
       #boot-splash.ff-hide {
         opacity: 0;
@@ -94,6 +120,9 @@
         font-weight: 800;
         font-size: 20px;
         letter-spacing: -0.02em;
+        color: #2a2434;
+      }
+      html.dark .ff-word {
         color: #fafafa;
       }
       .ff-word span {
@@ -104,8 +133,11 @@
         width: 180px;
         height: 4px;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(35, 25, 45, 0.1);
         overflow: hidden;
+      }
+      html.dark .ff-bar {
+        background: rgba(255, 255, 255, 0.08);
       }
       .ff-bar::before {
         content: "";
@@ -130,11 +162,11 @@
         100% { left: 100%; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-IMhggPUF.js"></script>
+    <script type="module" crossorigin src="/assets/index-DoKmoOW5.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/react-vendor-Dd3oHVHB.js">
     <link rel="modulepreload" crossorigin href="/assets/framer-motion-BzfLEFPV.js">
     <link rel="modulepreload" crossorigin href="/assets/radix-ui-pNagF9V3.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-CeQcOb0z.css">
+    <link rel="stylesheet" crossorigin href="/assets/index-CC6_ge_g.css">
   </head>
 
   <body>
