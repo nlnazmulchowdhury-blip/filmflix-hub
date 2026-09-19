@@ -19,6 +19,7 @@ import {
   Play,
   Send,
   Star,
+  Share2,
   Trash2,
   Calendar,
   ListVideo,
@@ -158,6 +159,28 @@ export default function MovieDetail() {
     );
   };
 
+  /* Share: native sheet on phones (WhatsApp/Messenger/etc.), clipboard
+     fallback everywhere else. */
+  const shareMovie = async () => {
+    if (!movie) return;
+    const url = window.location.href;
+    const text = `Watch “${movie.title}” on FilmFlix`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: movie.title, text, url });
+        return;
+      }
+    } catch {
+      return; // user closed the share sheet
+    }
+    try {
+      await navigator.clipboard.writeText(`${text} — ${url}`);
+      toast.success("Link copied — paste it anywhere to share");
+    } catch {
+      toast.error("Could not copy the link");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="pointer-events-none fixed inset-0 -z-10">
@@ -282,6 +305,16 @@ export default function MovieDetail() {
                     </span>
                   )}
 
+                  {/* Share this movie */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto gap-2"
+                    onClick={shareMovie}
+                  >
+                    <Share2 className="size-3.5" />
+                    Share
+                  </Button>
                 </div>
 
                 <h1 className="font-display mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
