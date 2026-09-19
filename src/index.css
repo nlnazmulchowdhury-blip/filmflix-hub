@@ -134,6 +134,10 @@ html:not(.dark) {
     /* Respect notches / home bars on phones. */
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
+    /* The app is a single vertical column — a sideways page scrollbar is
+       always a layout bug, never a feature. "clip" (not "hidden") keeps
+       position: sticky working. */
+    overflow-x: clip;
   }
   button:not([disabled]),
   [role="button"]:not([disabled]) {
@@ -145,6 +149,34 @@ html:not(.dark) {
   h3,
   p {
     overflow-wrap: break-word;
+  }
+
+  /* Branded scrollbar: thin, rounded, theme-aware. Firefox uses the two-value
+     shorthand; Chromium/Safari use the ::-webkit pseudo-elements. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--foreground) 24%, transparent)
+      transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 22%, transparent);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--primary) 60%, transparent);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }
 
