@@ -83,9 +83,16 @@ export default function PlayerStage({
   );
 
   useEffect(() => {
-    const onFsChange = () => setFullscreen(Boolean(document.fullscreenElement));
+    const onFsChange = () => {
+      const fsDoc = document as Document & { webkitFullscreenElement?: Element | null };
+      setFullscreen(Boolean(document.fullscreenElement || fsDoc.webkitFullscreenElement));
+    };
     document.addEventListener("fullscreenchange", onFsChange);
-    return () => document.removeEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFsChange);
+      document.removeEventListener("webkitfullscreenchange", onFsChange);
+    };
   }, []);
 
   /* Auto-hide controls while playing — but never while the cursor rests on
@@ -131,10 +138,36 @@ export default function PlayerStage({
   }, [title]);
 
   const toggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen?.().catch(() => undefined);
+    const el = containerRef.current as (HTMLElement & { webkitRequestFullscreen?: () => Promise<void> }) | null;
+    const fsDoc = document as Document & { webkitFullscreenElement?: Element | null };
+    const isFs = Boolean(document.fullscreenElement || fsDoc.webkitFullscreenElement);
+    if (!isFs) {
+      // Standard API first; iOS Safari < 16.4 only supports the webkit
+      // variant on video elements, so fall back through the chain.
+      if (el?.requestFullscreen) {
+        el.requestFullscreen().catch(() => undefined);
+      } else if (el?.webkitRequestFullscreen) {
+        el.webkitRequestFullscreen();
+      } else {
+        // Last resort (iPhone Safari): fullscreen the underlying video via
+        // the native controls when the container API is unavailable.
+        const v = document.querySelector("video");
+        const video = v as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+        video?.webkitEnterFullscreen?.();
+      }
+      // Hint phones to rotate: landscape for wide screens is nicer, but the
+      // video itself letterboxes to whatever orientation the user holds.
+      (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> })
+        ?.lock?.("landscape")
+        .catch(() => undefined); // not supported everywhere — fine
     } else {
-      document.exitFullscreen?.().catch(() => undefined);
+      (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> })
+        ?.unlock?.();
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => undefined);
+      } else if (fsDoc.webkitFullscreenElement) {
+        (document as Document & { webkitExitFullscreen?: () => void }).webkitExitFullscreen?.();
+      }
     }
   }, []);
 
@@ -206,8 +239,10 @@ export default function PlayerStage({
   return (
     <div
       ref={containerCallback}
-      className={`group/player relative w-full overflow-hidden rounded-xl border border-border/60 bg-black shadow-[0_24px_80px_-24px_rgba(0,0,0,0.9)] ${
-        fullscreen ? "h-screen rounded-none border-0" : "aspect-video"
+      className={`group/player relative w-full overflow-hidden bg-black shadow-[0_24px_80px_-24px_rgba(0,0,0,0.9)] ${
+        fullscreen
+          ? "fixed inset-0 z-[80] rounded-none border-0"
+          : "aspect-video w-full rounded-xl border border-border/60"
       }`}
       onMouseMove={() => setControlsVisible(true)}
       onMouseLeave={() => playing && setHoveringControls(false)}
