@@ -21,7 +21,6 @@ import {
   type MiniPlayerMovie,
   type PlayerControls,
 } from "./mini-player-context";
-
 function formatTime(sec: number) {
   if (!Number.isFinite(sec)) return "0:00";
   const m = Math.floor(sec / 60);
@@ -47,8 +46,17 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   const [parkingEl, setParkingEl] = useState<HTMLElement | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  /** Latest movie state for callbacks that must not re-create on each render. */
+  const movieRef = useRef<MiniPlayerMovie | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
+
+  /** Currently playing audio version: null = original, else the dub label. */
+  const [activeDub, setActiveDub] = useState<string | null>(null);
+
+  useEffect(() => {
+    movieRef.current = movie;
+  }, [movie]);
 
   const onPlayingPage =
     movie != null && location.pathname === `/movie/${movie.movieId}`;
@@ -75,6 +83,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
           setHasStarted(false);
           setCurrentTime(0);
           setDuration(0);
+          setActiveDub(null);
         }
         return m;
       });
@@ -85,6 +94,41 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       }
     },
     [playVideo],
+  );
+
+  /**
+   * Switch audio version (original ↔ dub) in place: swap only the video src,
+   * restore the playback position and resume. The media element is never
+   * recreated, so volume/mute state also survive.
+   */
+  const setDub = useCallback(
+    (label: string | null) => {
+      const el = videoRef.current;
+      const m = movieRef.current;
+      if (!el || !m) return;
+      const dub = label ? (m.dubs ?? []).find((d) => d.label === label) : undefined;
+      const nextSrc = dub ? dub.videoUrl : m.videoUrl;
+      if (!nextSrc || nextSrc === el.currentSrc || nextSrc === el.src) {
+        setActiveDub(label);
+        return;
+      }
+      const resumeAt = el.currentTime;
+      const wasPlaying = !el.paused;
+      setActiveDub(label);
+      el.src = nextSrc;
+      el.load();
+      const restore = () => {
+        el.removeEventListener("loadedmetadata", restore);
+        if (Number.isFinite(resumeAt) && resumeAt > 0) {
+          el.currentTime = resumeAt;
+        }
+        if (wasPlaying) {
+          el.play().catch(() => undefined);
+        }
+      };
+      el.addEventListener("loadedmetadata", restore);
+    },
+    [],
   );
 
   const setMode = useCallback((m: "inline" | "mini") => {
@@ -99,6 +143,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     setPlaying(false);
     setCurrentTime(0);
     setDuration(0);
+    setActiveDub(null);
   }, []);
 
   /* ------------------- YouTube behavior: navigate away => mini ---------- */
@@ -177,6 +222,8 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       volume,
       currentTime,
       duration,
+      activeDub,
+      setDub,
       registerStage: setStageEl,
       start,
       setMode,
@@ -192,6 +239,8 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       volume,
       currentTime,
       duration,
+      activeDub,
+      setDub,
       start,
       setMode,
       close,

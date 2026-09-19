@@ -1,11 +1,18 @@
 import { createContext, useContext } from "react";
 
+export interface PlayerDub {
+  label: string;
+  videoUrl: string;
+}
+
 export interface MiniPlayerMovie {
   movieId: string;
   title: string;
   videoUrl: string;
   posterUrl?: string | null;
   backdropUrl?: string | null;
+  /** Alternate language versions; empty for original-only movies. */
+  dubs?: PlayerDub[];
 }
 
 export interface PlayerControls {
@@ -31,6 +38,10 @@ export interface MiniPlayerContextValue {
   volume: number;
   currentTime: number;
   duration: number;
+  /** Currently playing audio version: null = original, else the dub label. */
+  activeDub: string | null;
+  /** Switch audio version without losing the playback position. */
+  setDub: (label: string | null) => void;
   /** Register the inline stage slot; the persistent video is portaled here. */
   registerStage: (el: HTMLElement | null) => void;
   /** Begin a movie (optionally autoplaying) on the inline stage. */
@@ -52,6 +63,8 @@ export const MiniPlayerContext = createContext<MiniPlayerContextValue>({
   volume: 1,
   currentTime: 0,
   duration: 0,
+  activeDub: null,
+  setDub: () => undefined,
   registerStage: () => undefined,
   start: () => undefined,
   setMode: () => undefined,

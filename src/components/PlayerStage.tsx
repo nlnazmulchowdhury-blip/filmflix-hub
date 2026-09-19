@@ -1,5 +1,6 @@
 import { useMiniPlayer } from "@/components/mini-player-context";
 import {
+  Languages,
   Maximize,
   Minimize,
   Pause,
@@ -48,6 +49,8 @@ export default function PlayerStage({
     volume,
     currentTime,
     duration,
+    activeDub,
+    setDub,
     registerStage,
     start,
     setMode,
@@ -58,7 +61,10 @@ export default function PlayerStage({
   const containerRef = useRef<HTMLDivElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [langOpen, setLangOpen] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const dubs = movie?.dubs ?? [];
 
   const isHost = isActive && mode === "inline";
 
@@ -311,6 +317,60 @@ export default function PlayerStage({
           <span className="w-10 text-[11px] font-medium tabular-nums text-white/80">
             {formatTime(duration)}
           </span>
+
+          {/* Language switch — original + admin-added dubs. */}
+          {dubs.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setLangOpen((v) => !v)}
+                className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15"
+                aria-label="Audio language"
+                title="Audio language"
+              >
+                <Languages className="size-5" />
+                <span className="hidden text-xs font-semibold min-[420px]:inline">
+                  {activeDub ?? "Original"}
+                </span>
+              </button>
+              {langOpen && (
+                <div className="absolute bottom-full right-0 z-30 mb-2 min-w-[160px] overflow-hidden rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.9)] backdrop-blur">
+                  <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
+                    Audio language
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDub(null);
+                      setLangOpen(false);
+                    }}
+                    className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10 ${
+                      activeDub === null ? "bg-primary/25 font-semibold text-primary" : ""
+                    }`}
+                  >
+                    Original
+                    {activeDub === null && <span className="text-xs">✓</span>}
+                  </button>
+                  {dubs.map((d) => (
+                    <button
+                      key={d.label}
+                      type="button"
+                      onClick={() => {
+                        setDub(d.label);
+                        setLangOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10 ${
+                        activeDub === d.label ? "bg-primary/25 font-semibold text-primary" : ""
+                      }`}
+                    >
+                      {d.label}
+                      {activeDub === d.label && <span className="text-xs">✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Mini hand-off */}
           <button

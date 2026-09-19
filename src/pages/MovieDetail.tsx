@@ -70,6 +70,7 @@ export default function MovieDetail() {
         videoUrl: movie.videoUrl ?? "",
         posterUrl: movie.posterUrl,
         backdropUrl: movie.backdropUrl,
+        dubs: movie.dubs ?? [],
       },
       false,
     );

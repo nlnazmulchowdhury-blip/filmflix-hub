@@ -28,7 +28,7 @@ import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { movieCategoryNames } from "@/lib/categories";
 import { isShortLink } from "@/lib/shortlinks";
-import { X } from "lucide-react";
+import { X, Languages } from "lucide-react";
 
 const episodeSchema = z.object({
   title: z.string().min(1, "Episode title is required"),
@@ -45,6 +45,12 @@ const movieSchema = z.object({
   year: z.string().optional(),
   rating: z.string().optional(),
   episodes: z.array(episodeSchema),
+  dubs: z.array(
+    z.object({
+      label: z.string().min(1, "Language label is required"),
+      videoUrl: z.string().min(1, "Video URL is required"),
+    }),
+  ),
 });
 
 type MovieFormValues = z.infer<typeof movieSchema>;
@@ -92,6 +98,7 @@ export default function MovieFormDialog({
     year: "",
     rating: "",
     episodes: [],
+    dubs: [],
   };
 
   const valuesFor = (m: Doc<"movies"> | null): MovieFormValues =>
@@ -108,6 +115,10 @@ export default function MovieFormDialog({
             title: e.title,
             videoUrl: e.videoUrl,
             durationSec: e.durationSec?.toString() ?? "",
+          })),
+          dubs: (m.dubs ?? []).map((d) => ({
+            label: d.label,
+            videoUrl: d.videoUrl,
           })),
         }
       : emptyValues;
@@ -128,6 +139,15 @@ export default function MovieFormDialog({
     name: "episodes",
   });
 
+  const {
+    fields: dubFields,
+    append: appendDub,
+    remove: removeDub,
+  } = useFieldArray({
+    control,
+    name: "dubs",
+  });
+
   /* Every time the dialog opens, re-fill the form with THIS movie's current
      values — so editing only touches the fields you actually change and all
      the rest are saved back untouched. */
@@ -146,6 +166,7 @@ export default function MovieFormDialog({
       values.backdropUrl,
       values.videoUrl,
       ...values.episodes.map((e) => e.videoUrl),
+      ...values.dubs.map((d) => d.videoUrl),
     ]
       .map((u) => (u ?? "").trim())
       .filter((u) => u.length > 0);
@@ -180,6 +201,13 @@ export default function MovieFormDialog({
               title: e.title,
               videoUrl: clean(e.videoUrl) ?? "",
               durationSec: e.durationSec ? Number(e.durationSec) : undefined,
+            }))
+          : undefined,
+      dubs:
+        values.dubs.length > 0
+          ? values.dubs.map((d) => ({
+              label: d.label,
+              videoUrl: clean(d.videoUrl) ?? "",
             }))
           : undefined,
     };
@@ -272,6 +300,80 @@ export default function MovieFormDialog({
               <Label htmlFor="rating">Rating (0–10)</Label>
               <Input id="rating" inputMode="decimal" placeholder="8.5" {...register("rating")} />
             </div>
+          </div>
+
+          {/* Language dubs — alternate video versions */}
+          <div className="space-y-2 rounded-xl border border-border/60 bg-secondary/30 p-3">
+            <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
+              <Label className="flex items-center gap-1.5">
+                <Languages className="size-3.5 text-primary" />
+                Language versions ({dubFields.length})
+              </Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => appendDub({ label: "", videoUrl: "" })}
+              >
+                <Plus className="size-3.5" />
+                Add language
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The main video above is the original. Add Hindi/Bengali dubbed
+              versions here — viewers switch languages inside the player and
+              keep their playback position.
+            </p>
+
+            {dubFields.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border/60 p-4 text-center text-xs text-muted-foreground">
+                No extra languages yet — only the original audio will play.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {dubFields.map((field, index) => (
+                  <div
+                    key={field.id}
+                    className="rounded-lg border border-border/50 bg-card/60 p-2.5"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="flex w-16 shrink-0 items-center justify-center rounded-md bg-primary/10 px-1 py-1 text-xs font-semibold text-primary">
+                        <Languages className="size-3.5" />
+                      </span>
+                      <Input
+                        placeholder={`Language name (e.g. Hindi Dub)`}
+                        className="h-8 min-w-0 text-sm"
+                        {...register(`dubs.${index}.label` as const)}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 shrink-0 text-destructive hover:text-destructive"
+                        aria-label="Remove language"
+                        onClick={() => removeDub(index)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                    <div className="mt-1.5 flex min-[420px]:pl-[68px]">
+                      <Input
+                        placeholder="Dubbed video URL (https://…/hindi.mp4)"
+                        className="h-8 min-w-0 flex-1 text-sm"
+                        {...register(`dubs.${index}.videoUrl` as const)}
+                      />
+                    </div>
+                    {errors.dubs?.[index] && (
+                      <p className="mt-1 text-xs text-destructive min-[420px]:pl-[68px]">
+                        {errors.dubs[index]?.label?.message ??
+                          errors.dubs[index]?.videoUrl?.message}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">

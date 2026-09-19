@@ -67,6 +67,17 @@ const schema = defineSchema(
           }),
         ),
       ),
+      /** Alternate language versions (e.g. Hindi Dub, Bengali Dub). Each has
+       *  its own video URL; viewers switch between them in the player and
+       *  the playback position is kept. */
+      dubs: v.optional(
+        v.array(
+          v.object({
+            label: v.string(),
+            videoUrl: v.string(),
+          }),
+        ),
+      ),
       seasons: v.optional(
         v.array(
           v.object({
