@@ -44,6 +44,8 @@ function searchableText(m: {
 export default function Landing() {
   const { signOut, isAuthenticated } = useAuth();
   const movies = useQuery(api.movies.list);
+  // Categories created directly in the admin panel (even with zero movies).
+  const tableCategories = useQuery(api.categories.listAll);
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string | null>(null);
@@ -58,15 +60,17 @@ export default function Landing() {
     return Array.from(set).sort();
   }, [movies]);
 
-  /** Distinct display categories (Hollywood, Bengali, Anime, …) — a movie
-      contributes every section it belongs to. */
+  /** Distinct display categories (Hollywood, Bengali, Anime, …): names
+      created directly in the admin panel plus every section a movie belongs
+      to. */
   const categories = useMemo(() => {
     const set = new Set<string>();
+    for (const c of tableCategories ?? []) set.add(c.name);
     for (const m of movies ?? []) {
       for (const c of movieCategoryNames(m)) set.add(c);
     }
-    return Array.from(set);
-  }, [movies]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [tableCategories, movies]);
 
   const filtered = useMemo(() => {
     if (!movies) return null;

@@ -34,6 +34,13 @@ const schema = defineSchema(
 
     // add other tables here
 
+    /** Named catalog sections (Hollywood, Bengali, Anime, …). Created
+     *  directly by admins; movies reference them by name. */
+    categories: defineTable({
+      name: v.string(),
+      createdAt: v.number(),
+    }).index("by_name", ["name"]),
+
     movies: defineTable({
       title: v.string(),
       description: v.optional(v.string()),

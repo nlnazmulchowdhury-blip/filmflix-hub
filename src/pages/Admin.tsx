@@ -63,7 +63,8 @@ function AdminContent() {
   const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
 
   const removeMovie = useMutation(api.movies.remove);
-  const removeCategory = useMutation(api.movies.removeCategory);
+  const removeCategory = useMutation(api.categories.remove);
+  const createCategory = useMutation(api.categories.create);
   const verifyAdminCode = useMutation(api.movies.verifyAdminCode);
   const removeComment = useMutation(api.comments.remove);
   const setRole = useMutation(api.admin.setRole);
@@ -78,16 +79,38 @@ function AdminContent() {
   const [adminCode, setAdminCode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [movieSearch, setMovieSearch] = useState("");
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
 
   /* Admin catalog search: matches title, description, genre, year, kind —
      every word must appear somewhere, forgiving of order and punctuation. */
+  const allCategories = useQuery(api.categories.listAll);
+
+  /** Every section name on the site: categories created directly (live even
+     with zero movies) plus names still only attached to movies. */
   const categories = useMemo(() => {
     const set = new Set<string>();
+    for (const c of allCategories ?? []) set.add(c.name);
     for (const m of movies ?? []) {
       for (const c of movieCategoryNames(m)) set.add(c);
     }
-    return Array.from(set).sort();
-  }, [movies]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [allCategories, movies]);
+
+  const handleAddCategory = async () => {
+    const name = newCategoryName.trim();
+    if (!name) return;
+    setIsAddingCategory(true);
+    try {
+      await createCategory({ name });
+      toast.success(`Category "${name}" created`);
+      setNewCategoryName("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create category");
+    } finally {
+      setIsAddingCategory(false);
+    }
+  };
 
   const filteredMovies = useMemo(() => {
     if (!movies) return null;
@@ -148,10 +171,16 @@ function AdminContent() {
 
   const handleDeleteCategory = async () => {
     if (!deletingCategory) return;
+    const row = (allCategories ?? []).find((c) => c.name === deletingCategory.name);
+    if (!row) {
+      toast.error("Category not found");
+      setDeletingCategory(null);
+      return;
+    }
     try {
-      const changed = await removeCategory({ category: deletingCategory.name });
+      await removeCategory({ id: row._id });
       toast.success(
-        `Category "${deletingCategory.name}" removed — ${changed} ${changed === 1 ? "movie" : "movies"} kept in the catalog as uncategorized.`,
+        `Category "${deletingCategory.name}" removed — ${deletingCategory.count} ${deletingCategory.count === 1 ? "movie" : "movies"} kept in the catalog as uncategorized.`,
       );
       setDeletingCategory(null);
     } catch (err) {
@@ -348,18 +377,43 @@ function AdminContent() {
 
               {/* Movies */}
               <TabsContent value="movies">
-                {/* Category management */}
-                {categories.length > 0 && (
-                  <Card className="mb-4 border-border/60 bg-card/60 p-4">
-                    <div className="mb-2.5 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <p className="font-display text-sm font-semibold">
-                        Categories ({categories.length})
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Deleting a category keeps its movies in the catalog as
-                        uncategorized.
-                      </p>
-                    </div>
+                {/* Category management — always visible, direct add */}
+                <Card className="mb-4 border-border/60 bg-card/60 p-4">
+                  <div className="mb-2.5 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="font-display text-sm font-semibold">
+                      Categories ({categories.length})
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Deleting a category keeps its movies in the catalog as
+                      uncategorized.
+                    </p>
+                  </div>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleAddCategory();
+                    }}
+                    className="mb-3 flex flex-col gap-2 sm:flex-row"
+                  >
+                    <Input
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      placeholder="New category name — e.g. Hollywood, Bengali, Anime…"
+                      aria-label="New category name"
+                      maxLength={60}
+                      disabled={isAddingCategory}
+                    />
+                    <Button
+                      type="submit"
+                      className="gap-2 sm:w-auto"
+                      disabled={isAddingCategory || !newCategoryName.trim()}
+                    >
+                      {isAddingCategory && <Loader2 className="size-4 animate-spin" />}
+                      <Plus className="size-4" />
+                      Add category
+                    </Button>
+                  </form>
+                  {categories.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
                       {categories.map((c) => {
                         const count = (movies ?? []).filter(
@@ -387,8 +441,13 @@ function AdminContent() {
                         );
                       })}
                     </div>
-                  </Card>
-                )}
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No categories yet — add your first one above, or pick
+                      categories when adding a movie.
+                    </p>
+                  )}
+                </Card>
 
                 <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
                   <div className="relative min-w-0 flex-1">
