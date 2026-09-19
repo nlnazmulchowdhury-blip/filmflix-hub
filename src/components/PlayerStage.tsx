@@ -7,12 +7,14 @@ import {
   Play,
   RotateCcw,
   RotateCw,
+  Share2,
   Volume1,
   Volume2,
   VolumeX,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Slider } from "@/components/ui/slider";
+import { toast } from "sonner";
 
 function formatTime(sec: number) {
   if (!Number.isFinite(sec)) return "0:00";
@@ -103,6 +105,26 @@ export default function PlayerStage({
     },
     [controls],
   );
+
+  /* Share from the player: native sheet on phones, clipboard elsewhere. */
+  const shareMovie = useCallback(async () => {
+    const url = window.location.href;
+    const text = `Watch “${title}” on FilmFlix`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, text, url });
+        return;
+      }
+    } catch {
+      return; // user closed the share sheet
+    }
+    try {
+      await navigator.clipboard.writeText(`${text} — ${url}`);
+      toast.success("Link copied — paste it anywhere to share");
+    } catch {
+      toast.error("Could not copy the link");
+    }
+  }, [title]);
 
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
@@ -312,6 +334,17 @@ export default function PlayerStage({
             ) : (
               <Volume2 className="size-5" />
             )}
+          </button>
+
+          {/* Share, right beside the volume controls. */}
+          <button
+            type="button"
+            onClick={shareMovie}
+            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+            aria-label="Share this movie"
+            title="Share"
+          >
+            <Share2 className="size-5" />
           </button>
 
           <span className="w-10 text-[11px] font-medium tabular-nums text-white/80">
