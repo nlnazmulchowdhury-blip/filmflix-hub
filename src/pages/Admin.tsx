@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import Logo from "@/components/Logo";
 import MovieFormDialog from "@/components/MovieFormDialog";
+import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
@@ -168,6 +169,7 @@ function AdminContent() {
             </Badge>
           </div>
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <Button asChild variant="ghost" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />

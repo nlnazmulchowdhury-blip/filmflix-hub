@@ -2,6 +2,7 @@ import '@vly-ai/integrations';
 import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { MiniPlayerProvider } from "@/components/MiniPlayerProvider";
+import { ThemeProvider } from "next-themes";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient } from "convex/react";
@@ -40,7 +41,7 @@ function RouteLoading() {
       <p className="font-display text-lg font-bold tracking-tight">
         Film<span className="text-primary">Flix</span>
       </p>
-      <div className="relative h-1 w-44 overflow-hidden rounded-full bg-white/10">
+      <div className="relative h-1 w-44 overflow-hidden rounded-full bg-foreground/10">
         <div className="ff-shimmer absolute inset-y-0 w-2/5 rounded-full bg-gradient-to-r from-transparent via-primary to-transparent" />
       </div>
     </div>
@@ -144,6 +145,9 @@ createRoot(document.getElementById("root")!).render(
         <VlyToolbar />
       </ToolbarErrorBoundary>
       <ConvexAuthProvider client={convex}>
+        {/* Light/dark theme state; attribute mode drives the .dark class on
+            <html>. The pre-paint script in index.html seeds it before React. */}
+        <ThemeProvider attribute="class" storageKey="ff-theme" defaultTheme="dark" enableSystem={false}>
         <BrowserRouter>
           <MiniPlayerProvider>
           <RouteSyncer />
@@ -180,6 +184,7 @@ createRoot(document.getElementById("root")!).render(
           </MiniPlayerProvider>
         </BrowserRouter>
         <Toaster />
+        </ThemeProvider>
       </ConvexAuthProvider>
     </RootErrorBoundary>
   </StrictMode>,

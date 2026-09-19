@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import PlayerStage from "@/components/PlayerStage";
+import ThemeToggle from "@/components/ThemeToggle";
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -168,12 +169,15 @@ export default function MovieDetail() {
           <Link to="/" aria-label="FilmFlix home">
             <Logo />
           </Link>
-          <Button asChild variant="outline" size="sm" className="gap-2">
-            <Link to="/">
-              <ArrowLeft className="size-4" />
-              Back to catalog
-            </Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <Button asChild variant="outline" size="sm" className="gap-2">
+              <Link to="/">
+                <ArrowLeft className="size-4" />
+                Back to catalog
+              </Link>
+            </Button>
+          </div>
         </div>
       </header>
 
