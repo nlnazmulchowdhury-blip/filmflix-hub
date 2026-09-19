@@ -3,6 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { MiniPlayerProvider } from "@/components/MiniPlayerProvider";
 import AnalyticsTracker from "@/components/AnalyticsTracker";
+import InstallPrompt from "@/components/InstallPrompt";
 import { ThemeProvider } from "next-themes";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
@@ -153,6 +154,7 @@ createRoot(document.getElementById("root")!).render(
           <MiniPlayerProvider>
           <RouteSyncer />
           <AnalyticsTracker />
+          <InstallPrompt />
           <Suspense fallback={<RouteLoading />}>
             <PageFade>
             <Routes>
