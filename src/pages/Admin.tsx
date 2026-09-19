@@ -85,7 +85,7 @@ function AdminContent() {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [isAddingCategory, setIsAddingCategory] = useState(false);
 
-  /* Admin catalog search: matches title, description, genre, year, kind —
+  /* Admin catalog search: matches title, description, categories, year, kind —
      every word must appear somewhere, forgiving of order and punctuation. */
   const allCategories = useQuery(api.categories.listAll);
 
@@ -132,7 +132,6 @@ function AdminContent() {
         [
           m.title,
           m.description,
-          m.genre,
           ...movieCategoryNames(m),
           m.year?.toString(),
           m.kind,
@@ -495,7 +494,7 @@ function AdminContent() {
                     <Input
                       value={movieSearch}
                       onChange={(e) => setMovieSearch(e.target.value)}
-                      placeholder="Search movies by title, genre, year…"
+                      placeholder="Search movies by title, category, year…"
                       className="pl-9 pr-9"
                       aria-label="Search movies in admin panel"
                     />
@@ -543,7 +542,6 @@ function AdminContent() {
                         <TableRow className="hover:bg-transparent">
                           <TableHead className="w-16">Poster</TableHead>
                           <TableHead>Title</TableHead>
-                          <TableHead className="hidden sm:table-cell">Genre</TableHead>
                           <TableHead className="hidden md:table-cell">Category</TableHead>
                           <TableHead className="hidden lg:table-cell">Year</TableHead>
                           <TableHead className="hidden md:table-cell">Rating</TableHead>
@@ -569,13 +567,6 @@ function AdminContent() {
                               <p className="truncate text-xs text-muted-foreground">
                                 {m.videoUrl ? "Video ready" : "No video"}
                               </p>
-                            </TableCell>
-                            <TableCell className="hidden sm:table-cell">
-                              {m.genre ? (
-                                <Badge variant="secondary">{m.genre}</Badge>
-                              ) : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
                             </TableCell>
                             <TableCell className="hidden md:table-cell">
                               {(() => {

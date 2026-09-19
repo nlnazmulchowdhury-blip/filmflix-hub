@@ -42,7 +42,6 @@ const movieSchema = z.object({
   posterUrl: z.string().optional(),
   backdropUrl: z.string().optional(),
   videoUrl: z.string().optional(),
-  genre: z.string().optional(),
   year: z.string().optional(),
   rating: z.string().optional(),
   episodes: z.array(episodeSchema),
@@ -90,7 +89,6 @@ export default function MovieFormDialog({
     posterUrl: "",
     backdropUrl: "",
     videoUrl: "",
-    genre: "",
     year: "",
     rating: "",
     episodes: [],
@@ -104,7 +102,6 @@ export default function MovieFormDialog({
           posterUrl: m.posterUrl ?? "",
           backdropUrl: m.backdropUrl ?? "",
           videoUrl: m.videoUrl ?? "",
-          genre: m.genre ?? "",
           year: m.year?.toString() ?? "",
           rating: m.rating?.toString() ?? "",
           episodes: (m.episodes ?? []).map((e) => ({
@@ -174,7 +171,6 @@ export default function MovieFormDialog({
       posterUrl: clean(values.posterUrl ?? ""),
       backdropUrl: clean(values.backdropUrl ?? ""),
       videoUrl: clean(values.videoUrl ?? ""),
-      genre: values.genre || undefined,
       categories: selectedCategories,
       year: values.year ? Number(values.year) : undefined,
       rating: values.rating ? Number(values.rating) : undefined,
@@ -268,13 +264,8 @@ export default function MovieFormDialog({
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="genre">Genre</Label>
-              <Input id="genre" placeholder="Sci-Fi" {...register("genre")} />
-            </div>
-            <div className="space-y-2 sm:col-span-2">
-              <Label>Categories (multi-select)</Label>
+          <div className="space-y-2">
+            <Label>Categories (multi-select)</Label>
 
               {/* Chosen categories as removable chips. */}
               {selectedCategories.length > 0 && (
@@ -374,7 +365,6 @@ export default function MovieFormDialog({
                 A movie can live in several sections at once — pick from the
                 existing ones or type new names and press Enter.
               </p>
-            </div>
           </div>
 
           {/* Episodes / parts playlist */}

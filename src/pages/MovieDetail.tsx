@@ -19,7 +19,6 @@ import {
   Play,
   Send,
   Star,
-  Tag,
   Trash2,
   Calendar,
   ListVideo,
@@ -281,12 +280,7 @@ export default function MovieDetail() {
                       {movie.rating.toFixed(1)}
                     </span>
                   )}
-                  {movie.genre && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-secondary px-3 py-0.5 text-xs font-medium text-secondary-foreground">
-                      <Tag className="size-3" />
-                      {movie.genre}
-                    </span>
-                  )}
+
                 </div>
 
                 <h1 className="font-display mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">

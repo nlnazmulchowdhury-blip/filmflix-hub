@@ -24,18 +24,17 @@ function normalizeText(s: string) {
     .trim();
 }
 
-/** Everything a movie can be found by: title, description, genre, categories, year, kind. */
+/** Everything a movie can be found by: title, description, categories, year, kind. */
 function searchableText(m: {
   title: string;
   description?: string;
-  genre?: string;
   category?: string;
   categories?: string[];
   year?: number;
   kind?: string;
 }) {
   return normalizeText(
-    [m.title, m.description, m.genre, ...movieCategoryNames(m), m.year?.toString(), m.kind]
+    [m.title, m.description, ...movieCategoryNames(m), m.year?.toString(), m.kind]
       .filter(Boolean)
       .join(" "),
   );
@@ -49,16 +48,6 @@ export default function Landing() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string | null>(null);
-  const [genre, setGenre] = useState<string | null>(null);
-
-  const genres = useMemo(() => {
-    const set = new Set<string>();
-    for (const m of movies ?? []) {
-      const g = (m.genre ?? "").trim();
-      if (g) set.add(g);
-    }
-    return Array.from(set).sort();
-  }, [movies]);
 
   /** Distinct display categories (Hollywood, Bengali, Anime, …): names
       created directly in the admin panel plus every section a movie belongs
@@ -77,7 +66,6 @@ export default function Landing() {
     let rows = movies;
     if (category)
       rows = rows.filter((m) => movieCategoryNames(m).includes(category));
-    if (genre) rows = rows.filter((m) => (m.genre ?? "").trim() === genre);
     const raw = query.trim();
     if (raw) {
       const tokens = normalizeText(raw).split(" ").filter(Boolean);
@@ -87,21 +75,21 @@ export default function Landing() {
           // Every word in the query must match somewhere (order doesn't matter).
           return tokens.every((t) => hay.includes(t));
         });
-        // Most relevant first: full-phrase title match > word in title > word in genre > elsewhere.
+        // Most relevant first: full-phrase title match > word in title > word in category > elsewhere.
         const score = (m: (typeof rows)[number]) => {
           const title = normalizeText(m.title);
-          const g = normalizeText(m.genre ?? "");
+          const cats = normalizeText(movieCategoryNames(m).join(" "));
           const phrase = normalizeText(raw);
           if (title.includes(phrase)) return 3;
           if (tokens.some((t) => title.includes(t))) return 2;
-          if (tokens.some((t) => g.includes(t))) return 1;
+          if (tokens.some((t) => cats.includes(t))) return 1;
           return 0;
         };
         rows = [...rows].sort((a, b) => score(b) - score(a));
       }
     }
     return rows;
-  }, [movies, category, genre, query]);
+  }, [movies, category, query]);
 
   const catalog = filtered ?? [];
 
@@ -134,7 +122,7 @@ export default function Landing() {
             <button type="button" onClick={surprise} className={navLinkClass}>
               Random
             </button>
-            <a href="#catalog" className={navLinkClass}>Genres</a>
+            <a href="#catalog" className={navLinkClass}>Categories</a>
             <Link
               to={isAuthenticated ? "/dashboard" : `/auth?returnTo=%2Fdashboard`}
               className={navLinkClass}
@@ -195,7 +183,7 @@ export default function Landing() {
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search by title, genre, year…"
+                placeholder="Search by title, category, year…"
                 className="h-11 rounded-xl bg-card/80 pl-10 pr-10 text-base"
                 aria-label="Search movies"
               />
@@ -256,39 +244,6 @@ export default function Landing() {
           </section>
         )}
 
-        {/* Genre pills */}
-        {genres.length > 0 && (
-          <section className="mt-4 sm:mt-6">
-            <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0">
-              <button
-                type="button"
-                onClick={() => setGenre(null)}
-                className={`shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
-                  genre === null
-                    ? "border-primary/60 bg-primary/20 text-primary"
-                    : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
-                }`}
-              >
-                All
-              </button>
-              {genres.map((g) => (
-                <button
-                  key={g}
-                  type="button"
-                  onClick={() => setGenre(genre === g ? null : g)}
-                  className={`shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
-                    genre === g
-                      ? "border-primary/60 bg-primary/20 text-primary"
-                      : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
-                  }`}
-                >
-                  {g}
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
-
         {/* Catalog */}
         <section id="catalog" className="scroll-mt-24 pt-10">
           <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
@@ -296,20 +251,16 @@ export default function Landing() {
               <h2 className="font-display text-2xl font-bold tracking-tight sm:text-3xl">
                 {query.trim()
                   ? "Search results"
-                  : genre
-                    ? `${genre} movies`
-                    : category
-                      ? category
-                      : "New Releases"}
+                  : category
+                    ? category
+                    : "New Releases"}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 {query.trim()
                   ? `${catalog.length} ${catalog.length === 1 ? "movie" : "movies"} found for “${query.trim()}”`
-                  : category && genre
-                    ? `Filtered by ${category} · ${genre}.`
-                    : category
-                      ? `Browsing the ${category} collection.`
-                      : "Watch new releases for free — pick a poster and press play."}
+                  : category
+                    ? `Browsing the ${category} collection.`
+                    : "Watch new releases for free — pick a poster and press play."}
               </p>
             </div>
           </div>
@@ -327,10 +278,10 @@ export default function Landing() {
                   <Film className="size-6" />
                 </span>
                 <p className="font-display text-lg font-semibold">
-                  {query.trim() || genre ? "Nothing matched" : "No movies yet"}
+                  {query.trim() ? "Nothing matched" : "No movies yet"}
                 </p>
                 <p className="max-w-sm text-sm text-muted-foreground">
-                  {query.trim() || genre || category
+                  {query.trim() || category
                     ? "Try fewer words, a different spelling, or clear the filters."
                     : "The catalog is empty — check back soon."}
                 </p>
