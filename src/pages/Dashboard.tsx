@@ -13,6 +13,7 @@ import {
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
+import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "convex/react";
 import {
@@ -20,6 +21,7 @@ import {
   CalendarClock,
   Clapperboard,
   CreditCard,
+  Heart,
   LogOut,
   Sparkles,
   Trash2,
@@ -37,6 +39,8 @@ export default function Dashboard() {
     user ? { userId: user._id } : "skip",
   );
   const cancelScreening = useMutation(api.screenings.cancel);
+  const watchlist = useQuery(api.watchlist.listMine);
+  const removeFromWatchlist = useMutation(api.watchlist.remove);
 
   const activePlan = myOrders?.[0]
     ? myOrders[0].plan === "premiere"
@@ -162,6 +166,78 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Watchlist */}
+        <Card className="overflow-hidden p-0">
+          <CardHeader className="border-b border-border/50 py-4">
+            <CardTitle className="font-display flex items-center gap-2 text-lg">
+              <Heart className="size-4 text-primary" />
+              Your watchlist
+            </CardTitle>
+            <CardDescription>
+              Movies you saved to watch later — tap the heart on any movie page.
+            </CardDescription>
+          </CardHeader>
+          {!watchlist ? (
+            <div className="grid grid-cols-2 gap-3 p-6 sm:grid-cols-4 lg:grid-cols-6">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
+              ))}
+            </div>
+          ) : watchlist.length === 0 ? (
+            <CardContent className="py-10 text-center text-sm text-muted-foreground">
+              Nothing saved yet — open a movie and press{" "}
+              <Heart className="inline size-3.5 fill-primary text-primary" />{" "}
+              Watchlist to keep it here.
+            </CardContent>
+          ) : (
+            <CardContent className="p-6">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+                {watchlist.map((m: Doc<"movies">) => (
+                  <div key={m._id} className="group relative">
+                    <Link to={`/movie/${m._id}`} className="block">
+                      <div className="aspect-[2/3] overflow-hidden rounded-xl border border-border/50 bg-muted transition-transform group-hover:scale-[1.03]">
+                        {m.posterUrl ? (
+                          <img
+                            src={m.posterUrl}
+                            alt={m.title}
+                            className="size-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex size-full items-center justify-center text-muted-foreground/40">
+                            <Clapperboard className="size-6" />
+                          </div>
+                        )}
+                      </div>
+                      <p className="mt-2 truncate text-sm font-medium">{m.title}</p>
+                      {m.year != null && (
+                        <p className="text-xs text-muted-foreground">{m.year}</p>
+                      )}
+                    </Link>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${m.title} from watchlist`}
+                      title="Remove from watchlist"
+                      onClick={async () => {
+                        try {
+                          await removeFromWatchlist({ movieId: m._id });
+                          toast.success("Removed from watchlist");
+                        } catch (err) {
+                          toast.error(
+                            err instanceof Error ? err.message : "Failed to remove",
+                          );
+                        }
+                      }}
+                      className="absolute right-2 top-2 rounded-full bg-black/70 p-1.5 text-white/90 opacity-0 transition-opacity hover:bg-destructive group-hover:opacity-100"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          )}
+        </Card>
 
         {/* Screenings */}
         <Card className="overflow-hidden p-0">

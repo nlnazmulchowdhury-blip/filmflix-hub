@@ -160,6 +160,16 @@ const schema = defineSchema(
       .index("by_created", ["createdAt"])
       .index("by_path", ["path"])
       .index("by_movie", ["movieId"]),
+
+    /** A user's saved-for-later movies (watchlist). One row per
+     *  user+movie pair. */
+    watchlist: defineTable({
+      userId: v.id("users"),
+      movieId: v.id("movies"),
+      createdAt: v.number(),
+    })
+      .index("by_user", ["userId"])
+      .index("by_user_movie", ["userId", "movieId"]),
   },
   {
     schemaValidation: false,

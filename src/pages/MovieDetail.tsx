@@ -19,6 +19,7 @@ import {
   Star,
   Share2,
   Calendar,
+  Heart,
   ListVideo,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -45,6 +46,33 @@ export default function MovieDetail() {
   const [when, setWhen] = useState("");
   const [note, setNote] = useState("");
   const [isScheduling, setIsScheduling] = useState(false);
+
+  /* Watchlist: saved-for-later toggle. */
+  const inWatchlist = useQuery(
+    api.watchlist.hasMovie,
+    movie ? { movieId: movie._id } : "skip",
+  );
+  const addToWatchlist = useMutation(api.watchlist.add);
+  const removeFromWatchlist = useMutation(api.watchlist.remove);
+  const [isTogglingWatchlist, setIsTogglingWatchlist] = useState(false);
+
+  const toggleWatchlist = async () => {
+    if (!movie) return;
+    setIsTogglingWatchlist(true);
+    try {
+      if (inWatchlist) {
+        await removeFromWatchlist({ movieId: movie._id });
+        toast.success("Removed from your watchlist");
+      } else {
+        await addToWatchlist({ movieId: movie._id });
+        toast.success("Saved to your watchlist");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setIsTogglingWatchlist(false);
+    }
+  };
 
   /* Register this movie with the persistent player as soon as it loads:
      - fresh visit → poster overlay (no autoplay)
@@ -275,16 +303,46 @@ export default function MovieDetail() {
                     </span>
                   )}
 
-                  {/* Share this movie */}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="ml-auto gap-2"
-                    onClick={shareMovie}
-                  >
-                    <Share2 className="size-3.5" />
-                    Share
-                  </Button>
+                  {/* Watchlist toggle + share */}
+                  <div className="ml-auto flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      disabled={isTogglingWatchlist}
+                      onClick={() => {
+                        if (!isAuthenticated) {
+                          navigate(
+                            `/auth?returnTo=${encodeURIComponent(`/movie/${movie._id}`)}`,
+                          );
+                          return;
+                        }
+                        toggleWatchlist();
+                      }}
+                      aria-pressed={inWatchlist}
+                      title={
+                        inWatchlist
+                          ? "Remove from your watchlist"
+                          : "Save to your watchlist"
+                      }
+                    >
+                      <Heart
+                        className={`size-3.5 ${
+                          inWatchlist ? "fill-primary text-primary" : ""
+                        }`}
+                      />
+                      {inWatchlist ? "Saved" : "Watchlist"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={shareMovie}
+                    >
+                      <Share2 className="size-3.5" />
+                      Share
+                    </Button>
+                  </div>
                 </div>
 
                 <h1 className="font-display mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
