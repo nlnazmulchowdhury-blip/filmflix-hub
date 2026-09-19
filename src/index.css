@@ -139,6 +139,26 @@ html:not(.dark) {
        position: sticky working. */
     overflow-x: clip;
   }
+  /* Installed PWA (Android/Chrome “standalone”): hide the page scrollbar so
+     the app fills the viewport edge-to-edge like a native app. Content still
+     scrolls normally — only the visual bar is hidden. */
+  @media (display-mode: standalone) {
+    html {
+      scrollbar-width: none;
+    }
+    html::-webkit-scrollbar {
+      display: none;
+      width: 0;
+    }
+    /* Native-app feel: stop rubber-banding at the top/bottom edges. */
+    html {
+      overscroll-behavior-y: none;
+    }
+    /* Keep content clear of the Android gesture bar / iOS home indicator. */
+    body {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  }
   button:not([disabled]),
   [role="button"]:not([disabled]) {
     cursor: pointer;
