@@ -63,6 +63,8 @@ export default function PlayerStage({
   const containerRef = useRef<HTMLDivElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  /** Cursor is over the control bar — keep the bar up while it is. */
+  const [hoveringControls, setHoveringControls] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -86,17 +88,19 @@ export default function PlayerStage({
     return () => document.removeEventListener("fullscreenchange", onFsChange);
   }, []);
 
-  /* Auto-hide controls while playing. */
+  /* Auto-hide controls while playing — but never while the cursor rests on
+     the control bar itself. */
   useEffect(() => {
     if (!playing || !isHost) {
       setControlsVisible(true);
       return;
     }
-    hideTimer.current = setTimeout(() => setControlsVisible(false), 2600);
-    return () => {
-      if (hideTimer.current) clearTimeout(hideTimer.current);
-    };
-  }, [playing, isHost, controlsVisible]);
+    if (!controlsVisible) return;
+    const t = setTimeout(() => {
+      if (!hoveringControls) setControlsVisible(false);
+    }, 2600);
+    return () => clearTimeout(t);
+  }, [playing, isHost, controlsVisible, hoveringControls]);
 
   const seekBy = useCallback(
     (delta: number) => {
@@ -206,7 +210,8 @@ export default function PlayerStage({
         fullscreen ? "h-screen rounded-none border-0" : "aspect-video"
       }`}
       onMouseMove={() => setControlsVisible(true)}
-      onMouseLeave={() => playing && setControlsVisible(false)}
+      onMouseLeave={() => playing && setHoveringControls(false)}
+      onClickCapture={() => setControlsVisible(true)}
       onDoubleClick={toggleFullscreen}
     >
       {/* Portal target — the persistent video mounts here. */}
@@ -236,10 +241,14 @@ export default function PlayerStage({
         </button>
       )}
 
-      {/* Controls */}
+      {/* Controls — float up from the bottom edge on hover/tap. */}
       <div
-        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2 pb-2.5 pt-10 transition-opacity duration-300 sm:px-4 ${
-          controlsVisible || !playing ? "opacity-100" : "pointer-events-none opacity-0"
+        onMouseEnter={() => setHoveringControls(true)}
+        onMouseLeave={() => setHoveringControls(false)}
+        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2 pb-2.5 pt-10 transition-all duration-300 ease-out sm:px-4 ${
+          controlsVisible || !playing
+            ? "translate-y-0 opacity-100"
+            : "pointer-events-none translate-y-3 opacity-0"
         }`}
       >
         {/* Progress / seek bar */}
