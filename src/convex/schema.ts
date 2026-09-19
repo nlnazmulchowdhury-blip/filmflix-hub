@@ -113,6 +113,14 @@ const schema = defineSchema(
       status: v.string(),
       createdAt: v.number(),
     }).index("by_user", ["userId"]),
+
+    /** Cache of resolved short links so we never resolve the same tinyurl /
+     *  is.gd link twice. shortUrl -> realUrl. */
+    shortlinks: defineTable({
+      shortUrl: v.string(),
+      realUrl: v.string(),
+      resolvedAt: v.number(),
+    }).index("by_short", ["shortUrl"]),
   },
   {
     schemaValidation: false,

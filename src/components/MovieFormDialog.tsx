@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useAction, useMutation } from "convex/react";
+import { useMutation, useAction } from "convex/react";
 import {
   ArrowDown,
   ArrowUp,
@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { movieCategoryNames } from "@/lib/categories";
+import { isShortLink } from "@/lib/shortlinks";
 import { X } from "lucide-react";
 
 const episodeSchema = z.object({
@@ -62,7 +63,7 @@ export default function MovieFormDialog({
 }) {
   const addMovie = useMutation(api.movies.add);
   const updateMovie = useMutation(api.movies.update);
-  const shortenBatch = useAction(api.shortlinks.shortenBatch);
+  const expandShortLinks = useAction(api.shortlinks.expandBatch);
   const isEdit = Boolean(movie);
 
   /* Multi-category selection: a movie can live in several sections at once.
@@ -140,9 +141,10 @@ export default function MovieFormDialog({
   }, [open, movie?._id, reset]);
 
   const onSubmit = async (values: MovieFormValues) => {
-    /* Auto-shorten every URL before saving: long streaming/CDN links become
-       compact https://tinyurl.com/… links so the database stays lean. If
-       shortening fails the originals are kept — saving never breaks. */
+    /* Shortener links (tinyurl/is.gd/…) break video playback — the player
+       can't send range requests through the redirect chain. If a short link
+       is pasted, resolve it back to the real destination URL server-side
+       before saving. Everything else is kept exactly as pasted. */
     const rawUrls = [
       values.posterUrl,
       values.backdropUrl,
@@ -151,29 +153,27 @@ export default function MovieFormDialog({
     ]
       .map((u) => (u ?? "").trim())
       .filter((u) => u.length > 0);
-
-    const isHttpUrl = (u: string) => /^https?:\/\//i.test(u);
-    const candidates = [...new Set(rawUrls.filter((u) => isHttpUrl(u) && u.length > 80))];
+    const shortOnes = rawUrls.filter(isShortLink);
     const map: Record<string, string> = {};
-    if (candidates.length > 0) {
+    if (shortOnes.length > 0) {
       try {
-        Object.assign(map, await shortenBatch({ urls: candidates }));
+        Object.assign(map, await expandShortLinks({ urls: shortOnes }));
       } catch {
-        // Shortening service unavailable — save with the original URLs.
+        // Resolver unreachable — save the pasted URLs as-is.
       }
     }
-    const shrink = (u: string) => {
-      const trimmed = u.trim();
-      if (!trimmed) return undefined;
-      return map[trimmed] ?? trimmed;
+    const clean = (u: string) => {
+      const t = (u ?? "").trim();
+      if (!t) return undefined;
+      return map[t] ?? t;
     };
 
     const payload = {
       title: values.title,
       description: values.description || undefined,
-      posterUrl: shrink(values.posterUrl ?? ""),
-      backdropUrl: shrink(values.backdropUrl ?? ""),
-      videoUrl: shrink(values.videoUrl ?? ""),
+      posterUrl: clean(values.posterUrl ?? ""),
+      backdropUrl: clean(values.backdropUrl ?? ""),
+      videoUrl: clean(values.videoUrl ?? ""),
       genre: values.genre || undefined,
       categories: selectedCategories,
       year: values.year ? Number(values.year) : undefined,
@@ -183,27 +183,18 @@ export default function MovieFormDialog({
         values.episodes.length > 0
           ? values.episodes.map((e) => ({
               title: e.title,
-              videoUrl: shrink(e.videoUrl) ?? "",
+              videoUrl: clean(e.videoUrl) ?? "",
               durationSec: e.durationSec ? Number(e.durationSec) : undefined,
             }))
           : undefined,
     };
-    const shortenedCount = candidates.filter((u) => map[u] && map[u] !== u).length;
     try {
       if (isEdit && movie) {
         await updateMovie({ id: movie._id, ...payload });
-        toast.success(
-          shortenedCount > 0
-            ? `Movie updated — ${shortenedCount} long ${shortenedCount === 1 ? "URL" : "URLs"} auto-shortened`
-            : "Movie updated",
-        );
+        toast.success("Movie updated");
       } else {
         await addMovie(payload);
-        toast.success(
-          shortenedCount > 0
-            ? `Movie added — ${shortenedCount} long ${shortenedCount === 1 ? "URL" : "URLs"} auto-shortened`
-            : "Movie added to the catalog",
-        );
+        toast.success("Movie added to the catalog");
       }
       onOpenChange(false);
     } catch (err) {
@@ -261,7 +252,8 @@ export default function MovieFormDialog({
             />
             <p className="text-xs text-muted-foreground">
               The trailer or main feature. Episodes listed below get their own
-              playlist. Long links are auto-shortened to save database space.
+              playlist. Shortener links (tinyurl/is.gd…) are automatically
+              resolved to the real video URL before saving.
             </p>
           </div>
 

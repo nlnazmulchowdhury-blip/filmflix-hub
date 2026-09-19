@@ -19,7 +19,7 @@ import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery, useAction } from "convex/react";
 import {
   ArrowLeft,
   CalendarClock,
@@ -38,6 +38,7 @@ import {
   Trash2,
   Users,
   X,
+  Link2,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router";
@@ -68,6 +69,8 @@ function AdminContent() {
   const verifyAdminCode = useMutation(api.movies.verifyAdminCode);
   const removeComment = useMutation(api.comments.remove);
   const setRole = useMutation(api.admin.setRole);
+  const migrateShortLinks = useAction(api.shortlinks.migrateAllShortLinks);
+  const [isFixingLinks, setIsFixingLinks] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Doc<"movies"> | null>(null);
@@ -412,6 +415,35 @@ function AdminContent() {
                       <Plus className="size-4" />
                       Add category
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-2 sm:w-auto"
+                      disabled={isFixingLinks}
+                      onClick={async () => {
+                        setIsFixingLinks(true);
+                        try {
+                          const res = await migrateShortLinks({});
+                          if (res.links === 0) {
+                            toast.info("No short links found — every video URL is already a direct link.");
+                          } else {
+                            toast.success(
+                              `Fixed ${res.links} link${res.links === 1 ? "" : "s"} on ${res.movies} movie${res.movies === 1 ? "" : "s"} — videos will play again.`,
+                            );
+                          }
+                        } catch (err) {
+                          toast.error(
+                            err instanceof Error ? err.message : "Could not fix short links",
+                          );
+                        } finally {
+                          setIsFixingLinks(false);
+                        }
+                      }}
+                    >
+                      {isFixingLinks && <Loader2 className="size-4 animate-spin" />}
+                      <Link2 className="size-4" />
+                      Fix short links
+                    </Button>
                   </form>
                   {categories.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
@@ -448,6 +480,14 @@ function AdminContent() {
                     </p>
                   )}
                 </Card>
+
+                {isFixingLinks && (
+                  <div className="mb-3 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 py-2.5 text-sm text-primary">
+                    <Loader2 className="size-4 animate-spin" />
+                    Fixing short links — resolving every tinyurl/is.gd link to
+                    its real destination. Please keep this page open…
+                  </div>
+                )}
 
                 <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
                   <div className="relative min-w-0 flex-1">
