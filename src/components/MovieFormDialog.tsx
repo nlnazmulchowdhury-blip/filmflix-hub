@@ -117,7 +117,6 @@ export default function MovieFormDialog({
     control,
     handleSubmit,
     reset,
-    setValue,
     formState: { errors, isSubmitting },
   } = useForm<MovieFormValues>({
     resolver: zodResolver(movieSchema),
@@ -198,6 +197,17 @@ export default function MovieFormDialog({
     }
   };
 
+  const addCategory = () => {
+    const name = newCategory.trim();
+    if (!name) return;
+    if (selectedCategories.some((x) => x.toLowerCase() === name.toLowerCase())) {
+      toast.info(`“${name}” is already selected`);
+      return;
+    }
+    setSelectedCategories((prev) => [...prev, name]);
+    setNewCategory("");
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92dvh] w-[calc(100%-1.5rem)] max-w-lg overflow-y-auto rounded-xl sm:w-full">
@@ -267,104 +277,76 @@ export default function MovieFormDialog({
           <div className="space-y-2">
             <Label>Categories (multi-select)</Label>
 
-              {/* Chosen categories as removable chips. */}
-              {selectedCategories.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {selectedCategories.map((c) => (
-                    <span
-                      key={c}
-                      className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 py-1 pl-3 pr-1.5 text-xs font-semibold text-primary"
-                    >
-                      {c}
-                      <button
-                        type="button"
-                        aria-label={`Remove category ${c}`}
-                        onClick={() =>
-                          setSelectedCategories((prev) =>
-                            prev.filter((x) => x !== c),
-                          )
-                        }
-                        className="rounded-full p-0.5 text-primary/70 transition-colors hover:bg-primary/20 hover:text-destructive"
-                      >
-                        <X className="size-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {/* Add via suggestion chips or a free-text input (Enter adds). */}
-              {suggestions.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {suggestions.map((c) => (
+            {/* Chosen categories as removable chips. */}
+            {selectedCategories.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {selectedCategories.map((c) => (
+                  <span
+                    key={c}
+                    className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 py-1 pl-3 pr-1.5 text-xs font-semibold text-primary"
+                  >
+                    {c}
                     <button
-                      key={c}
                       type="button"
+                      aria-label={`Remove category ${c}`}
                       onClick={() =>
-                        setSelectedCategories((prev) => [...prev, c])
-                      }
-                      className="rounded-full border border-border/70 bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
-                    >
-                      + {c}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex gap-2">
-                <Input
-                  value={newCategory}
-                  onChange={(e) => setNewCategory(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      const name = newCategory.trim();
-                      if (!name) return;
-                      if (
-                        selectedCategories.some(
-                          (x) => x.toLowerCase() === name.toLowerCase(),
+                        setSelectedCategories((prev) =>
+                          prev.filter((x) => x !== c),
                         )
-                      ) {
-                        toast.info(`“${name}” is already selected`);
-                        return;
                       }
-                      setSelectedCategories((prev) => [...prev, name]);
-                      setNewCategory("");
-                    }
-                  }}
-                  list="category-options"
-                  placeholder="Type a new category and press Enter…"
-                />
-                <datalist id="category-options">
-                  {suggestions.map((c) => (
-                    <option key={c} value={c} />
-                  ))}
-                </datalist>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    const name = newCategory.trim();
-                    if (!name) return;
-                    if (
-                      selectedCategories.some(
-                        (x) => x.toLowerCase() === name.toLowerCase(),
-                      )
-                    ) {
-                      toast.info(`“${name}” is already selected`);
-                      return;
-                    }
-                    setSelectedCategories((prev) => [...prev, name]);
-                    setNewCategory("");
-                  }}
-                >
-                  Add
-                </Button>
+                      className="rounded-full p-0.5 text-primary/70 transition-colors hover:bg-primary/20 hover:text-destructive"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ))}
               </div>
-              <p className="text-xs text-muted-foreground">
-                A movie can live in several sections at once — pick from the
-                existing ones or type new names and press Enter.
-              </p>
+            )}
+
+            {/* Add via suggestion chips or a free-text input (Enter adds). */}
+            {suggestions.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {suggestions.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() =>
+                      setSelectedCategories((prev) => [...prev, c])
+                    }
+                    className="rounded-full border border-border/70 bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+                  >
+                    + {c}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <Input
+                value={newCategory}
+                onChange={(e) => setNewCategory(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addCategory();
+                  }
+                }}
+                list="category-options"
+                placeholder="Type a new category and press Enter…"
+              />
+              <datalist id="category-options">
+                {suggestions.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+              <Button type="button" variant="outline" onClick={addCategory}>
+                Add
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              A movie can live in several sections at once — pick from the
+              existing ones or type new names and press Enter.
+            </p>
           </div>
 
           {/* Episodes / parts playlist */}
@@ -452,7 +434,7 @@ export default function MovieFormDialog({
                         className="h-8 min-w-0 flex-1 text-sm"
                         {...register(`episodes.${index}.videoUrl` as const)}
                       />
-                      {/* long URLs are compacted on save — no manual work needed */}
+                      {/* long URLs are resolved on save — no manual work needed */}
                       <Input
                         placeholder="Sec"
                         inputMode="numeric"
