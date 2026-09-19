@@ -10,13 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -31,8 +24,10 @@ import {
 } from "lucide-react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
+import { movieCategoryNames } from "@/convex/movies";
+import { X } from "lucide-react";
 
 const episodeSchema = z.object({
   title: z.string().min(1, "Episode title is required"),
@@ -47,7 +42,6 @@ const movieSchema = z.object({
   backdropUrl: z.string().optional(),
   videoUrl: z.string().optional(),
   genre: z.string().optional(),
-  category: z.string().optional(),
   year: z.string().optional(),
   rating: z.string().optional(),
   episodes: z.array(episodeSchema),
@@ -70,22 +64,23 @@ export default function MovieFormDialog({
   const updateMovie = useMutation(api.movies.update);
   const isEdit = Boolean(movie);
 
-  /* "select" = pick an existing category, "new" = type a fresh one. */
-  const [categoryMode, setCategoryMode] = useState<"select" | "new">("select");
-  const [selectedCategory, setSelectedCategory] = useState<string>("");
+  /* Multi-category selection: a movie can live in several sections at once.
+     "selected" holds the chosen names; typing a new one adds it too. */
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [newCategory, setNewCategory] = useState("");
+
+  const suggestions = useMemo(() => {
+    const chosen = new Set(selectedCategories.map((c) => c.toLowerCase()));
+    return categories.filter((c) => !chosen.has(c.toLowerCase()));
+  }, [categories, selectedCategories]);
 
   /* Sync the picker state each time the dialog opens. */
   useEffect(() => {
     if (!open) return;
-    const current = movie?.category?.trim() ?? "";
-    if (current && categories.includes(current)) {
-      setCategoryMode("select");
-      setSelectedCategory(current);
-    } else {
-      setCategoryMode("new");
-      setSelectedCategory("");
-    }
-  }, [open, movie?._id, categories]);
+    const names = movieCategoryNames(movie ?? {});
+    setSelectedCategories(names);
+    setNewCategory("");
+  }, [open, movie?._id]);
 
   const emptyValues: MovieFormValues = {
     title: "",
@@ -94,7 +89,6 @@ export default function MovieFormDialog({
     backdropUrl: "",
     videoUrl: "",
     genre: "",
-    category: "",
     year: "",
     rating: "",
     episodes: [],
@@ -109,7 +103,6 @@ export default function MovieFormDialog({
           backdropUrl: m.backdropUrl ?? "",
           videoUrl: m.videoUrl ?? "",
           genre: m.genre ?? "",
-          category: m.category ?? "",
           year: m.year?.toString() ?? "",
           rating: m.rating?.toString() ?? "",
           episodes: (m.episodes ?? []).map((e) => ({
@@ -153,7 +146,7 @@ export default function MovieFormDialog({
       backdropUrl: values.backdropUrl || undefined,
       videoUrl: values.videoUrl || undefined,
       genre: values.genre || undefined,
-      category: values.category?.trim() || undefined,
+      categories: selectedCategories,
       year: values.year ? Number(values.year) : undefined,
       rating: values.rating ? Number(values.rating) : undefined,
       kind: values.episodes.length > 0 ? ("series" as const) : ("movie" as const),
@@ -250,81 +243,106 @@ export default function MovieFormDialog({
               <Label htmlFor="genre">Genre</Label>
               <Input id="genre" placeholder="Sci-Fi" {...register("genre")} />
             </div>
-            <div className="space-y-2">
-              <Label>Category</Label>
-              {/* Mode switch: pick an existing category, or create a new one. */}
-              <div className="flex gap-1 rounded-lg border border-border/60 bg-secondary/40 p-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCategoryMode("select");
-                    setValue("category", selectedCategory || undefined);
-                  }}
-                  className={`flex-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
-                    categoryMode === "select"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Select existing
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCategoryMode("new");
-                    setValue("category", "");
-                  }}
-                  className={`flex-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
-                    categoryMode === "new"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  New category
-                </button>
-              </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Categories (multi-select)</Label>
 
-              {categoryMode === "select" ? (
-                <Select
-                  value={selectedCategory}
-                  onValueChange={(v) => {
-                    setSelectedCategory(v);
-                    setValue("category", v);
+              {/* Chosen categories as removable chips. */}
+              {selectedCategories.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedCategories.map((c) => (
+                    <span
+                      key={c}
+                      className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 py-1 pl-3 pr-1.5 text-xs font-semibold text-primary"
+                    >
+                      {c}
+                      <button
+                        type="button"
+                        aria-label={`Remove category ${c}`}
+                        onClick={() =>
+                          setSelectedCategories((prev) =>
+                            prev.filter((x) => x !== c),
+                          )
+                        }
+                        className="rounded-full p-0.5 text-primary/70 transition-colors hover:bg-primary/20 hover:text-destructive"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Add via suggestion chips or a free-text input (Enter adds). */}
+              {suggestions.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {suggestions.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() =>
+                        setSelectedCategories((prev) => [...prev, c])
+                      }
+                      className="rounded-full border border-border/70 bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+                    >
+                      + {c}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Input
+                  value={newCategory}
+                  onChange={(e) => setNewCategory(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const name = newCategory.trim();
+                      if (!name) return;
+                      if (
+                        selectedCategories.some(
+                          (x) => x.toLowerCase() === name.toLowerCase(),
+                        )
+                      ) {
+                        toast.info(`“${name}” is already selected`);
+                        return;
+                      }
+                      setSelectedCategories((prev) => [...prev, name]);
+                      setNewCategory("");
+                    }
+                  }}
+                  list="category-options"
+                  placeholder="Type a new category and press Enter…"
+                />
+                <datalist id="category-options">
+                  {suggestions.map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    const name = newCategory.trim();
+                    if (!name) return;
+                    if (
+                      selectedCategories.some(
+                        (x) => x.toLowerCase() === name.toLowerCase(),
+                      )
+                    ) {
+                      toast.info(`“${name}” is already selected`);
+                      return;
+                    }
+                    setSelectedCategories((prev) => [...prev, name]);
+                    setNewCategory("");
                   }}
                 >
-                  <SelectTrigger aria-label="Select category">
-                    <SelectValue placeholder="Choose a category…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categories.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-muted-foreground">
-                        No categories yet — switch to “New category”.
-                      </div>
-                    ) : (
-                      categories.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  id="category"
-                  list="category-options"
-                  placeholder="e.g. Hollywood"
-                  {...register("category")}
-                />
-              )}
-              <datalist id="category-options">
-                {categories.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
+                  Add
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
-                Pick where this movie lives — visitors browse the catalog by
-                these category sections.
+                A movie can live in several sections at once — pick from the
+                existing ones or type new names and press Enter.
               </p>
             </div>
           </div>

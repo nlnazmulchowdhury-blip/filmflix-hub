@@ -16,6 +16,7 @@ import Logo from "@/components/Logo";
 import MovieFormDialog from "@/components/MovieFormDialog";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
+import { movieCategoryNames } from "@/convex/movies";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "convex/react";
@@ -83,8 +84,7 @@ function AdminContent() {
   const categories = useMemo(() => {
     const set = new Set<string>();
     for (const m of movies ?? []) {
-      const c = (m.category ?? "").trim();
-      if (c) set.add(c);
+      for (const c of movieCategoryNames(m)) set.add(c);
     }
     return Array.from(set).sort();
   }, [movies]);
@@ -103,7 +103,14 @@ function AdminContent() {
     if (tokens.length === 0) return movies;
     return movies.filter((m) => {
       const hay = norm(
-        [m.title, m.description, m.genre, m.category, m.year?.toString(), m.kind]
+        [
+          m.title,
+          m.description,
+          m.genre,
+          ...movieCategoryNames(m),
+          m.year?.toString(),
+          m.kind,
+        ]
           .filter(Boolean)
           .join(" "),
       );
@@ -356,7 +363,7 @@ function AdminContent() {
                     <div className="flex flex-wrap gap-2">
                       {categories.map((c) => {
                         const count = (movies ?? []).filter(
-                          (m) => (m.category ?? "").trim() === c,
+                          (m) => movieCategoryNames(m).includes(c),
                         ).length;
                         return (
                           <span
@@ -472,16 +479,24 @@ function AdminContent() {
                               )}
                             </TableCell>
                             <TableCell className="hidden md:table-cell">
-                              {m.category ? (
-                                <Badge
-                                  variant="outline"
-                                  className="border-primary/40 bg-primary/10 text-primary"
-                                >
-                                  {m.category}
-                                </Badge>
-                              ) : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
+                              {(() => {
+                                const cats = movieCategoryNames(m);
+                                return cats.length > 0 ? (
+                                  <div className="flex max-w-[240px] flex-wrap gap-1">
+                                    {cats.map((c) => (
+                                      <Badge
+                                        key={c}
+                                        variant="outline"
+                                        className="border-primary/40 bg-primary/10 text-primary"
+                                      >
+                                        {c}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                );
+                              })()}
                             </TableCell>
                             <TableCell className="hidden lg:table-cell">
                               {m.year ?? "—"}

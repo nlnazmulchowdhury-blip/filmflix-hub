@@ -41,8 +41,11 @@ const schema = defineSchema(
       backdropUrl: v.optional(v.string()),
       videoUrl: v.optional(v.string()),
       genre: v.optional(v.string()),
-      /** Display category/section, e.g. Hollywood, Bengali, Anime, Trending. */
+      /** Display category/section, e.g. Hollywood, Bengali, Anime, Trending.
+       *  Legacy single value (kept so old rows keep working). */
       category: v.optional(v.string()),
+      /** One movie can live in several sections at once. */
+      categories: v.optional(v.array(v.string())),
       year: v.optional(v.number()),
       rating: v.optional(v.number()),
       kind: v.optional(v.union(v.literal("movie"), v.literal("series"))),

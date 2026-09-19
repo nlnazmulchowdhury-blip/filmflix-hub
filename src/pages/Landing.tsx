@@ -7,6 +7,7 @@ import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
+import { movieCategoryNames } from "@/convex/movies";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "convex/react";
 import { Dices, Film, LogOut, Play, Search, ShieldCheck, Tv, X } from "lucide-react";
@@ -23,17 +24,18 @@ function normalizeText(s: string) {
     .trim();
 }
 
-/** Everything a movie can be found by: title, description, genre, year, kind. */
+/** Everything a movie can be found by: title, description, genre, categories, year, kind. */
 function searchableText(m: {
   title: string;
   description?: string;
   genre?: string;
   category?: string;
+  categories?: string[];
   year?: number;
   kind?: string;
 }) {
   return normalizeText(
-    [m.title, m.description, m.genre, m.category, m.year?.toString(), m.kind]
+    [m.title, m.description, m.genre, ...movieCategoryNames(m), m.year?.toString(), m.kind]
       .filter(Boolean)
       .join(" "),
   );
@@ -56,12 +58,12 @@ export default function Landing() {
     return Array.from(set).sort();
   }, [movies]);
 
-  /** Distinct display categories (Hollywood, Bengali, Anime, …) in catalog order. */
+  /** Distinct display categories (Hollywood, Bengali, Anime, …) — a movie
+      contributes every section it belongs to. */
   const categories = useMemo(() => {
     const set = new Set<string>();
     for (const m of movies ?? []) {
-      const c = (m.category ?? "").trim();
-      if (c) set.add(c);
+      for (const c of movieCategoryNames(m)) set.add(c);
     }
     return Array.from(set);
   }, [movies]);
@@ -69,7 +71,8 @@ export default function Landing() {
   const filtered = useMemo(() => {
     if (!movies) return null;
     let rows = movies;
-    if (category) rows = rows.filter((m) => (m.category ?? "").trim() === category);
+    if (category)
+      rows = rows.filter((m) => movieCategoryNames(m).includes(category));
     if (genre) rows = rows.filter((m) => (m.genre ?? "").trim() === genre);
     const raw = query.trim();
     if (raw) {

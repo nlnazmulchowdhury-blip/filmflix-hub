@@ -29,6 +29,8 @@ const movieFields = {
   videoUrl: v.optional(v.string()),
   genre: v.optional(v.string()),
   category: v.optional(v.string()),
+  /** One movie can belong to multiple categories. */
+  categories: v.optional(v.array(v.string())),
   year: v.optional(v.number()),
   rating: v.optional(v.number()),
   kind: v.optional(v.union(v.literal("movie"), v.literal("series"))),
@@ -36,6 +38,24 @@ const movieFields = {
   seasons: v.optional(v.array(seasonObj)),
   order: v.optional(v.number()),
 };
+
+/** All the section names a movie lives in: the categories array plus the
+ *  legacy single category. Normalized: trimmed, de-duplicated. */
+export function movieCategoryNames(m: {
+  categories?: string[];
+  category?: string;
+}): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [...(m.categories ?? []), m.category ?? ""]) {
+    const c = raw.trim();
+    if (c && !seen.has(c)) {
+      seen.add(c);
+      out.push(c);
+    }
+  }
+  return out;
+}
 
 export const list = query({
   args: {},
@@ -66,15 +86,42 @@ export const add = mutation({
     const order =
       args.order ??
       (await ctx.db.query("movies").withIndex("order").collect()).length;
-    return await ctx.db.insert("movies", { ...args, order });
+    // Single source of truth is the categories array; mirror the first name
+    // into the legacy field so older reads keep working.
+    const { category, categories, ...rest } = args;
+    const names = [
+      ...new Set(
+        [...(categories ?? []), category ?? ""]
+          .map((c) => c.trim())
+          .filter(Boolean),
+      ),
+    ];
+    return await ctx.db.insert("movies", {
+      ...rest,
+      categories: names.length > 0 ? names : undefined,
+      category: names[0],
+      order,
+    });
   },
 });
 
 export const update = mutation({
   args: { id: v.id("movies"), ...movieFields },
-  handler: async (ctx, { id, ...patch }) => {
+  handler: async (ctx, { id, ...args }) => {
     await requireAdmin(ctx);
-    await ctx.db.patch(id, patch);
+    const { category, categories, ...rest } = args;
+    const names = [
+      ...new Set(
+        [...(categories ?? []), category ?? ""]
+          .map((c) => c.trim())
+          .filter(Boolean),
+      ),
+    ];
+    await ctx.db.patch(id, {
+      ...rest,
+      categories: names.length > 0 ? names : undefined,
+      category: names[0],
+    });
     return id;
   },
 });
@@ -88,9 +135,9 @@ export const remove = mutation({
 });
 
 /**
- * Delete a category: strips the category field from every movie that uses
- * it. The movies themselves stay in the catalog — they just become
- * uncategorized. Admin-only.
+ * Delete a category: strips that name from every movie's category list.
+ * The movies themselves stay in the catalog — they just lose this one
+ * section. Admin-only.
  */
 export const removeCategory = mutation({
   args: { category: v.string() },
@@ -101,10 +148,14 @@ export const removeCategory = mutation({
     const rows = await ctx.db.query("movies").withIndex("order").collect();
     let changed = 0;
     for (const m of rows) {
-      if ((m.category ?? "").trim() === trimmed) {
-        await ctx.db.patch(m._id, { category: undefined });
-        changed++;
-      }
+      const names = movieCategoryNames(m);
+      if (!names.includes(trimmed)) continue;
+      const rest = names.filter((n) => n !== trimmed);
+      await ctx.db.patch(m._id, {
+        categories: rest.length > 0 ? rest : undefined,
+        category: rest[0],
+      });
+      changed++;
     }
     return changed;
   },
