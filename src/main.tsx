@@ -2,6 +2,7 @@ import '@vly-ai/integrations';
 import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { MiniPlayerProvider } from "@/components/MiniPlayerProvider";
+import AnalyticsTracker from "@/components/AnalyticsTracker";
 import { ThemeProvider } from "next-themes";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
@@ -151,6 +152,7 @@ createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           <MiniPlayerProvider>
           <RouteSyncer />
+          <AnalyticsTracker />
           <Suspense fallback={<RouteLoading />}>
             <PageFade>
             <Routes>

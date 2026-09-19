@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query, QueryCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -84,7 +84,7 @@ export const summary = query({
     for (const v of views) byPath.set(v.path, (byPath.get(v.path) ?? 0) + 1);
 
     /* Movie detail views (path starts with /movie/). */
-    const byMovie = new Map<string, number>();
+    const byMovie = new Map<Id<"movies">, number>();
     for (const v of views) {
       if (v.movieId) {
         byMovie.set(v.movieId, (byMovie.get(v.movieId) ?? 0) + 1);
@@ -95,7 +95,7 @@ export const summary = query({
       .slice(0, 8);
     const topMovies = await Promise.all(
       topMovieIds.map(async ([id, count]) => {
-        const m = await ctx.db.get(id);
+        const m: Doc<"movies"> | null = await ctx.db.get(id);
         return { title: m?.title ?? "Deleted movie", count };
       }),
     );

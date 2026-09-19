@@ -24,6 +24,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery, useAction } from "convex/react";
 import {
   ArrowLeft,
+  BarChart3,
   CalendarClock,
   Clapperboard,
   CreditCard,
@@ -65,6 +66,7 @@ function AdminContent() {
   const allComments = useQuery(api.comments.listAll, isAdmin ? {} : "skip");
   const allOrders = useQuery(api.orders.listAll, isAdmin ? {} : "skip");
   const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
+  const analytics = useQuery(api.analytics.summary, isAdmin ? {} : "skip");
 
   const removeMovie = useMutation(api.movies.remove);
   const removeCategory = useMutation(api.categories.remove);
@@ -414,6 +416,9 @@ function AdminContent() {
                 </TabsTrigger>
                 <TabsTrigger value="orders" className="gap-1.5">
                   <CreditCard className="size-3.5" /> Orders
+                </TabsTrigger>
+                <TabsTrigger value="analytics" className="gap-1.5">
+                  <BarChart3 className="size-3.5" /> Analytics
                 </TabsTrigger>
               </TabsList>
               </div>
@@ -1100,6 +1105,156 @@ function AdminContent() {
                     </Table>
                   )}
                 </Card>
+              </TabsContent>
+
+              {/* Analytics — whole-site traffic overview */}
+              <TabsContent value="analytics">
+                {!analytics ? (
+                  <div className="grid gap-3 sm:grid-cols-4">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <Skeleton key={i} className="h-24 w-full rounded-xl" />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Stat cards */}
+                    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                      <Card className="p-4">
+                        <p className="text-xs font-medium text-muted-foreground">Total page views</p>
+                        <p className="font-display mt-1 text-2xl font-bold tabular-nums">
+                          {analytics.total.toLocaleString()}
+                        </p>
+                      </Card>
+                      <Card className="p-4">
+                        <p className="text-xs font-medium text-muted-foreground">Today</p>
+                        <p className="font-display mt-1 text-2xl font-bold tabular-nums">
+                          {analytics.today.toLocaleString()}
+                        </p>
+                      </Card>
+                      <Card className="p-4">
+                        <p className="text-xs font-medium text-muted-foreground">Last 7 days</p>
+                        <p className="font-display mt-1 text-2xl font-bold tabular-nums">
+                          {analytics.last7.toLocaleString()}
+                        </p>
+                      </Card>
+                      <Card className="p-4">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Visitors (7 days, approx.)
+                        </p>
+                        <p className="font-display mt-1 text-2xl font-bold tabular-nums">
+                          {analytics.visitors7.toLocaleString()}
+                        </p>
+                      </Card>
+                    </div>
+
+                    {/* 14-day bar chart */}
+                    <Card className="p-4">
+                      <p className="font-display text-sm font-semibold">Views — last 14 days</p>
+                      <div className="mt-4 flex h-36 items-end gap-1.5">
+                        {analytics.series.map((d) => {
+                          const max = Math.max(...analytics.series.map((x) => x.views), 1);
+                          const pct = Math.max(2, Math.round((d.views / max) * 100));
+                          return (
+                            <div
+                              key={d.day}
+                              className="group relative flex min-w-0 flex-1 flex-col items-center justify-end gap-1.5"
+                            >
+                              <span className="pointer-events-none absolute -top-6 z-10 hidden rounded bg-foreground px-1.5 py-0.5 text-[10px] font-semibold text-background group-hover:block">
+                                {d.views}
+                              </span>
+                              <div
+                                className="w-full rounded-t-md bg-primary/80 transition-colors group-hover:bg-primary"
+                                style={{ height: `${pct}%` }}
+                              />
+                              <span className="w-full truncate text-center text-[9px] text-muted-foreground">
+                                {d.day}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </Card>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      {/* Top movies */}
+                      <Card className="p-4">
+                        <p className="font-display text-sm font-semibold">Most watched movies</p>
+                        {analytics.topMovies.length === 0 ? (
+                          <p className="mt-3 text-xs text-muted-foreground">
+                            No movie page views yet.
+                          </p>
+                        ) : (
+                          <div className="mt-3 space-y-2">
+                            {analytics.topMovies.map((m) => {
+                              const max = analytics.topMovies[0]?.count || 1;
+                              return (
+                                <div key={m.title} className="flex items-center gap-3">
+                                  <span className="min-w-0 flex-1 truncate text-sm">{m.title}</span>
+                                  <div className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full bg-secondary">
+                                    <div
+                                      className="h-full rounded-full bg-primary"
+                                      style={{ width: `${Math.round((m.count / max) * 100)}%` }}
+                                    />
+                                  </div>
+                                  <span className="w-8 shrink-0 text-right text-xs font-semibold tabular-nums">
+                                    {m.count}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </Card>
+
+                      {/* Top pages + devices + referrers */}
+                      <Card className="p-4">
+                        <p className="font-display text-sm font-semibold">Top pages</p>
+                        {analytics.topPaths.length === 0 ? (
+                          <p className="mt-3 text-xs text-muted-foreground">No traffic yet.</p>
+                        ) : (
+                          <div className="mt-3 space-y-1.5">
+                            {analytics.topPaths.map((p) => (
+                              <div key={p.path} className="flex items-center justify-between gap-3">
+                                <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                                  {p.path}
+                                </span>
+                                <span className="text-xs font-semibold tabular-nums">{p.count}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="mt-5 grid grid-cols-2 gap-4">
+                          <div>
+                            <p className="text-xs font-semibold text-muted-foreground">Devices</p>
+                            <div className="mt-2 space-y-1">
+                              {analytics.devices.map((d) => (
+                                <div key={d.name} className="flex items-center justify-between gap-2 text-xs">
+                                  <span className="capitalize">{d.name}</span>
+                                  <span className="font-semibold tabular-nums">{d.count}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-muted-foreground">Top referrers</p>
+                            {analytics.topReferrers.length === 0 ? (
+                              <p className="mt-2 text-xs text-muted-foreground">Direct visits only.</p>
+                            ) : (
+                              <div className="mt-2 space-y-1">
+                                {analytics.topReferrers.map((r) => (
+                                  <div key={r.host} className="flex items-center justify-between gap-2 text-xs">
+                                    <span className="min-w-0 flex-1 truncate">{r.host}</span>
+                                    <span className="font-semibold tabular-nums">{r.count}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </Card>
+                    </div>
+                  </div>
+                )}
               </TabsContent>
             </Tabs>
           </>
