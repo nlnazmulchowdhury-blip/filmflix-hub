@@ -16,7 +16,7 @@ import Logo from "@/components/Logo";
 import MovieFormDialog from "@/components/MovieFormDialog";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
-import { movieCategoryNames } from "@/convex/movies";
+import { movieCategoryNames } from "@/lib/categories";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "convex/react";

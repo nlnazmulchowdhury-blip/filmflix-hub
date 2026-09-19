@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { getCurrentUser } from "./users";
+import { movieCategoryNames } from "../lib/categories";
 
 const episodeObj = v.object({
   id: v.string(),
@@ -38,24 +39,6 @@ const movieFields = {
   seasons: v.optional(v.array(seasonObj)),
   order: v.optional(v.number()),
 };
-
-/** All the section names a movie lives in: the categories array plus the
- *  legacy single category. Normalized: trimmed, de-duplicated. */
-export function movieCategoryNames(m: {
-  categories?: string[];
-  category?: string;
-}): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const raw of [...(m.categories ?? []), m.category ?? ""]) {
-    const c = raw.trim();
-    if (c && !seen.has(c)) {
-      seen.add(c);
-      out.push(c);
-    }
-  }
-  return out;
-}
 
 export const list = query({
   args: {},

@@ -7,7 +7,7 @@ import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
-import { movieCategoryNames } from "@/convex/movies";
+import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "convex/react";
 import { Dices, Film, LogOut, Play, Search, ShieldCheck, Tv, X } from "lucide-react";

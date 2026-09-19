@@ -26,7 +26,7 @@ import { useFieldArray, useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
-import { movieCategoryNames } from "@/convex/movies";
+import { movieCategoryNames } from "@/lib/categories";
 import { X } from "lucide-react";
 
 const episodeSchema = z.object({
