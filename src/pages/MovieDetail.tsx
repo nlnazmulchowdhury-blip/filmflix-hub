@@ -15,12 +15,9 @@ import {
   ArrowLeft,
   CalendarPlus,
   Loader2,
-  MessageSquare,
   Play,
-  Send,
   Star,
   Share2,
-  Trash2,
   Calendar,
   ListVideo,
 } from "lucide-react";
@@ -43,20 +40,11 @@ export default function MovieDetail() {
     id: id as Id<"movies">,
   });
 
-  const comments = useQuery(
-    api.comments.listByMovie,
-    movie ? { movieId: movie._id } : "skip",
-  );
-  const addComment = useMutation(api.comments.add);
-  const removeComment = useMutation(api.comments.remove);
 
   const scheduleScreening = useMutation(api.screenings.schedule);
   const [when, setWhen] = useState("");
   const [note, setNote] = useState("");
   const [isScheduling, setIsScheduling] = useState(false);
-
-  const [commentText, setCommentText] = useState("");
-  const [isPosting, setIsPosting] = useState(false);
 
   /* Register this movie with the persistent player as soon as it loads:
      - fresh visit → poster overlay (no autoplay)
@@ -99,24 +87,6 @@ export default function MovieDetail() {
       toast.error(err instanceof Error ? err.message : "Failed to schedule");
     } finally {
       setIsScheduling(false);
-    }
-  };
-
-  const handlePostComment = async () => {
-    if (!movie) return;
-    if (!isAuthenticated) {
-      navigate(`/auth?returnTo=${encodeURIComponent(`/movie/${movie._id}`)}`);
-      return;
-    }
-    if (!commentText.trim()) return;
-    setIsPosting(true);
-    try {
-      await addComment({ movieId: movie._id, text: commentText });
-      setCommentText("");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to comment");
-    } finally {
-      setIsPosting(false);
     }
   };
 
@@ -400,105 +370,6 @@ export default function MovieDetail() {
                 </div>
               </aside>
             </div>
-
-            {/* Team discussion */}
-            <section>
-              <h2 className="font-display flex items-center gap-2 text-xl font-bold tracking-tight">
-                <MessageSquare className="size-5 text-primary" />
-                Team discussion
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Notes, reactions, and timecodes from the crew.
-              </p>
-
-              <div className="mt-5 flex flex-col gap-2 sm:flex-row">
-                <Input
-                  value={commentText}
-                  onChange={(e) => setCommentText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handlePostComment();
-                    }
-                  }}
-                  placeholder={
-                    isAuthenticated
-                      ? "Share a thought about this movie…"
-                      : "Sign in to join the discussion"
-                  }
-                  disabled={!isAuthenticated}
-                  className="min-w-0 flex-1"
-                />
-                <Button
-                  onClick={handlePostComment}
-                  disabled={!isAuthenticated || isPosting || !commentText.trim()}
-                  className="gap-2 sm:w-auto"
-                >
-                  {isPosting ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Send className="size-4" />
-                  )}
-                  Post
-                </Button>
-              </div>
-
-              <div className="mt-6 space-y-3">
-                {comments === undefined ? (
-                  <>
-                    <Skeleton className="h-14 w-full rounded-xl" />
-                    <Skeleton className="h-14 w-full rounded-xl" />
-                  </>
-                ) : comments.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
-                    No comments yet — start the conversation.
-                  </p>
-                ) : (
-                  comments.map((c) => (
-                    <div
-                      key={c._id}
-                      className="flex items-start gap-3 rounded-xl border border-border/50 bg-card/60 p-4"
-                    >
-                      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary">
-                        {(c.authorName ?? "M").slice(0, 1).toUpperCase()}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold">
-                            {c.authorName ?? "Team member"}
-                          </p>
-                          <span className="text-xs text-muted-foreground">
-                            {new Date(c.createdAt).toLocaleString()}
-                          </span>
-                          {c.userId === user?._id && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="ml-auto size-7 text-muted-foreground hover:text-destructive"
-                              aria-label="Delete comment"
-                              onClick={async () => {
-                                try {
-                                  await removeComment({ id: c._id });
-                                } catch (err) {
-                                  toast.error(
-                                    err instanceof Error ? err.message : "Failed",
-                                  );
-                                }
-                              }}
-                            >
-                              <Trash2 className="size-3.5" />
-                            </Button>
-                          )}
-                        </div>
-                        <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90">
-                          {c.text}
-                        </p>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </section>
           </div>
         )}
       </main>
