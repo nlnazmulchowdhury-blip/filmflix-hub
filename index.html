@@ -36,11 +36,11 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap"
       rel="stylesheet"
     />
-    <!-- Ads stay completely OFF until the visitor clicks somewhere on the
-         site, and NEVER load on the admin panel (/nazmul). The network
-         scripts are injected only on the first click outside the admin
-         route, so nothing (no corner notifications, popups, or popunders)
-         can appear before any click or inside the admin panel. -->
+    <!-- Ad loading rules:
+         1. Admin panel (/nazmul) never loads ads.
+         2. Installed app (standalone PWA): ads load automatically shortly
+            after start — tap-gating is unreliable inside installed apps.
+         3. Normal browser: ads load on the visitor's first click. -->
     <script>
       (function () {
         var loaded = false;
@@ -50,6 +50,13 @@
         ];
         function isAdminPath() {
           return window.location.pathname.indexOf("/nazmul") === 0;
+        }
+        function isStandalone() {
+          return (
+            (window.matchMedia &&
+              window.matchMedia("(display-mode: standalone)").matches) ||
+            window.navigator.standalone === true
+          );
         }
         function loadAds() {
           if (loaded || isAdminPath()) return;
@@ -62,12 +69,18 @@
             document.head.appendChild(s);
           }
         }
-        document.addEventListener("click", loadAds, true);
-        // If the visitor starts on the admin route, the SPA loads and then
-        // navigates client-side; watch for the first non-admin path.
-        window.setInterval(function () {
-          if (!isAdminPath()) loadAds();
-        }, 800);
+        if (isAdminPath()) {
+          // Started on the admin route: hold ads off; enable them only if
+          // the user navigates into the public site (SPA, same page).
+          window.setInterval(function () {
+            if (!isAdminPath()) loadAds();
+          }, 800);
+        } else if (isStandalone()) {
+          // Installed app: show ads right away, no tap needed.
+          setTimeout(loadAds, 1500);
+        } else {
+          document.addEventListener("click", loadAds, true);
+        }
       })();
     </script>
     <style>
