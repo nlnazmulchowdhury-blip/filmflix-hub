@@ -210,6 +210,15 @@ export default function MovieDetail() {
         </div>
       </header>
 
+      {/* Ad rails: wide skyscrapers flanking the page on very wide screens.
+          Hidden below 2xl so the rails never cover the movie content. */}
+      <div className="fixed left-2 top-1/2 z-30 hidden -translate-y-1/2 2xl:block">
+        <AdBanner {...AD_BANNERS.skyscraper} />
+      </div>
+      <div className="fixed right-2 top-1/2 z-30 hidden -translate-y-1/2 2xl:block">
+        <AdBanner {...AD_BANNERS.skyscraper} />
+      </div>
+
       <main className="mx-auto w-full max-w-6xl px-3 pb-24 pt-4 sm:px-6 sm:pt-8">
         {!movie ? (
           <div className="space-y-6">
