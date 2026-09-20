@@ -7,6 +7,7 @@ import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
 import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
+import AdSideRail from "@/components/AdSideRail";
 import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
@@ -113,10 +114,8 @@ export default function Landing() {
         <div className="absolute bottom-[10%] left-[-12%] h-[300px] w-[400px] rounded-full bg-chart-2/10 blur-[120px]" />
       </div>
 
-      {/* Ad slot: wide skyscraper — fixed side rail, very wide screens only. */}
-      <div className="fixed left-4 top-1/2 z-30 hidden -translate-y-1/2 2xl:block">
-        <AdBanner {...AD_BANNERS.skyscraper} />
-      </div>
+      {/* Ad slot: wide skyscraper — fixed side rail (auto-fit, never cut). */}
+      <AdSideRail side="left" breakpoint="wide" />
 
       {/* Header */}
       <header className="sticky top-0 z-40 glass-panel border-b">
