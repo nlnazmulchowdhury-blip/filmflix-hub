@@ -513,7 +513,7 @@ export default function PlayerStage({
           )}
 
           {/* Settings gear: night mode, loop, rotate, captions, speed, quality. */}
-          <div className="relative" data-player-menu>
+          <div className="relative ml-auto" data-player-menu>
             <button
               type="button"
               onClick={() => {
@@ -676,17 +676,6 @@ export default function PlayerStage({
             <PictureInPicture2 className="size-5" />
           </button>
 
-          {/* Mini hand-off */}
-          <button
-            type="button"
-            onClick={() => setMode("mini")}
-            className="ml-auto rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-            aria-label="Play in miniplayer"
-            title="Play in miniplayer — keep browsing"
-          >
-            <MiniIcon />
-          </button>
-
           <button
             type="button"
             onClick={toggleFullscreen}
@@ -699,23 +688,6 @@ export default function PlayerStage({
         </div>
       </div>
     </div>
-  );
-}
-
-function MiniIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="size-5"
-    >
-      <polyline points="5 12 5 19 19 19 19 12" />
-      <rect x="12" y="5" width="7" height="5" rx="1" />
-    </svg>
   );
 }
 
