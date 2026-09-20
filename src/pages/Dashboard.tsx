@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/table";
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
+import AdBanner from "@/components/AdBanner";
+import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
@@ -348,6 +350,12 @@ export default function Dashboard() {
             </div>
           </Card>
         )}
+
+        {/* Banner ads */}
+        <div className="mt-10 flex justify-center">
+          <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
+          <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
+        </div>
       </main>
     </div>
   );

@@ -7,6 +7,8 @@ import Logo from "@/components/Logo";
 import PlayerStage from "@/components/PlayerStage";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useMiniPlayer } from "@/components/mini-player-context";
+import AdBanner from "@/components/AdBanner";
+import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
@@ -432,6 +434,12 @@ export default function MovieDetail() {
                   </div>
                 </div>
               </aside>
+            </div>
+
+            {/* Banner ads */}
+            <div className="flex justify-center">
+              <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
+              <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
             </div>
           </div>
         )}

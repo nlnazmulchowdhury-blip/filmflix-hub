@@ -6,6 +6,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
 import ThemeToggle from "@/components/ThemeToggle";
+import AdBanner from "@/components/AdBanner";
+import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
@@ -109,6 +111,11 @@ export default function Landing() {
         <div className="absolute left-1/2 top-[-20%] h-[520px] w-[820px] -translate-x-1/2 rounded-full bg-primary/14 blur-[140px]" />
         <div className="absolute bottom-[-10%] right-[-10%] h-[380px] w-[520px] rounded-full bg-primary/8 blur-[120px]" />
         <div className="absolute bottom-[10%] left-[-12%] h-[300px] w-[400px] rounded-full bg-chart-2/10 blur-[120px]" />
+      </div>
+
+      {/* Ad slot: wide skyscraper — fixed side rail, very wide screens only. */}
+      <div className="fixed left-4 top-1/2 z-30 hidden -translate-y-1/2 2xl:block">
+        <AdBanner {...AD_BANNERS.skyscraper} />
       </div>
 
       {/* Header */}
@@ -245,6 +252,12 @@ export default function Landing() {
         )}
 
         {/* Catalog */}
+        {/* Ad slots: leaderboard (desktop) / mobile banner. */}
+        <div className="mt-8 flex justify-center sm:mt-10">
+          <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
+          <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
+        </div>
+
         <section id="catalog" className="scroll-mt-24 pt-10">
           <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
             <div>
@@ -296,6 +309,11 @@ export default function Landing() {
           )}
         </section>
 
+        {/* Ad slot: medium rectangle. */}
+        <div className="mt-10 flex justify-center">
+          <AdBanner {...AD_BANNERS.square} />
+        </div>
+
         {/* Quick links row */}
         <section className="mt-10 grid gap-4 sm:mt-14 sm:grid-cols-3">
           <Card className="card-lift border-border/60 bg-card/70">
@@ -339,6 +357,11 @@ export default function Landing() {
             </CardContent>
           </Card>
         </section>
+
+        {/* Ad slot: full banner. */}
+        <div className="mt-10 flex justify-center">
+          <AdBanner {...AD_BANNERS.banner} />
+        </div>
       </main>
 
       {/* Footer */}
