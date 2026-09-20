@@ -20,12 +20,33 @@ import {
   MiniPlayerContext,
   type MiniPlayerMovie,
   type PlayerControls,
+  type PlayerRotation,
 } from "./mini-player-context";
 function formatTime(sec: number) {
   if (!Number.isFinite(sec)) return "0:00";
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** Swap the video's file in place: keep the playback position, speed and
+ *  play/pause state. Used by language (dub) and quality switching. */
+function swapSrcKeepingPosition(el: HTMLVideoElement, nextSrc: string, rate: number) {
+  const resumeAt = el.currentTime;
+  const wasPlaying = !el.paused;
+  el.src = nextSrc;
+  el.load();
+  const restore = () => {
+    el.removeEventListener("loadedmetadata", restore);
+    if (Number.isFinite(resumeAt) && resumeAt > 0) {
+      el.currentTime = resumeAt;
+    }
+    el.playbackRate = rate;
+    if (wasPlaying) {
+      el.play().catch(() => undefined);
+    }
+  };
+  el.addEventListener("loadedmetadata", restore);
 }
 
 export function MiniPlayerProvider({ children }: { children: ReactNode }) {
@@ -53,6 +74,20 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
 
   /** Currently playing audio version: null = original, else the dub label. */
   const [activeDub, setActiveDub] = useState<string | null>(null);
+
+  /* --------------------- Viewer settings (gear menu) -------------------- */
+  const [nightMode, setNightMode] = useState(false);
+  const [loop, setLoop] = useState(false);
+  const [rotation, setRotation] = useState<PlayerRotation>(0);
+  const [playbackRate, setPlaybackRateState] = useState(1);
+  const [activeQuality, setActiveQuality] = useState<string | null>(null);
+  const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
+
+  /** Latest settings for callbacks/effects that must not go stale. */
+  const playbackRateRef = useRef(1);
+  useEffect(() => {
+    playbackRateRef.current = playbackRate;
+  }, [playbackRate]);
 
   useEffect(() => {
     movieRef.current = movie;
@@ -112,24 +147,26 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
         setActiveDub(label);
         return;
       }
-      const resumeAt = el.currentTime;
-      const wasPlaying = !el.paused;
+      swapSrcKeepingPosition(el, nextSrc, playbackRateRef.current);
       setActiveDub(label);
-      el.src = nextSrc;
-      el.load();
-      const restore = () => {
-        el.removeEventListener("loadedmetadata", restore);
-        if (Number.isFinite(resumeAt) && resumeAt > 0) {
-          el.currentTime = resumeAt;
-        }
-        if (wasPlaying) {
-          el.play().catch(() => undefined);
-        }
-      };
-      el.addEventListener("loadedmetadata", restore);
     },
     [],
   );
+
+  /** Same in-place src swap, but for quality renditions (480p/720p/…). */
+  const setQuality = useCallback((label: string | null) => {
+    const el = videoRef.current;
+    const m = movieRef.current;
+    if (!el || !m) return;
+    const q = label ? (m.qualities ?? []).find((x) => x.label === label) : undefined;
+    const nextSrc = q ? q.videoUrl : m.videoUrl;
+    if (!nextSrc || nextSrc === el.currentSrc || nextSrc === el.src) {
+      setActiveQuality(label);
+      return;
+    }
+    swapSrcKeepingPosition(el, nextSrc, playbackRateRef.current);
+    setActiveQuality(label);
+  }, []);
 
   const setMode = useCallback((m: "inline" | "mini") => {
     setModeState(m);
@@ -198,6 +235,13 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     videoRef.current?.pause();
   }, []);
 
+  const setPlaybackRate = useCallback((r: number) => {
+    const el = videoRef.current;
+    playbackRateRef.current = r;
+    setPlaybackRateState(r);
+    if (el) el.playbackRate = r;
+  }, []);
+
   const controls = useMemo<PlayerControls>(
     () => ({
       play: playVideo,
@@ -210,6 +254,17 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     }),
     [playVideo, pauseVideo, togglePlay, toggleMute, setVolumeTo, seekBy, seekToRatio],
   );
+
+  /* Reset viewer settings when a different movie starts. */
+  useEffect(() => {
+    setNightMode(false);
+    setLoop(false);
+    setRotation(0);
+    setPlaybackRateState(1);
+    playbackRateRef.current = 1;
+    setActiveQuality(null);
+    setActiveSubtitle(null);
+  }, [movie?.movieId]);
 
   const value = useMemo(
     () => ({
@@ -224,6 +279,18 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       duration,
       activeDub,
       setDub,
+      nightMode,
+      setNightMode,
+      loop,
+      setLoop,
+      rotation,
+      setRotation,
+      playbackRate,
+      setPlaybackRate,
+      activeQuality,
+      setQuality,
+      activeSubtitle,
+      setSubtitle: setActiveSubtitle,
       registerStage: setStageEl,
       start,
       setMode,
@@ -241,6 +308,14 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       duration,
       activeDub,
       setDub,
+      nightMode,
+      loop,
+      rotation,
+      playbackRate,
+      setPlaybackRate,
+      activeQuality,
+      setQuality,
+      activeSubtitle,
       start,
       setMode,
       close,
@@ -274,6 +349,11 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
           <VideoSurface
             videoRef={videoRef}
             src={movie.videoUrl}
+            subtitles={movie.subtitles ?? []}
+            activeSubtitle={activeSubtitle}
+            nightMode={nightMode}
+            rotation={rotation}
+            loop={loop}
             visible={Boolean(inlineOnPage || miniActive)}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
@@ -373,10 +453,18 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
  * only ever moved between portal containers — the underlying media element
  * is never recreated, so playback position, volume and state survive page
  * navigation, exactly like YouTube's miniplayer.
+ *
+ * Also hosts the viewer settings that live on the media element itself:
+ * subtitle tracks, night-mode dimming and the 90° rotation steps.
  */
 function VideoSurface({
   videoRef,
   src,
+  subtitles,
+  activeSubtitle,
+  nightMode,
+  rotation,
+  loop,
   visible,
   onPlay,
   onPause,
@@ -385,23 +473,75 @@ function VideoSurface({
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   src: string;
+  subtitles: { label: string; url: string }[];
+  activeSubtitle: string | null;
+  nightMode: boolean;
+  rotation: PlayerRotation;
+  loop: boolean;
   visible: boolean;
   onPlay: () => void;
   onPause: () => void;
   onTime: (t: number, d: number) => void;
   onEnded: () => void;
 }) {
+  /* Container size — needed to keep a rotated picture fully in view. */
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) setBox({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  /* Rotate: swap the box so the rotated picture stays fully visible. */
+  const rotated = rotation === 90 || rotation === 270;
+  const fitScale =
+    rotated && box.w > 0 && box.h > 0
+      ? Math.min(box.w, box.h) / Math.max(box.w, box.h)
+      : 1;
+
+  /* Show exactly the chosen caption track; re-apply after every src swap. */
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    const apply = () => {
+      for (let i = 0; i < el.textTracks.length; i++) {
+        const t = el.textTracks[i];
+        t.mode = activeSubtitle && t.label === activeSubtitle ? "showing" : "disabled";
+      }
+    };
+    apply();
+    el.addEventListener("loadedmetadata", apply);
+    return () => el.removeEventListener("loadedmetadata", apply);
+  }, [activeSubtitle, videoRef]);
+
   return (
     <div
+      ref={wrapRef}
       data-slot="persistent-video-wrap"
       className={visible ? "absolute inset-0" : "absolute inset-0 opacity-0"}
     >
       <video
         ref={videoRef}
         src={src}
+        loop={loop}
         className="absolute inset-0 size-full object-contain"
+        style={{
+          transform:
+            rotation !== 0
+              ? `rotate(${rotation}deg) scale(${rotated ? fitScale : 1})`
+              : undefined,
+          filter: nightMode ? "brightness(0.6)" : undefined,
+        }}
         playsInline
         preload="metadata"
+        crossOrigin="anonymous"
         onPlay={onPlay}
         onPause={onPause}
         onTimeUpdate={(e) =>
@@ -413,7 +553,11 @@ function VideoSurface({
           if (el.paused) el.play().catch(() => undefined);
           else el.pause();
         }}
-      />
+      >
+        {subtitles.map((s) => (
+          <track key={s.label} kind="subtitles" src={s.url} label={s.label} />
+        ))}
+      </video>
     </div>
   );
 }

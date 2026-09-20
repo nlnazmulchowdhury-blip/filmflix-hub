@@ -25,6 +25,14 @@ const dubInput = v.object({
   label: v.string(),
   videoUrl: v.string(),
 });
+const qualityInput = v.object({
+  label: v.string(),
+  videoUrl: v.string(),
+});
+const subtitleInput = v.object({
+  label: v.string(),
+  url: v.string(),
+});
 
 const movieFields = {
   title: v.string(),
@@ -41,6 +49,8 @@ const movieFields = {
   kind: v.optional(v.union(v.literal("movie"), v.literal("series"))),
   episodes: v.optional(v.array(episodeInput)),
   dubs: v.optional(v.array(dubInput)),
+  qualities: v.optional(v.array(qualityInput)),
+  subtitles: v.optional(v.array(subtitleInput)),
   seasons: v.optional(v.array(seasonObj)),
   order: v.optional(v.number()),
 };

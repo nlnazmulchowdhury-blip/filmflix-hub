@@ -1,18 +1,26 @@
 import { useMiniPlayer } from "@/components/mini-player-context";
 import {
+  Captions,
+  ChevronLeft,
+  ChevronRight,
+  Gauge,
   Languages,
   Maximize,
   Minimize,
+  Moon,
   Pause,
+  PictureInPicture2,
   Play,
+  Repeat,
   RotateCcw,
   RotateCw,
+  Settings,
   Share2,
   Volume1,
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
 
@@ -53,6 +61,18 @@ export default function PlayerStage({
     duration,
     activeDub,
     setDub,
+    nightMode,
+    setNightMode,
+    loop,
+    setLoop,
+    rotation,
+    setRotation,
+    playbackRate,
+    setPlaybackRate,
+    activeQuality,
+    setQuality,
+    activeSubtitle,
+    setSubtitle,
     registerStage,
     start,
     setMode,
@@ -66,9 +86,15 @@ export default function PlayerStage({
   /** Cursor is over the control bar — keep the bar up while it is. */
   const [hoveringControls, setHoveringControls] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsView, setSettingsView] = useState<
+    "main" | "subtitles" | "speed" | "quality"
+  >("main");
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dubs = movie?.dubs ?? [];
+  const qualities = movie?.qualities ?? [];
+  const subtitles = movie?.subtitles ?? [];
 
   const isHost = isActive && mode === "inline";
 
@@ -136,6 +162,35 @@ export default function PlayerStage({
       toast.error("Could not copy the link");
     }
   }, [title]);
+
+  /* Picture-in-picture: pop the video into a floating OS window. */
+  const togglePip = useCallback(async () => {
+    const v = document.querySelector("video");
+    const video = v as (HTMLVideoElement & {
+      requestPictureInPicture?: () => Promise<unknown>;
+      webkitSetPresentationMode?: (m: string) => void;
+    }) | null;
+    if (!video) return;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else if (video.requestPictureInPicture) {
+        await video.requestPictureInPicture();
+      } else if (video.webkitSetPresentationMode) {
+        // Safari: webkit presentation mode is the PiP equivalent.
+        const target =
+          (video as HTMLVideoElement & { webkitPresentationMode?: string })
+            .webkitPresentationMode === "picture-in-picture"
+            ? "inline"
+            : "picture-in-picture";
+        video.webkitSetPresentationMode(target);
+      } else {
+        toast.error("Picture-in-picture is not supported in this browser");
+      }
+    } catch {
+      toast.error("Picture-in-picture is not available right now");
+    }
+  }, []);
 
   const toggleFullscreen = useCallback(() => {
     const el = containerRef.current as (HTMLElement & { webkitRequestFullscreen?: () => Promise<void> }) | null;
@@ -246,7 +301,15 @@ export default function PlayerStage({
       }`}
       onMouseMove={() => setControlsVisible(true)}
       onMouseLeave={() => playing && setHoveringControls(false)}
-      onClickCapture={() => setControlsVisible(true)}
+      onClickCapture={(e) => {
+        setControlsVisible(true);
+        // Clicking anywhere outside an open player menu closes it.
+        if (!(e.target as HTMLElement).closest("[data-player-menu]")) {
+          setLangOpen(false);
+          setSettingsOpen(false);
+          setSettingsView("main");
+        }
+      }}
       onDoubleClick={toggleFullscreen}
     >
       {/* Portal target — the persistent video mounts here. */}
@@ -397,7 +460,7 @@ export default function PlayerStage({
 
           {/* Language switch — original + admin-added dubs. */}
           {dubs.length > 0 && (
-            <div className="relative">
+            <div className="relative" data-player-menu>
               <button
                 type="button"
                 onClick={() => setLangOpen((v) => !v)}
@@ -449,6 +512,170 @@ export default function PlayerStage({
             </div>
           )}
 
+          {/* Settings gear: night mode, loop, rotate, captions, speed, quality. */}
+          <div className="relative" data-player-menu>
+            <button
+              type="button"
+              onClick={() => {
+                setSettingsOpen((v) => !v);
+                setSettingsView("main");
+                setLangOpen(false);
+              }}
+              className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${
+                settingsOpen || nightMode || loop || rotation !== 0 || playbackRate !== 1 || activeQuality || activeSubtitle
+                  ? "text-primary"
+                  : ""
+              }`}
+              aria-label="Player settings"
+              title="Settings"
+            >
+              <Settings className="size-5" />
+            </button>
+
+            {settingsOpen && (
+              <div className="absolute bottom-full right-0 z-30 mb-2 w-[264px] max-w-[86vw] overflow-hidden rounded-2xl border border-white/15 bg-black/95 py-1.5 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur">
+                {settingsView === "main" && (
+                  <>
+                    <SettingsToggle
+                      icon={<Moon className="size-4" />}
+                      label="Night Mode"
+                      on={nightMode}
+                      onToggle={() => setNightMode(!nightMode)}
+                    />
+                    <SettingsToggle
+                      icon={<Repeat className="size-4" />}
+                      label="Loop"
+                      on={loop}
+                      onToggle={() => setLoop(!loop)}
+                    />
+                    <SettingsToggle
+                      icon={<RotateCw className="size-4" />}
+                      label="Auto Rotate"
+                      on={rotation !== 0}
+                      onToggle={() => setRotation(rotation === 0 ? 90 : 0)}
+                    />
+                    {subtitles.length > 0 && (
+                      <SettingsLink
+                        icon={<Captions className="size-4" />}
+                        label="Subtitles"
+                        value={activeSubtitle ?? "Off"}
+                        onClick={() => setSettingsView("subtitles")}
+                      />
+                    )}
+                    <SettingsLink
+                      icon={<Gauge className="size-4" />}
+                      label="Playback Speed"
+                      value={playbackRate === 1 ? "Normal" : `${playbackRate}x`}
+                      onClick={() => setSettingsView("speed")}
+                    />
+                    {qualities.length > 0 && (
+                      <SettingsLink
+                        icon={<Settings className="size-4" />}
+                        label="Quality"
+                        value={activeQuality ?? "Auto"}
+                        onClick={() => setSettingsView("quality")}
+                      />
+                    )}
+                  </>
+                )}
+
+                {settingsView !== "main" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setSettingsView("main")}
+                      className="flex w-full items-center gap-2.5 border-b border-white/10 px-3 pb-2 pt-1.5 text-left text-sm font-semibold text-white hover:bg-white/5"
+                    >
+                      <ChevronLeft className="size-4" />
+                      {settingsView === "subtitles"
+                        ? "Subtitles"
+                        : settingsView === "speed"
+                          ? "Playback Speed"
+                          : "Quality"}
+                    </button>
+                    <div className="max-h-[220px] overflow-y-auto">
+                      {settingsView === "subtitles" && (
+                        <>
+                          <MenuOption
+                            label="Off"
+                            selected={activeSubtitle === null}
+                            onSelect={() => {
+                              setSubtitle(null);
+                              setSettingsOpen(false);
+                            }}
+                          />
+                          {subtitles.map((s) => (
+                            <MenuOption
+                              key={s.label}
+                              label={s.label}
+                              selected={activeSubtitle === s.label}
+                              onSelect={() => {
+                                setSubtitle(s.label);
+                                setSettingsOpen(false);
+                              }}
+                            />
+                          ))}
+                        </>
+                      )}
+                      {settingsView === "speed" &&
+                        [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((r) => (
+                          <MenuOption
+                            key={r}
+                            label={r === 1 ? "Normal" : `${r}x`}
+                            selected={playbackRate === r}
+                            onSelect={() => {
+                              setPlaybackRate(r);
+                              setSettingsOpen(false);
+                            }}
+                          />
+                        ))}
+                      {settingsView === "quality" && (
+                        <>
+                          <MenuOption
+                            label="Auto"
+                            selected={activeQuality === null}
+                            onSelect={() => {
+                              setQuality(null);
+                              setSettingsOpen(false);
+                            }}
+                          />
+                          {qualities.map((q) => (
+                            <MenuOption
+                              key={q.label}
+                              label={q.label}
+                              selected={activeQuality === q.label}
+                              onSelect={() => {
+                                setQuality(q.label);
+                                setSettingsOpen(false);
+                              }}
+                            />
+                          ))}
+                          <p className="border-t border-white/10 px-3 py-2 text-[11px] leading-snug text-white/50">
+                            {qualities.map((q) => q.label).join(" / ")}
+                            {" "}files play when added by the server. If a quality
+                            file is not available, the player safely uses the
+                            original stream.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Picture-in-picture — floating OS window. */}
+          <button
+            type="button"
+            onClick={togglePip}
+            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+            aria-label="Picture-in-picture"
+            title="Picture-in-picture"
+          >
+            <PictureInPicture2 className="size-5" />
+          </button>
+
           {/* Mini hand-off */}
           <button
             type="button"
@@ -489,5 +716,91 @@ function MiniIcon() {
       <polyline points="5 12 5 19 19 19 19 12" />
       <rect x="12" y="5" width="7" height="5" rx="1" />
     </svg>
+  );
+}
+
+/* ------------------------- Settings menu pieces ------------------------- */
+
+function SettingsToggle({
+  icon,
+  label,
+  on,
+  onToggle,
+}: {
+  icon: ReactNode;
+  label: string;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10"
+    >
+      <span className="text-white/70">{icon}</span>
+      <span className="flex-1">{label}</span>
+      <span
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+          on ? "bg-primary" : "bg-white/20"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-all ${
+            on ? "left-[18px]" : "left-0.5"
+          }`}
+        />
+      </span>
+    </button>
+  );
+}
+
+function SettingsLink({
+  icon,
+  label,
+  value,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10"
+    >
+      <span className="text-white/70">{icon}</span>
+      <span className="flex-1">{label}</span>
+      <span className="flex items-center gap-1 text-xs font-medium text-white/70">
+        {value}
+        <ChevronRight className="size-3.5" />
+      </span>
+    </button>
+  );
+}
+
+function MenuOption({
+  label,
+  selected,
+  onSelect,
+}: {
+  label: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10 ${
+        selected ? "bg-primary/25 font-semibold text-primary" : ""
+      }`}
+    >
+      {label}
+      {selected && <span className="text-xs">✓</span>}
+    </button>
   );
 }

@@ -56,6 +56,25 @@ const schema = defineSchema(
       year: v.optional(v.number()),
       rating: v.optional(v.number()),
       kind: v.optional(v.union(v.literal("movie"), v.literal("series"))),
+      /** Extra quality renditions (480p / 720p / 1080p files). Viewers pick
+       *  one in the player; playback position is kept when switching. */
+      qualities: v.optional(
+        v.array(
+          v.object({
+            label: v.string(),
+            videoUrl: v.string(),
+          }),
+        ),
+      ),
+      /** Subtitle / caption tracks (WebVTT files) with a display label. */
+      subtitles: v.optional(
+        v.array(
+          v.object({
+            label: v.string(),
+            url: v.string(),
+          }),
+        ),
+      ),
       /** Ordered list of episodes/extra parts. Played from the playlist under
        *  the player on the movie page. */
       episodes: v.optional(

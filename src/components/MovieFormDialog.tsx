@@ -28,7 +28,7 @@ import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { movieCategoryNames } from "@/lib/categories";
 import { isShortLink } from "@/lib/shortlinks";
-import { X, Languages } from "lucide-react";
+import { X, Languages, MonitorPlay, Captions } from "lucide-react";
 
 const episodeSchema = z.object({
   title: z.string().min(1, "Episode title is required"),
@@ -49,6 +49,18 @@ const movieSchema = z.object({
     z.object({
       label: z.string().min(1, "Language label is required"),
       videoUrl: z.string().min(1, "Video URL is required"),
+    }),
+  ),
+  qualities: z.array(
+    z.object({
+      label: z.string().min(1, "Quality label is required"),
+      videoUrl: z.string().min(1, "Video URL is required"),
+    }),
+  ),
+  subtitles: z.array(
+    z.object({
+      label: z.string().min(1, "Subtitle label is required"),
+      url: z.string().min(1, "Subtitle file URL is required"),
     }),
   ),
 });
@@ -99,6 +111,8 @@ export default function MovieFormDialog({
     rating: "",
     episodes: [],
     dubs: [],
+    qualities: [],
+    subtitles: [],
   };
 
   const valuesFor = (m: Doc<"movies"> | null): MovieFormValues =>
@@ -119,6 +133,14 @@ export default function MovieFormDialog({
           dubs: (m.dubs ?? []).map((d) => ({
             label: d.label,
             videoUrl: d.videoUrl,
+          })),
+          qualities: (m.qualities ?? []).map((q) => ({
+            label: q.label,
+            videoUrl: q.videoUrl,
+          })),
+          subtitles: (m.subtitles ?? []).map((s) => ({
+            label: s.label,
+            url: s.url,
           })),
         }
       : emptyValues;
@@ -148,6 +170,24 @@ export default function MovieFormDialog({
     name: "dubs",
   });
 
+  const {
+    fields: qualityFields,
+    append: appendQuality,
+    remove: removeQuality,
+  } = useFieldArray({
+    control,
+    name: "qualities",
+  });
+
+  const {
+    fields: subtitleFields,
+    append: appendSubtitle,
+    remove: removeSubtitle,
+  } = useFieldArray({
+    control,
+    name: "subtitles",
+  });
+
   /* Every time the dialog opens, re-fill the form with THIS movie's current
      values — so editing only touches the fields you actually change and all
      the rest are saved back untouched. */
@@ -167,6 +207,8 @@ export default function MovieFormDialog({
       values.videoUrl,
       ...values.episodes.map((e) => e.videoUrl),
       ...values.dubs.map((d) => d.videoUrl),
+      ...values.qualities.map((q) => q.videoUrl),
+      ...values.subtitles.map((s) => s.url),
     ]
       .map((u) => (u ?? "").trim())
       .filter((u) => u.length > 0);
@@ -208,6 +250,20 @@ export default function MovieFormDialog({
           ? values.dubs.map((d) => ({
               label: d.label,
               videoUrl: clean(d.videoUrl) ?? "",
+            }))
+          : undefined,
+      qualities:
+        values.qualities.length > 0
+          ? values.qualities.map((q) => ({
+              label: q.label,
+              videoUrl: clean(q.videoUrl) ?? "",
+            }))
+          : undefined,
+      subtitles:
+        values.subtitles.length > 0
+          ? values.subtitles.map((s) => ({
+              label: s.label,
+              url: clean(s.url) ?? "",
             }))
           : undefined,
     };
@@ -388,6 +444,152 @@ export default function MovieFormDialog({
                         <p className="mt-1 text-xs text-destructive min-[420px]:pl-[38px]">
                           {errors.dubs[index]?.label?.message ??
                             errors.dubs[index]?.videoUrl?.message}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Quality renditions — 480p/720p/1080p files */}
+            <div className="space-y-3 rounded-xl border border-border/60 bg-secondary/30 p-3.5">
+              <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
+                <Label className="flex items-center gap-1.5">
+                  <MonitorPlay className="size-3.5 text-primary" />
+                  Quality versions ({qualityFields.length})
+                </Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => appendQuality({ label: "", videoUrl: "" })}
+                >
+                  <Plus className="size-3.5" />
+                  Add quality
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Optional. Add lower/higher resolution files (e.g. 480p, 720p,
+                1080p) — viewers pick one from the player's Quality menu.
+              </p>
+
+              {qualityFields.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border/60 p-3.5 text-center text-xs text-muted-foreground">
+                  No extra qualities yet — the main video plays for everyone.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {qualityFields.map((field, index) => (
+                    <div
+                      key={field.id}
+                      className="rounded-lg border border-border/50 bg-card/60 p-2.5"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                          <MonitorPlay className="size-3.5" />
+                        </span>
+                        <Input
+                          placeholder="Quality (e.g. 720p)"
+                          className="h-8 min-w-0 text-sm"
+                          {...register(`qualities.${index}.label` as const)}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 shrink-0 text-destructive hover:text-destructive"
+                          aria-label="Remove quality"
+                          onClick={() => removeQuality(index)}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </div>
+                      <div className="mt-1.5 flex min-[420px]:pl-[38px]">
+                        <Input
+                          placeholder="Video file for this quality (https://…/720p.mp4)"
+                          className="h-8 min-w-0 flex-1 text-sm"
+                          {...register(`qualities.${index}.videoUrl` as const)}
+                        />
+                      </div>
+                      {errors.qualities?.[index] && (
+                        <p className="mt-1 text-xs text-destructive min-[420px]:pl-[38px]">
+                          {errors.qualities[index]?.label?.message ??
+                            errors.qualities[index]?.videoUrl?.message}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Subtitle / caption tracks */}
+            <div className="space-y-3 rounded-xl border border-border/60 bg-secondary/30 p-3.5">
+              <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
+                <Label className="flex items-center gap-1.5">
+                  <Captions className="size-3.5 text-primary" />
+                  Subtitles ({subtitleFields.length})
+                </Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => appendSubtitle({ label: "", url: "" })}
+                >
+                  <Plus className="size-3.5" />
+                  Add subtitles
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Optional. Paste WebVTT (.vtt) file links with a display name —
+                viewers turn captions on from the player's Subtitles menu.
+              </p>
+
+              {subtitleFields.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border/60 p-3.5 text-center text-xs text-muted-foreground">
+                  No subtitle tracks yet — captions stay off by default.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {subtitleFields.map((field, index) => (
+                    <div
+                      key={field.id}
+                      className="rounded-lg border border-border/50 bg-card/60 p-2.5"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                          <Captions className="size-3.5" />
+                        </span>
+                        <Input
+                          placeholder="Name (e.g. English, Bengali)"
+                          className="h-8 min-w-0 text-sm"
+                          {...register(`subtitles.${index}.label` as const)}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 shrink-0 text-destructive hover:text-destructive"
+                          aria-label="Remove subtitles"
+                          onClick={() => removeSubtitle(index)}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </div>
+                      <div className="mt-1.5 flex min-[420px]:pl-[38px]">
+                        <Input
+                          placeholder=".vtt file URL (https://…/english.vtt)"
+                          className="h-8 min-w-0 flex-1 text-sm"
+                          {...register(`subtitles.${index}.url` as const)}
+                        />
+                      </div>
+                      {errors.subtitles?.[index] && (
+                        <p className="mt-1 text-xs text-destructive min-[420px]:pl-[38px]">
+                          {errors.subtitles[index]?.label?.message ??
+                            errors.subtitles[index]?.url?.message}
                         </p>
                       )}
                     </div>

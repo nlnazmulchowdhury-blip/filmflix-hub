@@ -88,6 +88,8 @@ export default function MovieDetail() {
         posterUrl: movie.posterUrl,
         backdropUrl: movie.backdropUrl,
         dubs: movie.dubs ?? [],
+        qualities: movie.qualities ?? [],
+        subtitles: movie.subtitles ?? [],
       },
       false,
     );
@@ -152,6 +154,9 @@ export default function MovieDetail() {
         videoUrl: item.videoUrl,
         posterUrl: movie.posterUrl,
         backdropUrl: movie.backdropUrl,
+        dubs: movie.dubs ?? [],
+        qualities: movie.qualities ?? [],
+        subtitles: movie.subtitles ?? [],
       },
       true,
     );
