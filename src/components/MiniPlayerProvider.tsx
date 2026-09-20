@@ -541,7 +541,10 @@ function VideoSurface({
         }}
         playsInline
         preload="metadata"
-        crossOrigin="anonymous"
+        /* No crossOrigin here: most video hosts do not send CORS headers,
+           and the attribute would make the browser refuse the video file
+           entirely. Subtitle <track>s still load CORS-anonymously on their
+           own, so captions keep working independently of the video. */
         onPlay={onPlay}
         onPause={onPause}
         onTimeUpdate={(e) =>
