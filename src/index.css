@@ -139,10 +139,10 @@ html:not(.dark) {
        position: sticky working. */
     overflow-x: clip;
   }
-  /* Installed PWA (Android/Chrome “standalone”): hide the page scrollbar so
-     the app fills the viewport edge-to-edge like a native app. Content still
-     scrolls normally — only the visual bar is hidden. */
-  @media (display-mode: standalone) {
+  /* Phones/tablets (touch screens) and the installed PWA: hide the page
+     scrollbar so the site looks like a native app everywhere on mobile.
+     Content still scrolls normally — only the visual bar is hidden. */
+  @media (display-mode: standalone), (pointer: coarse) {
     html {
       scrollbar-width: none;
     }
@@ -150,7 +150,19 @@ html:not(.dark) {
       display: none;
       width: 0;
     }
-    /* Native-app feel: stop rubber-banding at the top/bottom edges. */
+    /* Hide it inside inner scroll containers too (playlists, dialogs). */
+    * {
+      scrollbar-width: none;
+    }
+    *::-webkit-scrollbar {
+      display: none;
+      width: 0;
+      height: 0;
+    }
+  }
+  /* Installed PWA (Android/Chrome “standalone”) only: full native-app feel. */
+  @media (display-mode: standalone) {
+    /* Stop rubber-banding at the top/bottom edges. */
     html {
       overscroll-behavior-y: none;
     }
