@@ -46,15 +46,20 @@ export default function Checkout() {
   const navigate = useNavigate();
   const orders = useQuery(api.orders.listMine);
   const createOrder = useMutation(api.orders.create);
-  const [selected, setSelected] = useState<string>("premiere");
   const [isCheckingOut, setIsCheckingOut] = useState<string | null>(null);
+
+  // Only paid orders count as an active plan.
+  const hasPaidPlan = (planId: string) =>
+    orders?.some((o) => o.plan === planId && o.status === "paid") ?? false;
 
   const handleCheckout = async (planId: string) => {
     setIsCheckingOut(planId);
     try {
       await createOrder({ plan: planId });
       const planName = PLANS.find((p) => p.id === planId)?.name ?? planId;
-      toast.success(`${planName} plan activated for the team 🎉`);
+      toast.info(
+        `${planName} order placed — pending payment. An admin confirms payment before the plan is active.`,
+      );
       navigate("/dashboard");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Checkout failed");
@@ -117,7 +122,7 @@ export default function Checkout() {
 
         <div className="mt-10 grid gap-5 sm:grid-cols-2">
           {PLANS.map((plan) => {
-            const active = orders?.some((o) => o.plan === plan.id);
+            const active = hasPaidPlan(plan.id);
             return (
               <Card
                 key={plan.id}
@@ -178,8 +183,8 @@ export default function Checkout() {
         )}
 
         <p className="mt-6 text-center text-xs text-muted-foreground/70">
-          Demo checkout: plans are recorded instantly for the team. Real card
-          payments can be connected later.
+          Orders are recorded as pending until payment is confirmed by an
+          admin. Card payments can be connected later.
         </p>
       </main>
     </div>

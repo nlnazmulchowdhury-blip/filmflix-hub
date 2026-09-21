@@ -44,11 +44,10 @@ export default function Dashboard() {
   const watchlist = useQuery(api.watchlist.listMine);
   const removeFromWatchlist = useMutation(api.watchlist.remove);
 
-  const activePlan = myOrders?.[0]
-    ? myOrders[0].plan === "premiere"
-      ? "Premiere"
-      : "Crew"
-    : null;
+  // A plan only counts as active once its order is actually paid.
+  const paidPlan = myOrders?.find((o) => o.status === "paid")?.plan ?? null;
+  const activePlan =
+    paidPlan === "premiere" ? "Premiere" : paidPlan === "crew" ? "Crew" : null;
 
   const now = Date.now();
   const sortedScreenings = screenings

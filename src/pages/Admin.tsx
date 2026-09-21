@@ -43,6 +43,7 @@ import {
   X,
   Link2,
   Languages,
+  Check,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router";
@@ -65,6 +66,7 @@ function AdminContent() {
   const allScreenings = useQuery(api.screenings.listAll, isAdmin ? {} : "skip");
   const allComments = useQuery(api.comments.listAll, isAdmin ? {} : "skip");
   const allOrders = useQuery(api.orders.listAll, isAdmin ? {} : "skip");
+  const markOrderPaid = useMutation(api.orders.markPaid);
   const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
   const analytics = useQuery(api.analytics.summary, isAdmin ? {} : "skip");
 
@@ -1073,6 +1075,7 @@ function AdminContent() {
                           <TableHead>Plan</TableHead>
                           <TableHead>Amount</TableHead>
                           <TableHead className="hidden sm:table-cell">Status</TableHead>
+                          <TableHead>Action</TableHead>
                           <TableHead className="hidden md:table-cell">Date</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -1091,10 +1094,38 @@ function AdminContent() {
                             <TableCell className="hidden sm:table-cell">
                               <Badge
                                 variant="outline"
-                                className="border-emerald-500/40 bg-emerald-500/10 text-emerald-400 capitalize"
+                                className={
+                                  o.status === "paid"
+                                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 capitalize"
+                                    : "border-amber-500/40 bg-amber-500/10 text-amber-400 capitalize"
+                                }
                               >
                                 {o.status}
                               </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {o.status === "paid" ? (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="gap-1.5"
+                                  onClick={async () => {
+                                    try {
+                                      await markOrderPaid({ orderId: o._id });
+                                      toast.success("Order marked as paid");
+                                    } catch (err) {
+                                      toast.error(
+                                        err instanceof Error ? err.message : "Failed",
+                                      );
+                                    }
+                                  }}
+                                >
+                                  <Check className="size-3.5" />
+                                  Mark paid
+                                </Button>
+                              )}
                             </TableCell>
                             <TableCell className="hidden md:table-cell whitespace-nowrap">
                               {fmtDateTime(o.createdAt)}

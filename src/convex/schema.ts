@@ -140,8 +140,10 @@ const schema = defineSchema(
       userId: v.id("users"),
       plan: v.string(), // "crew" | "premiere"
       amountCents: v.number(),
+      /** "pending" until payment is confirmed; only then "paid". */
       status: v.string(),
       createdAt: v.number(),
+      paidAt: v.optional(v.number()),
     }).index("by_user", ["userId"]),
 
     /** Cache of resolved short links so we never resolve the same tinyurl /
