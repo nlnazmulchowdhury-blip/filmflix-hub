@@ -20,6 +20,7 @@ import type * as movies from "../movies.js";
 import type * as orders from "../orders.js";
 import type * as screenings from "../screenings.js";
 import type * as shortlinks from "../shortlinks.js";
+import type * as supabaseStorage from "../supabaseStorage.js";
 import type * as users from "../users.js";
 import type * as usersHelpers from "../usersHelpers.js";
 import type * as watchlist from "../watchlist.js";
@@ -43,6 +44,7 @@ declare const fullApi: ApiFromModules<{
   orders: typeof orders;
   screenings: typeof screenings;
   shortlinks: typeof shortlinks;
+  supabaseStorage: typeof supabaseStorage;
   users: typeof users;
   usersHelpers: typeof usersHelpers;
   watchlist: typeof watchlist;
