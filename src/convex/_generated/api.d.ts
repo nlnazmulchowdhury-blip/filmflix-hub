@@ -23,6 +23,7 @@ import type * as shortlinks from "../shortlinks.js";
 import type * as supabaseStorage from "../supabaseStorage.js";
 import type * as users from "../users.js";
 import type * as usersHelpers from "../usersHelpers.js";
+import type * as videoProxy from "../videoProxy.js";
 import type * as watchlist from "../watchlist.js";
 
 import type {
@@ -47,6 +48,7 @@ declare const fullApi: ApiFromModules<{
   supabaseStorage: typeof supabaseStorage;
   users: typeof users;
   usersHelpers: typeof usersHelpers;
+  videoProxy: typeof videoProxy;
   watchlist: typeof watchlist;
 }>;
 

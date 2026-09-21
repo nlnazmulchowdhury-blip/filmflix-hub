@@ -370,12 +370,16 @@ export default function MovieFormDialog({
               <Label htmlFor="videoUrl">Main video URL (mp4 link)</Label>
               <Input
                 id="videoUrl"
-                placeholder="https://…/movie.mp4"
+                placeholder="http://…/movie.mp4 or https://…"
                 {...register("videoUrl")}
               />
               <p className="text-xs text-muted-foreground">
                 The trailer or main feature. Shortener links (tinyurl/is.gd…)
                 are automatically resolved to the real video URL before saving.
+                Plain <code>http://</code> links (e.g. from a file server) are
+                served to users through the app's HTTPS proxy, so they play on
+                every network. FTP links (port 21) and LAN-only addresses
+                cannot be proxied.
               </p>
             </div>
 

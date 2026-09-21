@@ -22,6 +22,7 @@ import {
   type PlayerControls,
   type PlayerRotation,
 } from "./mini-player-context";
+import { convexSiteUrl, playableVideoUrl } from "@/lib/video-url";
 function formatTime(sec: number) {
   if (!Number.isFinite(sec)) return "0:00";
   const m = Math.floor(sec / 60);
@@ -142,7 +143,10 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       const m = movieRef.current;
       if (!el || !m) return;
       const dub = label ? (m.dubs ?? []).find((d) => d.label === label) : undefined;
-      const nextSrc = dub ? dub.videoUrl : m.videoUrl;
+      const nextSrc = playableVideoUrl(
+        dub ? dub.videoUrl : m.videoUrl,
+        convexSiteUrl(),
+      );
       if (!nextSrc || nextSrc === el.currentSrc || nextSrc === el.src) {
         setActiveDub(label);
         return;
@@ -159,7 +163,10 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     const m = movieRef.current;
     if (!el || !m) return;
     const q = label ? (m.qualities ?? []).find((x) => x.label === label) : undefined;
-    const nextSrc = q ? q.videoUrl : m.videoUrl;
+    const nextSrc = playableVideoUrl(
+      q ? q.videoUrl : m.videoUrl,
+      convexSiteUrl(),
+    );
     if (!nextSrc || nextSrc === el.currentSrc || nextSrc === el.src) {
       setActiveQuality(label);
       return;
@@ -348,7 +355,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
         createPortal(
           <VideoSurface
             videoRef={videoRef}
-            src={movie.videoUrl}
+            src={playableVideoUrl(movie.videoUrl, convexSiteUrl())}
             subtitles={movie.subtitles ?? []}
             activeSubtitle={activeSubtitle}
             nightMode={nightMode}
