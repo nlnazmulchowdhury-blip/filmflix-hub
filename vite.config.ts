@@ -4,9 +4,23 @@ import react from "@vitejs/plugin-react";
 import path from "path";
 import { defineConfig } from "vite";
 
+// The Convex dev CLI rewrites VITE_CONVEX_URL in .env.local to the loopback
+// address (127.0.0.1:3210) on every start. Loopback is unreachable from a
+// user's browser when the app is served through the workspace's public proxy,
+// which stalls every Convex call (login never resolves). PUBLIC_CONVEX_URL /
+// PUBLIC_CONVEX_SITE_URL are the externally reachable URLs; when set they win.
+const publicConvexUrl =
+  process.env.PUBLIC_CONVEX_URL ?? process.env.VITE_CONVEX_URL ?? "";
+const publicConvexSiteUrl =
+  process.env.PUBLIC_CONVEX_SITE_URL ?? process.env.VITE_CONVEX_SITE_URL ?? "";
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), vlyPlugin(), tailwindcss()],
+  define: {
+    "import.meta.env.VITE_CONVEX_URL": JSON.stringify(publicConvexUrl),
+    "import.meta.env.VITE_CONVEX_SITE_URL": JSON.stringify(publicConvexSiteUrl),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

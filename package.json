@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "convex dev --start \"vite\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -53,6 +53,7 @@
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.23.25",
+    "hls.js": "^1.7.3",
     "hono": "^4.10.7",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.555.0",

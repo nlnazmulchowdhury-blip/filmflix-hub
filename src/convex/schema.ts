@@ -182,6 +182,16 @@ const schema = defineSchema(
       .index("by_path", ["path"])
       .index("by_movie", ["movieId"]),
 
+    /** Live TV channels: name, logo, and stream/page URL added by admins
+     *  from the admin panel; shown on the /tv page. */
+    tvChannels: defineTable({
+      name: v.string(),
+      logoUrl: v.optional(v.string()),
+      streamUrl: v.string(),
+      order: v.optional(v.number()),
+      createdAt: v.number(),
+    }).index("by_order", ["order"]),
+
     /** A user's saved-for-later movies (watchlist). One row per
      *  user+movie pair. */
     watchlist: defineTable({

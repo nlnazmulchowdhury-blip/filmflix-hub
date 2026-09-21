@@ -20,6 +20,7 @@ const MovieDetail = lazy(() => import("./pages/MovieDetail.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Checkout = lazy(() => import("./pages/Checkout.tsx"));
 const Admin = lazy(() => import("./pages/Admin.tsx"));
+const Tv = lazy(() => import("./pages/Tv.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 // Branded loading fallback for route transitions — mirrors the boot splash.
@@ -180,7 +181,15 @@ createRoot(document.getElementById("root")!).render(
                   </RequireAuth>
                 }
               />
-              <Route path="/nazmul" element={<Admin />} />
+              <Route path="/tv" element={<Tv />} />
+              <Route
+                path="/nazmul"
+                element={
+                  <RequireAuth>
+                    <Admin />
+                  </RequireAuth>
+                }
+              />
               <Route path="*" element={<NotFound />} />
             </Routes>
             </PageFade>

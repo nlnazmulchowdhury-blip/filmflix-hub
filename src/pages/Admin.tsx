@@ -44,6 +44,7 @@ import {
   Link2,
   Languages,
   Check,
+  Tv,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router";
@@ -105,6 +106,15 @@ function AdminContent() {
   const [movieSearch, setMovieSearch] = useState("");
   const [newCategoryName, setNewCategoryName] = useState("");
   const [isAddingCategory, setIsAddingCategory] = useState(false);
+
+  /* Live TV channels — add/remove logo + stream URL, shown on /tv */
+  const tvChannels = useQuery(api.tvChannels.list);
+  const addTvChannel = useMutation(api.tvChannels.add);
+  const removeTvChannel = useMutation(api.tvChannels.remove);
+  const [tvName, setTvName] = useState("");
+  const [tvLogo, setTvLogo] = useState("");
+  const [tvUrl, setTvUrl] = useState("");
+  const [isAddingTv, setIsAddingTv] = useState(false);
 
   /* Admin catalog search: matches title, description, categories, year, kind —
      every word must appear somewhere, forgiving of order and punctuation. */
@@ -421,6 +431,9 @@ function AdminContent() {
                 </TabsTrigger>
                 <TabsTrigger value="analytics" className="gap-1.5">
                   <BarChart3 className="size-3.5" /> Analytics
+                </TabsTrigger>
+                <TabsTrigger value="tv" className="gap-1.5">
+                  <Tv className="size-3.5" /> TV
                 </TabsTrigger>
               </TabsList>
               </div>
@@ -1286,6 +1299,162 @@ function AdminContent() {
                     </div>
                   </div>
                 )}
+              </TabsContent>
+
+              {/* Live TV channels */}
+              <TabsContent value="tv">
+                <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
+                  {/* Add form */}
+                  <Card className="h-fit border-border/60 bg-card/60">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="font-display flex items-center gap-2 text-base">
+                        <Plus className="size-4 text-primary" /> Add TV channel
+                      </CardTitle>
+                      <CardDescription>
+                        Shown on the public /tv page. HLS (.m3u8) and MP4 links
+                        play in the built-in player; other links open in a new
+                        tab.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="space-y-1.5">
+                        <label htmlFor="tv-name" className="text-xs font-medium text-muted-foreground">
+                          Channel name
+                        </label>
+                        <Input
+                          id="tv-name"
+                          value={tvName}
+                          onChange={(e) => setTvName(e.target.value)}
+                          placeholder="e.g. Sony Entertainment TV"
+                          maxLength={80}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label htmlFor="tv-logo" className="text-xs font-medium text-muted-foreground">
+                          Logo URL (optional)
+                        </label>
+                        <Input
+                          id="tv-logo"
+                          value={tvLogo}
+                          onChange={(e) => setTvLogo(e.target.value)}
+                          placeholder="https://…/logo.png"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label htmlFor="tv-url" className="text-xs font-medium text-muted-foreground">
+                          Stream URL
+                        </label>
+                        <Input
+                          id="tv-url"
+                          value={tvUrl}
+                          onChange={(e) => setTvUrl(e.target.value)}
+                          placeholder="https://…/stream.m3u8"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        className="w-full"
+                        disabled={isAddingTv || !tvName.trim() || !tvUrl.trim()}
+                        onClick={async () => {
+                          setIsAddingTv(true);
+                          try {
+                            await addTvChannel({
+                              name: tvName.trim(),
+                              logoUrl: tvLogo.trim() || undefined,
+                              streamUrl: tvUrl.trim(),
+                            });
+                            toast.success(`Channel “${tvName.trim()}” added`);
+                            setTvName("");
+                            setTvLogo("");
+                            setTvUrl("");
+                          } catch (err) {
+                            toast.error(
+                              err instanceof Error ? err.message : "Failed to add channel",
+                            );
+                          } finally {
+                            setIsAddingTv(false);
+                          }
+                        }}
+                      >
+                        {isAddingTv && <Loader2 className="size-4 animate-spin" />}
+                        Add channel
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  {/* Channel list */}
+                  <Card className="border-border/60 bg-card/60">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="font-display text-base">
+                        Channels ({tvChannels?.length ?? 0})
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {!tvChannels ? (
+                        <div className="space-y-2">
+                          {Array.from({ length: 4 }).map((_, i) => (
+                            <Skeleton key={i} className="h-14 w-full rounded-lg" />
+                          ))}
+                        </div>
+                      ) : tvChannels.length === 0 ? (
+                        <p className="py-8 text-center text-sm text-muted-foreground">
+                          No channels yet — add the first one with the form.
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {tvChannels.map((c) => (
+                            <div
+                              key={c._id}
+                              className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/40 p-2.5"
+                            >
+                              <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted">
+                                {c.logoUrl ? (
+                                  <img
+                                    src={c.logoUrl}
+                                    alt=""
+                                    loading="lazy"
+                                    className="max-h-full max-w-full object-contain"
+                                  />
+                                ) : (
+                                  <Tv className="size-4 text-muted-foreground" />
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-semibold">{c.name}</p>
+                                <p className="truncate text-xs text-muted-foreground">
+                                  {c.streamUrl}
+                                </p>
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="size-8 shrink-0"
+                                onClick={() => window.open(c.streamUrl, "_blank", "noopener,noreferrer")}
+                                aria-label={`Test ${c.name} stream`}
+                                title="Test stream"
+                              >
+                                <Link2 className="size-3.5" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="size-8 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                onClick={() => {
+                                  if (window.confirm(`Delete channel “${c.name}”?`)) {
+                                    removeTvChannel({ id: c._id });
+                                  }
+                                }}
+                                aria-label={`Delete ${c.name}`}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
               </TabsContent>
             </Tabs>
           </>

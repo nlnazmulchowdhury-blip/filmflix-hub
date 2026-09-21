@@ -114,8 +114,9 @@ export default function Landing() {
         <div className="absolute bottom-[10%] left-[-12%] h-[300px] w-[400px] rounded-full bg-chart-2/10 blur-[120px]" />
       </div>
 
-      {/* Ad slot: wide skyscraper — fixed side rail (auto-fit, never cut). */}
+      {/* Ad slot: wide skyscraper — fixed side rails (auto-fit, never cut). */}
       <AdSideRail side="left" breakpoint="wide" />
+      <AdSideRail side="right" breakpoint="wide" />
 
       {/* Header */}
       <header className="sticky top-0 z-40 glass-panel border-b">
@@ -134,6 +135,9 @@ export default function Landing() {
               className={navLinkClass}
             >
               Library
+            </Link>
+            <Link to="/tv" className={navLinkClass}>
+              TV
             </Link>
           </nav>
           <div className="flex items-center gap-0.5 sm:gap-2">
