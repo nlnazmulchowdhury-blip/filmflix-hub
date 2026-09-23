@@ -2,25 +2,48 @@ import { vlyPlugin } from "@vly-ai/integrations";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 
 // The Convex dev CLI rewrites VITE_CONVEX_URL in .env.local to the loopback
 // address (127.0.0.1:3210) on every start. Loopback is unreachable from a
 // user's browser when the app is served through the workspace's public proxy,
 // which stalls every Convex call (login never resolves). PUBLIC_CONVEX_URL /
 // PUBLIC_CONVEX_SITE_URL are the externally reachable URLs; when set they win.
-const publicConvexUrl =
-  process.env.PUBLIC_CONVEX_URL ?? process.env.VITE_CONVEX_URL ?? "";
-const publicConvexSiteUrl =
-  process.env.PUBLIC_CONVEX_SITE_URL ?? process.env.VITE_CONVEX_SITE_URL ?? "";
+//
+// These must come from loadEnv (the .env files), not bare process.env: a
+// production build host sets neither in its shell, and an empty-string define
+// here overrides the real value baked in by Vite's own env handling — the
+// shipped bundle then crashes with
+// "Error: Provided address was not an absolute URL." (blank page).
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const publicConvexUrl =
+    process.env.PUBLIC_CONVEX_URL ??
+    process.env.VITE_CONVEX_URL ??
+    env.VITE_CONVEX_URL ??
+    "";
+  const publicConvexSiteUrl =
+    process.env.PUBLIC_CONVEX_SITE_URL ??
+    process.env.VITE_CONVEX_SITE_URL ??
+    env.VITE_CONVEX_SITE_URL ??
+    "";
+  // Only override when a value actually exists — an empty-string define
+  // clobbers whatever Vite would otherwise bake in from the build host's
+  // own environment (.env files or injected variables).
+  const convexDefines: Record<string, string> = {};
+  if (publicConvexUrl) {
+    convexDefines["import.meta.env.VITE_CONVEX_URL"] =
+      JSON.stringify(publicConvexUrl);
+  }
+  if (publicConvexSiteUrl) {
+    convexDefines["import.meta.env.VITE_CONVEX_SITE_URL"] =
+      JSON.stringify(publicConvexSiteUrl);
+  }
 
 // https://vite.dev/config/
-export default defineConfig({
+  return {
   plugins: [react(), vlyPlugin(), tailwindcss()],
-  define: {
-    "import.meta.env.VITE_CONVEX_URL": JSON.stringify(publicConvexUrl),
-    "import.meta.env.VITE_CONVEX_SITE_URL": JSON.stringify(publicConvexSiteUrl),
-  },
+  define: convexDefines,
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -111,4 +134,5 @@ export default defineConfig({
       overlay: false,
     },
   },
+  };
 });
