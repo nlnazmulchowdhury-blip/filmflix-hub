@@ -17,16 +17,21 @@ import { defineConfig, loadEnv } from "vite";
 // "Error: Provided address was not an absolute URL." (blank page).
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const publicConvexUrl =
-    process.env.PUBLIC_CONVEX_URL ??
-    process.env.VITE_CONVEX_URL ??
-    env.VITE_CONVEX_URL ??
-    "";
-  const publicConvexSiteUrl =
-    process.env.PUBLIC_CONVEX_SITE_URL ??
-    process.env.VITE_CONVEX_SITE_URL ??
-    env.VITE_CONVEX_SITE_URL ??
-    "";
+  // Treat empty strings as unset: hosting platforms often carry a stale
+  // VITE_CONVEX_URL="" from the template's .env.example, and `??` would
+  // happily return that empty value instead of falling through.
+  const firstNonEmpty = (...values: (string | undefined)[]) =>
+    values.find((v) => v && v.trim() !== "") ?? "";
+  const publicConvexUrl = firstNonEmpty(
+    process.env.PUBLIC_CONVEX_URL,
+    process.env.VITE_CONVEX_URL,
+    env.VITE_CONVEX_URL,
+  );
+  const publicConvexSiteUrl = firstNonEmpty(
+    process.env.PUBLIC_CONVEX_SITE_URL,
+    process.env.VITE_CONVEX_SITE_URL,
+    env.VITE_CONVEX_SITE_URL,
+  );
   // Only override when a value actually exists — an empty-string define
   // clobbers whatever Vite would otherwise bake in from the build host's
   // own environment (.env files or injected variables).
