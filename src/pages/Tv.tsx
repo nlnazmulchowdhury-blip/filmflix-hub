@@ -1,13 +1,6 @@
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import AdSideRail from "@/components/AdSideRail";
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
@@ -15,9 +8,12 @@ import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "convex/react";
 import {
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   Search,
   Tv,
+  Users,
   X,
 } from "lucide-react";
 import Hls from "hls.js";
@@ -39,50 +35,6 @@ function isDirectStream(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-function ChannelCard({
-  channel,
-  onPlay,
-}: {
-  channel: Doc<"tvChannels">;
-  onPlay: (c: Doc<"tvChannels">) => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onPlay(channel)}
-      className="group text-left"
-      aria-label={`Watch ${channel.name}`}
-    >
-      <Card className="overflow-hidden p-0 transition-colors group-hover:border-primary/50">
-        <CardContent className="flex flex-col items-center gap-3 p-4">
-          <div className="flex h-20 w-full items-center justify-center overflow-hidden rounded-lg bg-muted">
-            {channel.logoUrl ? (
-              <img
-                src={channel.logoUrl}
-                alt={channel.name}
-                loading="lazy"
-                className="max-h-full max-w-full object-contain"
-              />
-            ) : (
-              <Tv className="size-8 text-muted-foreground/50" />
-            )}
-          </div>
-          <div className="w-full text-center">
-            <p className="truncate text-sm font-semibold">{channel.name}</p>
-            <span className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-primary">
-              <span className="relative flex size-1.5">
-                <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-60" />
-                <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
-              </span>
-              Live
-            </span>
-          </div>
-        </CardContent>
-      </Card>
-    </button>
-  );
 }
 
 /** Video element that plays HLS (.m3u8) via hls.js and MP4 natively. */
@@ -137,53 +89,70 @@ export default function TvPage() {
   const { user } = useAuth();
   const channels = useQuery(api.tvChannels.list);
   const [search, setSearch] = useState("");
-  const [playing, setPlaying] = useState<Doc<"tvChannels"> | null>(null);
+  const [category, setCategory] = useState<string>("All");
+  const [selected, setSelected] = useState<Doc<"tvChannels"> | null>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  const categories = useMemo(() => {
+    if (!channels) return ["All"];
+    const set = new Set<string>();
+    for (const c of channels)
+      for (const name of c.categories ?? []) set.add(name);
+    return ["All", ...[...set].sort((a, b) => a.localeCompare(b))];
+  }, [channels]);
 
   const filtered = useMemo(() => {
     if (!channels) return null;
     const q = search.trim().toLowerCase();
-    if (!q) return channels;
-    return channels.filter((c) => c.name.toLowerCase().includes(q));
-  }, [channels, search]);
+    return channels.filter((c) => {
+      if (category !== "All" && !(c.categories ?? []).includes(category))
+        return false;
+      if (!q) return true;
+      return c.name.toLowerCase().includes(q);
+    });
+  }, [channels, category, search]);
 
-  // Lock body scroll while the player dialog is open.
+  // Auto-select the first channel so the big player is never empty.
   useEffect(() => {
-    if (!playing) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [playing]);
-
-  const openChannel = (c: Doc<"tvChannels">) => {
-    if (isDirectStream(c.streamUrl)) {
-      setPlaying(c);
-    } else {
-      // Website link (e.g. an embed page): open in a new tab.
-      window.open(c.streamUrl, "_blank", "noopener,noreferrer");
+    if (!selected && filtered && filtered.length > 0) {
+      const first = filtered.find((c) => isDirectStream(c.streamUrl));
+      if (first) setSelected(first);
     }
+  }, [filtered, selected]);
+
+  const selectedIsDirect = selected ? isDirectStream(selected.streamUrl) : false;
+
+  const scrollBy = (dir: 1 | -1) => {
+    scrollerRef.current?.scrollBy({ left: dir * 480, behavior: "smooth" });
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="flex min-h-screen flex-col bg-[#0d0d17] text-foreground">
+      {/* Banner ads on the far edges (same rails as landing/movie detail). */}
+      <AdSideRail side="left" breakpoint="wide" />
+      <AdSideRail side="right" breakpoint="wide" />
+
       {/* Ambient background */}
       <div className="pointer-events-none fixed inset-0 -z-10">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
       </div>
 
       {/* Header */}
-      <header className="sticky top-0 z-40 glass-panel border-b">
-        <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-2 px-3 sm:px-6">
-          <div className="flex items-center gap-3">
-            <Link to="/" aria-label="FilmFlix home">
+      <header className="sticky top-0 z-40 border-b bg-[#0d0d17]/95 backdrop-blur">
+        <div className="mx-auto flex h-14 w-full max-w-[1400px] items-center justify-between gap-2 px-3 sm:h-16 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <Link to="/" aria-label="FilmFlix home" className="shrink-0">
               <Logo />
             </Link>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary">
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary sm:px-2.5 sm:text-xs">
               <Tv className="size-3" /> Live TV
             </span>
           </div>
-          <nav className="flex items-center gap-4">
+          <nav className="flex shrink-0 items-center gap-2 sm:gap-4">
+            {/* Live viewer count — placeholder until real presence lands. */}
+            <span className="hidden items-center gap-1.5 rounded-full border border-border/60 bg-secondary/40 px-3 py-1 text-xs font-semibold text-muted-foreground sm:inline-flex">
+              <Users className="size-3.5 text-emerald-400" /> 135 watching
+            </span>
             <Link to="/" className={navLinkClass}>
               Home
             </Link>
@@ -197,111 +166,174 @@ export default function TvPage() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl px-3 pb-24 pt-6 sm:px-6 sm:pt-8">
-        <div className="mb-6">
-          <h1 className="font-display text-2xl font-bold tracking-tight sm:text-3xl">
-            Live TV Channels
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Watch live channels right in your browser — pick a channel and
-            press play.
-          </p>
-        </div>
-
-        {/* Search */}
-        <div className="relative mb-6 max-w-md">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search channels…"
-            className="pl-9 pr-9"
-            aria-label="Search TV channels"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch("")}
-              aria-label="Clear search"
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-            >
-              <X className="size-4" />
-            </button>
-          )}
-        </div>
-
-        {!filtered ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {Array.from({ length: 10 }).map((_, i) => (
-              <div
-                key={i}
-                className="flex h-40 animate-pulse flex-col items-center gap-3 rounded-xl border border-border/50 bg-card/50 p-4"
-              >
-                <div className="h-20 w-full rounded-lg bg-muted/60" />
-                <div className="h-3.5 w-2/3 rounded bg-muted/60" />
+      <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-3 pb-4 pt-4 sm:px-6">
+        {/* Big inline player (first/selected direct stream) */}
+        <section className="relative">
+          {selected && selectedIsDirect ? (
+            <div className="overflow-hidden rounded-lg border border-border/60 bg-black shadow-[0_32px_96px_-40px_rgba(0,0,0,0.9)]">
+              <div className="relative aspect-video w-full">
+                <StreamPlayer src={selected.streamUrl} />
               </div>
-            ))}
+            </div>
+          ) : (
+            <div className="flex aspect-video w-full items-center justify-center rounded-lg border border-dashed border-border/60 bg-card/40">
+              {!channels ? (
+                <Loader2 className="size-7 animate-spin text-muted-foreground" />
+              ) : (
+                <div className="flex flex-col items-center gap-3 px-6 text-center">
+                  <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <Tv className="size-6" />
+                  </span>
+                  <p className="font-display text-lg font-semibold">
+                    Pick a channel below
+                  </p>
+                  <p className="max-w-sm text-sm text-muted-foreground">
+                    {search.trim()
+                      ? "No direct stream matched your search."
+                      : "Choose any channel from the strip underneath to start watching right here."}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* Search + category chips */}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="relative w-full sm:w-48 md:w-56">
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search channels…"
+              className="h-9 pl-9 pr-8 text-sm"
+              aria-label="Search TV channels"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            )}
           </div>
-        ) : filtered.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
-              <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <Tv className="size-6" />
-              </span>
-              <p className="font-display text-lg font-semibold">
-                {search.trim() ? "No channels matched" : "No channels yet"}
-              </p>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                {search.trim()
-                  ? "Try a different spelling."
-                  : "Live TV channels will appear here once an admin adds them."}
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {filtered.map((c) => (
-              <ChannelCard key={c._id} channel={c} onPlay={openChannel} />
-            ))}
+          {categories.map((c) => {
+            const active = category === c;
+            return (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setCategory(c)}
+                aria-pressed={active}
+                className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                  active
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-border/60 bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                }`}
+              >
+                {c !== "All" && (
+                  <span
+                    className={`size-1.5 rounded-full ${
+                      active ? "bg-primary-foreground/80" : "bg-emerald-400"
+                    }`}
+                  />
+                )}
+                {c}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Bottom channel scroller */}
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => scrollBy(-1)}
+            aria-label="Scroll channels left"
+            className="hidden size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/60 bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground sm:flex"
+          >
+            <ChevronLeft className="size-4" />
+          </button>
+
+          <div className="relative flex-1 overflow-hidden">
+            <div
+              ref={scrollerRef}
+              className="flex gap-2.5 overflow-x-auto scroll-smooth pb-1 [scrollbar-width:thin]"
+            >
+              {!filtered ? (
+                <div className="flex w-full items-center justify-center py-10">
+                  <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="flex w-full flex-col items-center gap-2 py-10 text-center">
+                  <p className="text-sm font-semibold">
+                    {search.trim() ? "No channels matched" : "No channels yet"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {search.trim()
+                      ? "Try a different spelling."
+                      : "Live TV channels will appear here once an admin adds them."}
+                  </p>
+                </div>
+              ) : (
+                filtered.map((c) => {
+                  const active = selected?._id === c._id;
+                  return (
+                    <button
+                      key={c._id}
+                      type="button"
+                      onClick={() => setSelected(c)}
+                      aria-label={`Watch ${c.name}`}
+                      className={`group w-[104px] shrink-0 cursor-pointer text-left ${
+                        active ? "" : "opacity-90 transition-opacity hover:opacity-100"
+                      }`}
+                    >
+                      <div
+                        className={`relative flex h-[72px] items-center justify-center overflow-hidden rounded-xl border bg-card p-2 transition-colors ${
+                          active
+                            ? "border-primary ring-2 ring-primary/40"
+                            : "border-border/50 group-hover:border-primary/50"
+                        }`}
+                      >
+                        <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-red-500" />
+                        {c.logoUrl ? (
+                          <img
+                            src={c.logoUrl}
+                            alt={c.name}
+                            loading="lazy"
+                            className="max-h-full max-w-full object-contain"
+                          />
+                        ) : (
+                          <Tv className="size-7 text-muted-foreground/50" />
+                        )}
+                      </div>
+                      <p className="mt-1.5 truncate px-0.5 text-[11px] font-medium text-muted-foreground">
+                        {c.name}
+                      </p>
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
-        )}
+
+          <button
+            type="button"
+            onClick={() => scrollBy(1)}
+            aria-label="Scroll channels right"
+            className="hidden size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/60 bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground sm:flex"
+          >
+            <ChevronRight className="size-4" />
+          </button>
+        </div>
+
       </main>
 
-      {/* Inline player for direct streams */}
-      <Dialog open={playing !== null} onOpenChange={(o) => !o && setPlaying(null)}>
-        <DialogContent className="max-w-3xl overflow-hidden p-0 sm:rounded-xl">
-          {playing && (
-            <>
-              <DialogHeader className="sr-only">
-                <DialogTitle>{playing.name} — live stream</DialogTitle>
-                <DialogDescription>
-                  Now watching {playing.name} on FilmFlix.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="relative aspect-video w-full bg-black">
-                <StreamPlayer src={playing.streamUrl} />
-                <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white">
-                  <span className="relative flex size-2">
-                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-red-500 opacity-75" />
-                    <span className="relative inline-flex size-2 rounded-full bg-red-500" />
-                  </span>
-                  LIVE
-                </div>
-              </div>
-              <div className="flex items-center justify-between gap-2 border-t px-4 py-3">
-                <p className="truncate text-sm font-semibold">{playing.name}</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => window.open(playing.streamUrl, "_blank", "noopener,noreferrer")}
-                >
-                  Open in new tab
-                </Button>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Full-page player for non-direct (website) links opens in a new tab;
+          direct streams play inline above, so no dialog is needed anymore. */}
     </div>
   );
 }

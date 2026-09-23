@@ -188,6 +188,8 @@ const schema = defineSchema(
       name: v.string(),
       logoUrl: v.optional(v.string()),
       streamUrl: v.string(),
+      /** Category chips on the /tv page (e.g. Sports, Bangla, News). */
+      categories: v.optional(v.array(v.string())),
       order: v.optional(v.number()),
       createdAt: v.number(),
     }).index("by_order", ["order"]),

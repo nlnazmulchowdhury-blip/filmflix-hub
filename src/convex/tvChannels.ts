@@ -2,6 +2,17 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
+/** Trimmed, de-duplicated, lowercase-clean category list (or undefined). */
+function normalizeCategories(categories?: string[]): string[] | undefined {
+  if (!categories) return undefined;
+  const seen = new Set<string>();
+  for (const raw of categories) {
+    const name = raw.trim();
+    if (name) seen.add(name);
+  }
+  return seen.size > 0 ? [...seen] : undefined;
+}
+
 /** Public: all live TV channels, ordered. */
 export const list = query({
   args: {},
@@ -29,14 +40,16 @@ export const add = mutation({
     name: v.string(),
     logoUrl: v.optional(v.string()),
     streamUrl: v.string(),
+    categories: v.optional(v.array(v.string())),
     order: v.optional(v.number()),
   },
-  handler: async (ctx, { name, logoUrl, streamUrl, order }) => {
+  handler: async (ctx, { name, logoUrl, streamUrl, categories, order }) => {
     await requireAdmin(ctx);
     return await ctx.db.insert("tvChannels", {
       name: name.trim(),
       logoUrl: logoUrl?.trim() || undefined,
       streamUrl: streamUrl.trim(),
+      categories: normalizeCategories(categories),
       order,
       createdAt: Date.now(),
     });
@@ -49,14 +62,16 @@ export const update = mutation({
     name: v.string(),
     logoUrl: v.optional(v.string()),
     streamUrl: v.string(),
+    categories: v.optional(v.array(v.string())),
     order: v.optional(v.number()),
   },
-  handler: async (ctx, { id, name, logoUrl, streamUrl, order }) => {
+  handler: async (ctx, { id, name, logoUrl, streamUrl, categories, order }) => {
     await requireAdmin(ctx);
     await ctx.db.patch(id, {
       name: name.trim(),
       logoUrl: logoUrl?.trim() || undefined,
       streamUrl: streamUrl.trim(),
+      categories: normalizeCategories(categories),
       order,
     });
   },

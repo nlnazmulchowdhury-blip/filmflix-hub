@@ -114,6 +114,7 @@ function AdminContent() {
   const [tvName, setTvName] = useState("");
   const [tvLogo, setTvLogo] = useState("");
   const [tvUrl, setTvUrl] = useState("");
+  const [tvCategories, setTvCategories] = useState("");
   const [isAddingTv, setIsAddingTv] = useState(false);
 
   /* Admin catalog search: matches title, description, categories, year, kind —
@@ -1351,6 +1352,17 @@ function AdminContent() {
                           placeholder="https://…/stream.m3u8"
                         />
                       </div>
+                      <div className="space-y-1.5">
+                        <label htmlFor="tv-categories" className="text-xs font-medium text-muted-foreground">
+                          Categories (comma-separated)
+                        </label>
+                        <Input
+                          id="tv-categories"
+                          value={tvCategories}
+                          onChange={(e) => setTvCategories(e.target.value)}
+                          placeholder="Sports, Bangla, News"
+                        />
+                      </div>
                       <Button
                         type="button"
                         className="w-full"
@@ -1362,11 +1374,16 @@ function AdminContent() {
                               name: tvName.trim(),
                               logoUrl: tvLogo.trim() || undefined,
                               streamUrl: tvUrl.trim(),
+                              categories: tvCategories
+                                .split(",")
+                                .map((s) => s.trim())
+                                .filter(Boolean),
                             });
                             toast.success(`Channel “${tvName.trim()}” added`);
                             setTvName("");
                             setTvLogo("");
                             setTvUrl("");
+                            setTvCategories("");
                           } catch (err) {
                             toast.error(
                               err instanceof Error ? err.message : "Failed to add channel",
