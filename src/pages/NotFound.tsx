@@ -7,7 +7,7 @@ import { Link } from "react-router";
 export default function NotFound() {
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
-      <div className="pointer-events-none fixed inset-0 -z-10">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/10 blur-[130px]" />
       </div>
 

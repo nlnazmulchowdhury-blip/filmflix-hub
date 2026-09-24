@@ -108,7 +108,7 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Ambient background */}
-      <div className="pointer-events-none fixed inset-0 -z-10">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[520px] w-[820px] -translate-x-1/2 rounded-full bg-primary/14 blur-[140px]" />
         <div className="absolute bottom-[-10%] right-[-10%] h-[380px] w-[520px] rounded-full bg-primary/8 blur-[120px]" />
         <div className="absolute bottom-[10%] left-[-12%] h-[300px] w-[400px] rounded-full bg-chart-2/10 blur-[120px]" />

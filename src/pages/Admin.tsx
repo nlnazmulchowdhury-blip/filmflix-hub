@@ -12,6 +12,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import Logo from "@/components/Logo";
 import MovieFormDialog from "@/components/MovieFormDialog";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -110,12 +118,22 @@ function AdminContent() {
   /* Live TV channels — add/remove logo + stream URL, shown on /tv */
   const tvChannels = useQuery(api.tvChannels.list);
   const addTvChannel = useMutation(api.tvChannels.add);
+  const updateTvChannel = useMutation(api.tvChannels.update);
   const removeTvChannel = useMutation(api.tvChannels.remove);
   const [tvName, setTvName] = useState("");
   const [tvLogo, setTvLogo] = useState("");
   const [tvUrl, setTvUrl] = useState("");
   const [tvCategories, setTvCategories] = useState("");
   const [isAddingTv, setIsAddingTv] = useState(false);
+
+  /* Edit-TV-channel dialog state (form is pre-filled from the channel). */
+  const [editingTv, setEditingTv] = useState<Doc<"tvChannels"> | null>(null);
+  const [isSavingTv, setIsSavingTv] = useState(false);
+  const [editTvName, setEditTvName] = useState("");
+  const [editTvLogo, setEditTvLogo] = useState("");
+  const [editTvUrl, setEditTvUrl] = useState("");
+  const [editTvCategories, setEditTvCategories] = useState("");
+  const [editTvOrder, setEditTvOrder] = useState("");
 
   /* Admin catalog search: matches title, description, categories, year, kind —
      every word must appear somewhere, forgiving of order and punctuation. */
@@ -144,6 +162,41 @@ function AdminContent() {
       toast.error(err instanceof Error ? err.message : "Failed to create category");
     } finally {
       setIsAddingCategory(false);
+    }
+  };
+
+  const openEditTv = (c: Doc<"tvChannels">) => {
+    setEditingTv(c);
+    setEditTvName(c.name);
+    setEditTvLogo(c.logoUrl ?? "");
+    setEditTvUrl(c.streamUrl);
+    setEditTvCategories((c.categories ?? []).join(", "));
+    setEditTvOrder(c.order != null ? String(c.order) : "");
+  };
+
+  const handleSaveTv = async () => {
+    if (!editingTv) return;
+    setIsSavingTv(true);
+    try {
+      await updateTvChannel({
+        id: editingTv._id,
+        name: editTvName.trim(),
+        logoUrl: editTvLogo.trim() || undefined,
+        streamUrl: editTvUrl.trim(),
+        categories: editTvCategories
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+        order: editTvOrder.trim() === "" ? undefined : Number(editTvOrder.trim()),
+      });
+      toast.success(`Channel "${editTvName.trim()}" updated`);
+      setEditingTv(null);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to update channel",
+      );
+    } finally {
+      setIsSavingTv(false);
     }
   };
 
@@ -248,7 +301,7 @@ function AdminContent() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="pointer-events-none fixed inset-0 -z-10">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/8 blur-[130px]" />
       </div>
 
@@ -414,7 +467,7 @@ function AdminContent() {
             <Tabs defaultValue="movies" className="mt-6 sm:mt-8">
               {/* Horizontally scrollable on phones — all five tabs stay reachable. */}
               <div className="-mx-3 overflow-x-auto px-3 pb-1 sm:mx-0 sm:overflow-visible sm:px-0">
-              <TabsList className="flex w-max min-w-full gap-1 bg-card/60 sm:w-auto">
+              <TabsList className="flex w-max min-w-full gap-1 bg-card/60 sm:w-auto sm:flex-wrap">
                 <TabsTrigger value="movies" className="gap-1.5">
                   <Film className="size-3.5" /> Movies
                 </TabsTrigger>
@@ -1422,7 +1475,7 @@ function AdminContent() {
                           {tvChannels.map((c) => (
                             <div
                               key={c._id}
-                              className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/40 p-2.5"
+                              className="flex flex-col gap-3 rounded-lg border border-border/50 bg-background/40 p-2.5 sm:flex-row sm:items-center"
                             >
                               <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted">
                                 {c.logoUrl ? (
@@ -1442,20 +1495,31 @@ function AdminContent() {
                                   {c.streamUrl}
                                 </p>
                               </div>
+                              <div className="flex w-full gap-1.5 sm:w-auto">
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  className="size-8 flex-1 shrink-0 sm:flex-none"
+                                  onClick={() => openEditTv(c)}
+                                  aria-label={`Edit ${c.name}`}
+                                  title="Edit channel"
+                                >
+                                  <Pencil className="size-3.5" />
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  className="size-8 flex-1 shrink-0 sm:flex-none"
+                                  onClick={() => window.open(c.streamUrl, "_blank", "noopener,noreferrer")}
+                                  aria-label={`Test ${c.name} stream`}
+                                  title="Test stream"
+                                >
+                                  <Link2 className="size-3.5" />
+                                </Button>
                               <Button
                                 variant="outline"
                                 size="icon"
-                                className="size-8 shrink-0"
-                                onClick={() => window.open(c.streamUrl, "_blank", "noopener,noreferrer")}
-                                aria-label={`Test ${c.name} stream`}
-                                title="Test stream"
-                              >
-                                <Link2 className="size-3.5" />
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                className="size-8 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                className="size-8 flex-1 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive sm:flex-none"
                                 onClick={() => {
                                   if (window.confirm(`Delete channel “${c.name}”?`)) {
                                     removeTvChannel({ id: c._id });
@@ -1464,7 +1528,8 @@ function AdminContent() {
                                 aria-label={`Delete ${c.name}`}
                               >
                                 <Trash2 className="size-3.5" />
-                              </Button>
+                                </Button>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1477,6 +1542,94 @@ function AdminContent() {
           </>
         )}
       </main>
+
+      {/* Edit TV channel dialog */}
+      <Dialog
+        open={editingTv !== null}
+        onOpenChange={(o) => {
+          if (!o) setEditingTv(null);
+        }}
+      >
+        <DialogContent className="max-h-[92dvh] w-[calc(100%-1.5rem)] max-w-md overflow-y-auto rounded-xl sm:w-full">
+          <DialogHeader>
+            <DialogTitle className="font-display">Edit channel</DialogTitle>
+            <DialogDescription>
+              Update the name, logo, stream URL, categories, or display order.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-name" className="text-xs font-medium text-muted-foreground">
+                Channel name
+              </label>
+              <Input
+                id="tv-edit-name"
+                value={editTvName}
+                onChange={(e) => setEditTvName(e.target.value)}
+                maxLength={80}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-logo" className="text-xs font-medium text-muted-foreground">
+                Logo URL (optional)
+              </label>
+              <Input
+                id="tv-edit-logo"
+                value={editTvLogo}
+                onChange={(e) => setEditTvLogo(e.target.value)}
+                placeholder="https://…/logo.png"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-url" className="text-xs font-medium text-muted-foreground">
+                Stream URL
+              </label>
+              <Input
+                id="tv-edit-url"
+                value={editTvUrl}
+                onChange={(e) => setEditTvUrl(e.target.value)}
+                placeholder="https://…/stream.m3u8"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-categories" className="text-xs font-medium text-muted-foreground">
+                Categories (comma-separated)
+              </label>
+              <Input
+                id="tv-edit-categories"
+                value={editTvCategories}
+                onChange={(e) => setEditTvCategories(e.target.value)}
+                placeholder="Sports, Bangla, News"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-order" className="text-xs font-medium text-muted-foreground">
+                Display order (optional, lower numbers first)
+              </label>
+              <Input
+                id="tv-edit-order"
+                type="number"
+                value={editTvOrder}
+                onChange={(e) => setEditTvOrder(e.target.value)}
+                placeholder="e.g. 1"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => setEditingTv(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isSavingTv || !editTvName.trim() || !editTvUrl.trim()}
+              onClick={handleSaveTv}
+            >
+              {isSavingTv && <Loader2 className="size-4 animate-spin" />}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <MovieFormDialog
         open={dialogOpen}

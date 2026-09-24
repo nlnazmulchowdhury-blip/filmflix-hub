@@ -5,7 +5,6 @@ import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
-import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "convex/react";
 import {
   ChevronLeft,
@@ -86,7 +85,6 @@ function StreamPlayer({ src }: { src: string }) {
 }
 
 export default function TvPage() {
-  const { user } = useAuth();
   const channels = useQuery(api.tvChannels.list);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("All");
@@ -133,7 +131,7 @@ export default function TvPage() {
       <AdSideRail side="right" breakpoint="wide" />
 
       {/* Ambient background */}
-      <div className="pointer-events-none fixed inset-0 -z-10">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
       </div>
 
@@ -156,11 +154,6 @@ export default function TvPage() {
             <Link to="/" className={navLinkClass}>
               Home
             </Link>
-            {user?.role === "admin" && (
-              <Link to="/nazmul" className={navLinkClass}>
-                Admin
-              </Link>
-            )}
             <ThemeToggle />
           </nav>
         </div>

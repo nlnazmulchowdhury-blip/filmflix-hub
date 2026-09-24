@@ -139,6 +139,12 @@ html:not(.dark) {
        position: sticky working. */
     overflow-x: clip;
   }
+  html {
+    /* Phone browsers zoom the whole page out (shrink-to-fit) to fit any
+       element that pokes past the viewport — clipping at the root keeps the
+       layout at the true device width. */
+    overflow-x: clip;
+  }
   /* Phones/tablets (touch screens) and the installed PWA: hide the page
      scrollbar so the site looks like a native app everywhere on mobile.
      Content still scrolls normally — only the visual bar is hidden. */

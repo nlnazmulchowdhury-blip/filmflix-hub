@@ -70,7 +70,7 @@ export default function Checkout() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="pointer-events-none fixed inset-0 -z-10">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
       </div>
 
