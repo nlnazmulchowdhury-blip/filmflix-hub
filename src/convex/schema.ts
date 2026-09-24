@@ -188,6 +188,8 @@ const schema = defineSchema(
       name: v.string(),
       logoUrl: v.optional(v.string()),
       streamUrl: v.string(),
+      /** Fallback stream URLs tried in order when the primary fails. */
+      backupUrls: v.optional(v.array(v.string())),
       /** Category chips on the /tv page (e.g. Sports, Bangla, News). */
       categories: v.optional(v.array(v.string())),
       order: v.optional(v.number()),

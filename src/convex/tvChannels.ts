@@ -13,6 +13,17 @@ function normalizeCategories(categories?: string[]): string[] | undefined {
   return seen.size > 0 ? [...seen] : undefined;
 }
 
+/** Trimmed, de-duplicated backup URL list (or undefined). */
+function normalizeUrls(urls?: string[]): string[] | undefined {
+  if (!urls) return undefined;
+  const seen = new Set<string>();
+  for (const raw of urls) {
+    const url = raw.trim();
+    if (url) seen.add(url);
+  }
+  return seen.size > 0 ? [...seen] : undefined;
+}
+
 /** Public: all live TV channels, ordered. */
 export const list = query({
   args: {},
@@ -40,15 +51,17 @@ export const add = mutation({
     name: v.string(),
     logoUrl: v.optional(v.string()),
     streamUrl: v.string(),
+    backupUrls: v.optional(v.array(v.string())),
     categories: v.optional(v.array(v.string())),
     order: v.optional(v.number()),
   },
-  handler: async (ctx, { name, logoUrl, streamUrl, categories, order }) => {
+  handler: async (ctx, { name, logoUrl, streamUrl, backupUrls, categories, order }) => {
     await requireAdmin(ctx);
     return await ctx.db.insert("tvChannels", {
       name: name.trim(),
       logoUrl: logoUrl?.trim() || undefined,
       streamUrl: streamUrl.trim(),
+      backupUrls: normalizeUrls(backupUrls),
       categories: normalizeCategories(categories),
       order,
       createdAt: Date.now(),
@@ -62,15 +75,17 @@ export const update = mutation({
     name: v.string(),
     logoUrl: v.optional(v.string()),
     streamUrl: v.string(),
+    backupUrls: v.optional(v.array(v.string())),
     categories: v.optional(v.array(v.string())),
     order: v.optional(v.number()),
   },
-  handler: async (ctx, { id, name, logoUrl, streamUrl, categories, order }) => {
+  handler: async (ctx, { id, name, logoUrl, streamUrl, backupUrls, categories, order }) => {
     await requireAdmin(ctx);
     await ctx.db.patch(id, {
       name: name.trim(),
       logoUrl: logoUrl?.trim() || undefined,
       streamUrl: streamUrl.trim(),
+      backupUrls: normalizeUrls(backupUrls),
       categories: normalizeCategories(categories),
       order,
     });

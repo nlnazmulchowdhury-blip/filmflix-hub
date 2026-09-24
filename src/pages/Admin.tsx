@@ -124,6 +124,7 @@ function AdminContent() {
   const [tvLogo, setTvLogo] = useState("");
   const [tvUrl, setTvUrl] = useState("");
   const [tvCategories, setTvCategories] = useState("");
+  const [tvBackups, setTvBackups] = useState("");
   const [isAddingTv, setIsAddingTv] = useState(false);
 
   /* Edit-TV-channel dialog state (form is pre-filled from the channel). */
@@ -133,6 +134,7 @@ function AdminContent() {
   const [editTvLogo, setEditTvLogo] = useState("");
   const [editTvUrl, setEditTvUrl] = useState("");
   const [editTvCategories, setEditTvCategories] = useState("");
+  const [editTvBackups, setEditTvBackups] = useState("");
   const [editTvOrder, setEditTvOrder] = useState("");
 
   /* Admin catalog search: matches title, description, categories, year, kind —
@@ -171,6 +173,7 @@ function AdminContent() {
     setEditTvLogo(c.logoUrl ?? "");
     setEditTvUrl(c.streamUrl);
     setEditTvCategories((c.categories ?? []).join(", "));
+    setEditTvBackups((c.backupUrls ?? []).join(String.fromCharCode(10)));
     setEditTvOrder(c.order != null ? String(c.order) : "");
   };
 
@@ -183,6 +186,10 @@ function AdminContent() {
         name: editTvName.trim(),
         logoUrl: editTvLogo.trim() || undefined,
         streamUrl: editTvUrl.trim(),
+        backupUrls: editTvBackups
+          .split(/[\r\n]/)
+          .map((t) => t.trim())
+          .filter(Boolean),
         categories: editTvCategories
           .split(",")
           .map((s) => s.trim())
@@ -1406,6 +1413,19 @@ function AdminContent() {
                         />
                       </div>
                       <div className="space-y-1.5">
+                        <label htmlFor="tv-backups" className="text-xs font-medium text-muted-foreground">
+                          Backup URLs (one per line) — used when the primary stream is down
+                        </label>
+                        <textarea
+                          id="tv-backups"
+                          value={tvBackups}
+                          onChange={(e) => setTvBackups(e.target.value)}
+                          placeholder={"https://…/backup-1.m3u8 | https://…/backup-2.m3u8"}
+                          rows={2}
+                          className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
                         <label htmlFor="tv-categories" className="text-xs font-medium text-muted-foreground">
                           Categories (comma-separated)
                         </label>
@@ -1427,6 +1447,10 @@ function AdminContent() {
                               name: tvName.trim(),
                               logoUrl: tvLogo.trim() || undefined,
                               streamUrl: tvUrl.trim(),
+                              backupUrls: tvBackups
+                                .split(/[\r\n]/)
+                                .map((t) => t.trim())
+                                .filter(Boolean),
                               categories: tvCategories
                                 .split(",")
                                 .map((s) => s.trim())
@@ -1436,6 +1460,7 @@ function AdminContent() {
                             setTvName("");
                             setTvLogo("");
                             setTvUrl("");
+                            setTvBackups("");
                             setTvCategories("");
                           } catch (err) {
                             toast.error(
@@ -1589,6 +1614,19 @@ function AdminContent() {
                 value={editTvUrl}
                 onChange={(e) => setEditTvUrl(e.target.value)}
                 placeholder="https://…/stream.m3u8"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-backups" className="text-xs font-medium text-muted-foreground">
+                Backup URLs (one per line) — used when the primary stream is down
+              </label>
+              <textarea
+                id="tv-edit-backups"
+                value={editTvBackups}
+                onChange={(e) => setEditTvBackups(e.target.value)}
+                placeholder={"https://…/backup-1.m3u8 | https://…/backup-2.m3u8"}
+                rows={2}
+                className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
             </div>
             <div className="space-y-1.5">

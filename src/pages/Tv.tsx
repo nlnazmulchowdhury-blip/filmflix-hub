@@ -36,42 +36,95 @@ function isDirectStream(url: string): boolean {
   }
 }
 
-/** Video element that plays HLS (.m3u8) via hls.js and MP4 natively. */
-function StreamPlayer({ src }: { src: string }) {
+/** Video element that plays HLS (.m3u8) via hls.js and MP4 natively.
+ *  Takes an ordered list of source URLs (primary first, then backups) and
+ *  automatically advances to the next one whenever the current stream dies —
+ *  manifest/network errors, media errors, or the element erroring out — so a
+ *  downed primary URL never stops playback as long as a backup works. */
+function StreamPlayer({ sources }: { sources: string[] }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  // Index of the URL currently being played.
+  const [active, setActive] = useState(0);
+  // Set once every source has been tried and failed.
+  const [allFailed, setAllFailed] = useState(false);
+  // Debounce: rapid duplicate error events only advance one URL at a time.
+  const advanceTimer = useRef<number | null>(null);
+
+  const src = sources[Math.min(active, sources.length - 1)];
+
+  const advance = useRef(() => {});
+  advance.current = () => {
+    if (advanceTimer.current != null) return;
+    advanceTimer.current = window.setTimeout(() => {
+      advanceTimer.current = null;
+      setActive((i) => {
+        if (i + 1 < sources.length) return i + 1;
+        setAllFailed(true);
+        return i;
+      });
+    }, 500);
+  };
+
+  // New channel (different source list) → start from the primary again.
+  useEffect(() => {
+    setActive(0);
+    setAllFailed(false);
+  }, [sources.join("|")]);
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || allFailed) return;
+
+    let destroyed = false;
+    let hls: Hls | null = null;
 
     const isHls = src.includes(".m3u8");
-    if (!isHls) {
-      video.src = src;
-      video.play().catch(() => {});
-      return;
-    }
 
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      // Safari plays HLS natively.
-      video.src = src;
-      video.play().catch(() => {});
-      return;
-    }
-
-    if (Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: true });
+    if (isHls && Hls.isSupported() && !video.canPlayType("application/vnd.apple.mpegurl")) {
+      hls = new Hls({ enableWorker: true });
       hls.loadSource(src);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         video.play().catch(() => {});
       });
-      return () => {
-        hls.destroy();
-      };
+      hls.on(Hls.Events.ERROR, (_evt, data) => {
+        if (destroyed || !data.fatal) return;
+        advance.current();
+      });
+    } else {
+      // Native HLS (Safari) or progressive MP4.
+      video.src = src;
+      video.play().catch(() => {});
     }
 
-    video.src = src;
-  }, [src]);
+    const onVideoError = () => {
+      if (destroyed) return;
+      advance.current();
+    };
+    video.addEventListener("error", onVideoError);
+
+    return () => {
+      destroyed = true;
+      video.removeEventListener("error", onVideoError);
+      if (advanceTimer.current != null) {
+        window.clearTimeout(advanceTimer.current);
+        advanceTimer.current = null;
+      }
+      if (hls) hls.destroy();
+    };
+  }, [src, allFailed]);
+
+  if (allFailed) {
+    return (
+      <div className="flex size-full flex-col items-center justify-center gap-2 bg-black/80 text-center">
+        <Tv className="size-8 text-muted-foreground" />
+        <p className="text-sm font-semibold text-foreground">Stream is down</p>
+        <p className="text-xs text-muted-foreground">
+          All sources for this channel failed. Please try again later.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <video
@@ -125,7 +178,7 @@ export default function TvPage() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#0d0d17] text-foreground">
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
       {/* Banner ads on the far edges (same rails as landing/movie detail). */}
       <AdSideRail side="left" breakpoint="wide" />
       <AdSideRail side="right" breakpoint="wide" />
@@ -136,7 +189,7 @@ export default function TvPage() {
       </div>
 
       {/* Header */}
-      <header className="sticky top-0 z-40 border-b bg-[#0d0d17]/95 backdrop-blur">
+      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur">
         <div className="mx-auto flex h-14 w-full max-w-[1400px] items-center justify-between gap-2 px-3 sm:h-16 sm:px-6">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <Link to="/" aria-label="FilmFlix home" className="shrink-0">
@@ -165,7 +218,7 @@ export default function TvPage() {
           {selected && selectedIsDirect ? (
             <div className="overflow-hidden rounded-lg border border-border/60 bg-black shadow-[0_32px_96px_-40px_rgba(0,0,0,0.9)]">
               <div className="relative aspect-video w-full">
-                <StreamPlayer src={selected.streamUrl} />
+                <StreamPlayer sources={[selected.streamUrl, ...(selected.backupUrls ?? [])]} />
               </div>
             </div>
           ) : (

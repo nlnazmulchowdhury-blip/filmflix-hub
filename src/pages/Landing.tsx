@@ -13,10 +13,17 @@ import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "convex/react";
-import { Dices, Film, LogOut, Play, Search, ShieldCheck, Tv, X } from "lucide-react";
+import { Dices, Film, LogOut, Menu, Play, Search, ShieldCheck, Tv, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 
 /** Lowercase, strip punctuation, collapse whitespace — forgiving matching. */
 function normalizeText(s: string) {
@@ -102,6 +109,7 @@ export default function Landing() {
     navigate(`/movie/${pick._id}`);
   };
 
+  const [menuOpen, setMenuOpen] = useState(false);
   const navLinkClass =
     "text-sm font-medium text-muted-foreground transition-colors hover:text-foreground";
 
@@ -140,6 +148,65 @@ export default function Landing() {
               TV
             </Link>
           </nav>
+          {/* Mobile: hamburger + slide-in menu (desktop keeps the inline nav). */}
+          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+            <SheetTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="md:hidden text-muted-foreground hover:text-foreground"
+                aria-label="Open menu"
+              >
+                <Menu className="size-5" />
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="right" className="w-72">
+              <SheetHeader>
+                <SheetTitle className="font-display">Menu</SheetTitle>
+              </SheetHeader>
+              <nav className="flex flex-col gap-1 px-4 pb-6">
+                {[
+                  { label: "Home", to: "/" },
+                  { label: "Random", action: () => { setMenuOpen(false); surprise(); } },
+                  { label: "Categories", href: "#catalog" },
+                  {
+                    label: "Library",
+                    to: isAuthenticated ? "/dashboard" : "/auth?returnTo=%2Fdashboard",
+                  },
+                  { label: "TV", to: "/tv" },
+                ].map((item) =>
+                  item.action ? (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={item.action}
+                      className="rounded-lg px-3 py-2.5 text-left text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                    >
+                      {item.label}
+                    </button>
+                  ) : item.href ? (
+                    <a
+                      key={item.label}
+                      href={item.href}
+                      onClick={() => setMenuOpen(false)}
+                      className="rounded-lg px-3 py-2.5 text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                    >
+                      {item.label}
+                    </a>
+                  ) : (
+                    <Link
+                      key={item.label}
+                      to={item.to ?? "/"}
+                      onClick={() => setMenuOpen(false)}
+                      className="rounded-lg px-3 py-2.5 text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                    >
+                      {item.label}
+                    </Link>
+                  ),
+                )}
+              </nav>
+            </SheetContent>
+          </Sheet>
           <div className="flex items-center gap-0.5 sm:gap-2">
             {/* Random pick stays reachable on phones where the nav is hidden. */}
             <Button
