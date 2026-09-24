@@ -1453,7 +1453,7 @@ function AdminContent() {
                   </Card>
 
                   {/* Channel list */}
-                  <Card className="border-border/60 bg-card/60">
+                  <Card className="min-w-0 overflow-hidden border-border/60 bg-card/60">
                     <CardHeader className="pb-3">
                       <CardTitle className="font-display text-base">
                         Channels ({tvChannels?.length ?? 0})
@@ -1495,7 +1495,7 @@ function AdminContent() {
                                   {c.streamUrl}
                                 </p>
                               </div>
-                              <div className="flex w-full gap-1.5 sm:w-auto">
+                              <div className="flex w-full gap-1.5 sm:w-auto sm:shrink-0">
                                 <Button
                                   variant="outline"
                                   size="icon"
