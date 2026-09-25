@@ -1,3 +1,8 @@
 .env.local
 node_modules
 dist
+
+# relay runtime secrets / logs
+relay/.env
+relay/relay.env
+relay/relay.log

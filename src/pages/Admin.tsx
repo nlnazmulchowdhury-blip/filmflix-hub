@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import Logo from "@/components/Logo";
 import MovieFormDialog from "@/components/MovieFormDialog";
+import RelayUrlHelper from "@/components/RelayUrlHelper";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -1425,6 +1426,14 @@ function AdminContent() {
                           className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         />
                       </div>
+                      <RelayUrlHelper
+                        channelName={tvName}
+                        suggestLocalUrl={tvUrl}
+                        onUsePublic={setTvUrl}
+                        onAddBackup={(u) =>
+                          setTvBackups((b) => (b.trim() ? `${b.trimEnd()}\n${u}` : u))
+                        }
+                      />
                       <div className="space-y-1.5">
                         <label htmlFor="tv-categories" className="text-xs font-medium text-muted-foreground">
                           Categories (comma-separated)
@@ -1629,6 +1638,14 @@ function AdminContent() {
                 className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
             </div>
+            <RelayUrlHelper
+              channelName={editTvName}
+              suggestLocalUrl={editTvUrl}
+              onUsePublic={setEditTvUrl}
+              onAddBackup={(u) =>
+                setEditTvBackups((b) => (b.trim() ? `${b.trimEnd()}\n${u}` : u))
+              }
+            />
             <div className="space-y-1.5">
               <label htmlFor="tv-edit-categories" className="text-xs font-medium text-muted-foreground">
                 Categories (comma-separated)

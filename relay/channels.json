@@ -1,0 +1,9 @@
+{
+  "demo": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+  "news24": "http://10.200.13.14/live/news24/index.m3u8",
+  "sports1": "http://10.200.13.14/live/sports1/index.m3u8",
+  "movies-hd": {
+    "url": "http://10.200.13.14/live/movies/index.m3u8",
+    "headers": { "User-Agent": "SomePlayer/1.0" }
+  }
+}

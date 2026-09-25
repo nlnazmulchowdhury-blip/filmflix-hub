@@ -1,0 +1,7 @@
+.env
+relay.env
+*.log
+selftest.mjs
+demo-player.html
+node_modules
+README.md

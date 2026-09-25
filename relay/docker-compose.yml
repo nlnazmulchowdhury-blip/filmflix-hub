@@ -1,0 +1,38 @@
+services:
+  relay:
+    build: .
+    image: filmflix-relay
+    container_name: filmflix-relay
+    restart: unless-stopped
+
+    # Optional settings (RELAY_TOKEN, RELAY_CACHE_MAX_MB, ...) live in relay.env.
+    # Create it from .env.example, then uncomment the next two lines:
+    # env_file:
+    #   - ./relay.env
+
+    # Container must bind 0.0.0.0 internally regardless of what relay.env says.
+    environment:
+      RELAY_HOST: 0.0.0.0
+
+    ports:
+      # Default: reachable ONLY from the host itself (Nginx proxies to it).
+      # Direct public access instead? Change to "8077:8077" and open the port.
+      - "127.0.0.1:8077:8077"
+
+    volumes:
+      # Mounted, not baked in: edit channels.json on the host and the relay
+      # hot-reloads it — no rebuild or restart needed.
+      - ./channels.json:/app/channels.json:ro
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8077/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

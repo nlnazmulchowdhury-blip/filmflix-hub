@@ -1,0 +1,22 @@
+[Unit]
+Description=FilmFlix HLS Relay (re-streamer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/filmflix-relay
+ExecStart=/usr/bin/node /opt/filmflix-relay/relay.mjs
+EnvironmentFile=/opt/filmflix-relay/relay.env
+Restart=always
+RestartSec=3
+User=www-data
+
+# Hardening (the relay reads channels.json, writes nothing)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
