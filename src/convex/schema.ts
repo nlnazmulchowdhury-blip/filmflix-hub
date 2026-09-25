@@ -196,6 +196,30 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_order", ["order"]),
 
+    /** Link-health probe result, ONE row per unique media URL (upserted by
+     *  the checker: cron every 6h + admin "check now"). Broken URLs surface
+     *  as a notification banner in the admin panel. Rows for URLs that
+     *  disappear from the catalog are cleaned up on the next run. */
+    linkHealth: defineTable({
+      url: v.string(),
+      status: v.union(v.literal("ok"), v.literal("fail")),
+      httpStatus: v.optional(v.number()),
+      error: v.optional(v.string()),
+      checkedAt: v.number(),
+      /** Where this URL is referenced (movie video/quality/dub/episode,
+       *  TV primary/backup). */
+      targets: v.array(
+        v.object({
+          kind: v.union(v.literal("movie"), v.literal("tv")),
+          name: v.string(),
+          movieId: v.optional(v.id("movies")),
+          channelId: v.optional(v.id("tvChannels")),
+        }),
+      ),
+    })
+      .index("by_url", ["url"])
+      .index("by_status", ["status"]),
+
     /** A user's saved-for-later movies (watchlist). One row per
      *  user+movie pair. */
     watchlist: defineTable({

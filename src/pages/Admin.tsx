@@ -45,6 +45,7 @@ import {
   Pencil,
   Plus,
   Search,
+  ShieldAlert,
   ShieldCheck,
   ShieldOff,
   Trash2,
@@ -55,7 +56,7 @@ import {
   Check,
   Tv,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router";
 import { toast } from "sonner";
 
@@ -79,6 +80,43 @@ function AdminContent() {
   const markOrderPaid = useMutation(api.orders.markPaid);
   const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
   const analytics = useQuery(api.analytics.summary, isAdmin ? {} : "skip");
+
+  /* Link health: broken movie/TV stream URLs → admin notification banner.
+     Checked automatically every 6h (crons.ts) + manually via "Check now". */
+  const linkHealth = useQuery(api.linkHealth.summary, isAdmin ? {} : "skip");
+  const checkLinks = useAction(api.linkHealth.checkAll);
+  const [isCheckingLinks, setIsCheckingLinks] = useState(false);
+  const notifiedBroken = useRef(false);
+
+  useEffect(() => {
+    if (!linkHealth) return;
+    const count = linkHealth.failures.length;
+    if (count > 0 && !notifiedBroken.current) {
+      notifiedBroken.current = true;
+      toast.warning(
+        `${count} stream link${count === 1 ? " is" : "s are"} broken — see the alert below`,
+        { duration: 8000 },
+      );
+    }
+  }, [linkHealth]);
+
+  const handleCheckLinks = async () => {
+    setIsCheckingLinks(true);
+    try {
+      const res = await checkLinks({});
+      if (res.failed === 0) {
+        toast.success(`All ${res.checked} stream links are working`);
+      } else {
+        toast.error(
+          `${res.failed} of ${res.checked} stream links failed — see the alert below`,
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Link check failed");
+    } finally {
+      setIsCheckingLinks(false);
+    }
+  };
 
   const removeMovie = useMutation(api.movies.remove);
   const removeCategory = useMutation(api.categories.remove);
@@ -403,17 +441,98 @@ function AdminContent() {
                   Manage the catalog, screenings, discussions, members, and plans.
                 </p>
               </div>
-              <Button
-                className="glow-accent gap-2"
-                onClick={() => {
-                  setEditing(null);
-                  setDialogOpen(true);
-                }}
-              >
-                <Plus className="size-4" />
-                Add movie
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  disabled={isCheckingLinks}
+                  onClick={handleCheckLinks}
+                >
+                  {isCheckingLinks ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <ShieldAlert className="size-4" />
+                  )}
+                  Check links
+                </Button>
+                <Button
+                  className="glow-accent gap-2"
+                  onClick={() => {
+                    setEditing(null);
+                    setDialogOpen(true);
+                  }}
+                >
+                  <Plus className="size-4" />
+                  Add movie
+                </Button>
+              </div>
             </div>
+
+            {/* Link-health alert — broken movie/TV stream URLs */}
+            {linkHealth && linkHealth.failures.length > 0 && (
+              <div className="mb-6 rounded-xl border border-destructive/40 bg-destructive/10 p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ShieldAlert className="size-4 shrink-0 text-destructive" />
+                  <p className="font-display text-sm font-semibold text-destructive">
+                    {linkHealth.failures.length} stream link{linkHealth.failures.length === 1 ? "" : "s"} not working
+                  </p>
+                  {linkHealth.lastCheckedAt && (
+                    <span className="text-xs text-muted-foreground">
+                      · last checked {fmtDateTime(linkHealth.lastCheckedAt)}
+                    </span>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="ml-auto gap-1.5"
+                    disabled={isCheckingLinks}
+                    onClick={handleCheckLinks}
+                  >
+                    {isCheckingLinks ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Link2 className="size-3.5" />
+                    )}
+                    Check now
+                  </Button>
+                </div>
+                <ul className="mt-2.5 space-y-2">
+                  {linkHealth.failures.slice(0, 8).map((f) => (
+                    <li key={f.url} className="min-w-0 text-xs">
+                      <span className="text-foreground/90">
+                        {f.targets.map((t, i) => (
+                          <span key={`${t.kind}-${t.name}-${i}`}>
+                            {t.kind === "movie" && t.movieId ? (
+                              <Link
+                                to={`/movie/${t.movieId}`}
+                                className="font-medium text-primary underline-offset-2 hover:underline"
+                              >
+                                {t.name}
+                              </Link>
+                            ) : (
+                              <span className="font-medium">{t.name}</span>
+                            )}
+                            {i < f.targets.length - 1 ? ", " : ""}
+                          </span>
+                        ))}
+                        {" — "}
+                        <span className="font-medium text-destructive">
+                          {f.error ?? "failed"}
+                        </span>
+                      </span>
+                      <span className="block truncate text-muted-foreground" title={f.url}>
+                        {f.url}
+                      </span>
+                    </li>
+                  ))}
+                  {linkHealth.failures.length > 8 && (
+                    <li className="text-xs text-muted-foreground">
+                      …and {linkHealth.failures.length - 8} more
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
 
             {/* Stats row */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
