@@ -1,3 +1,13 @@
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -90,10 +101,18 @@ function AdminContent() {
   );
   const adminUnread = useQuery(api.support.unreadForAdmin, isAdmin ? {} : "skip");
   const replySupport = useMutation(api.support.replyFromAdmin);
+  const editSupport = useMutation(api.support.editAsAdmin);
+  const deleteSupport = useMutation(api.support.deleteAsAdmin);
   const markSupportSeen = useMutation(api.support.markSeenByAdmin);
   const [activeThread, setActiveThread] = useState<string | null>(null);
   const [supportDraft, setSupportDraft] = useState("");
   const [isReplying, setIsReplying] = useState(false);
+  // Editing/deleting any message in the thread (admin can touch both sides).
+  const [editMsg, setEditMsg] = useState<{ id: string; text: string } | null>(null);
+  const [editMsgDraft, setEditMsgDraft] = useState("");
+  const [isEditSaving, setIsEditSaving] = useState(false);
+  const [deleteMsg, setDeleteMsg] = useState<{ id: string; text: string } | null>(null);
+  const [isDeleteSaving, setIsDeleteSaving] = useState(false);
   const thread = useQuery(
     api.support.listThread,
     activeThread ? { userId: activeThread as Id<"users"> } : "skip",
@@ -122,6 +141,33 @@ function AdminContent() {
       toast.error(err instanceof Error ? err.message : "Failed to send");
     } finally {
       setIsReplying(false);
+    }
+  };
+
+  const saveSupportEdit = async () => {
+    const text = editMsgDraft.trim();
+    if (!text || !editMsg || isEditSaving) return;
+    setIsEditSaving(true);
+    try {
+      await editSupport({ messageId: editMsg.id as Id<"supportMessages">, text });
+      setEditMsg(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setIsEditSaving(false);
+    }
+  };
+
+  const confirmSupportDelete = async () => {
+    if (!deleteMsg || isDeleteSaving) return;
+    setIsDeleteSaving(true);
+    try {
+      await deleteSupport({ messageId: deleteMsg.id as Id<"supportMessages"> });
+      setDeleteMsg(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete");
+    } finally {
+      setIsDeleteSaving(false);
     }
   };
 
@@ -1969,8 +2015,33 @@ function AdminContent() {
                                 {(thread ?? []).map((m) => (
                                   <div
                                     key={m._id}
-                                    className={`flex ${m.sender === "admin" ? "justify-end" : "justify-start"}`}
+                                    className={`group flex items-center gap-1 ${m.sender === "admin" ? "justify-end" : "justify-start"}`}
                                   >
+                                    {m.sender !== "admin" && (
+                                      <span className="flex shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+                                        <button
+                                          type="button"
+                                          aria-label="Edit message"
+                                          title="Edit"
+                                          onClick={() => {
+                                            setEditMsg({ id: m._id, text: m.text });
+                                            setEditMsgDraft(m.text);
+                                          }}
+                                          className="rounded-full p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                        >
+                                          <Pencil className="size-3" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label="Delete message"
+                                          title="Delete"
+                                          onClick={() => setDeleteMsg({ id: m._id, text: m.text })}
+                                          className="rounded-full p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                        >
+                                          <Trash2 className="size-3" />
+                                        </button>
+                                      </span>
+                                    )}
                                     <div
                                       className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-1.5 text-sm ${
                                         m.sender === "admin"
@@ -1980,6 +2051,31 @@ function AdminContent() {
                                     >
                                       {m.text}
                                     </div>
+                                    {m.sender === "admin" && (
+                                      <span className="flex shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+                                        <button
+                                          type="button"
+                                          aria-label="Edit message"
+                                          title="Edit"
+                                          onClick={() => {
+                                            setEditMsg({ id: m._id, text: m.text });
+                                            setEditMsgDraft(m.text);
+                                          }}
+                                          className="rounded-full p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                        >
+                                          <Pencil className="size-3" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label="Delete message"
+                                          title="Delete"
+                                          onClick={() => setDeleteMsg({ id: m._id, text: m.text })}
+                                          className="rounded-full p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                        >
+                                          <Trash2 className="size-3" />
+                                        </button>
+                                      </span>
+                                    )}
                                   </div>
                                 ))}
                               </div>
@@ -2016,6 +2112,63 @@ function AdminContent() {
                     </div>
                   )}
                 </Card>
+
+                {/* Edit message dialog (admin can edit any message) */}
+                <Dialog open={!!editMsg} onOpenChange={(o) => !o && setEditMsg(null)}>
+                  <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Edit message</DialogTitle>
+                      <DialogDescription>
+                        Your change is visible to the user immediately.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <Textarea
+                      value={editMsgDraft}
+                      onChange={(e) => setEditMsgDraft(e.target.value)}
+                      maxLength={1000}
+                      rows={4}
+                    />
+                    <DialogFooter className="gap-2 sm:gap-0">
+                      <Button variant="outline" onClick={() => setEditMsg(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={saveSupportEdit}
+                        disabled={isEditSaving || !editMsgDraft.trim()}
+                      >
+                        {isEditSaving ? <Loader2 className="size-4 animate-spin" /> : null}
+                        Save
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                {/* Delete message confirm (admin can delete any message) */}
+                <AlertDialog
+                  open={!!deleteMsg}
+                  onOpenChange={(o) => !o && setDeleteMsg(null)}
+                >
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete this message?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        {`"${deleteMsg?.text.slice(0, 160) ?? ""}"`}
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void confirmSupportDelete();
+                        }}
+                        className="bg-destructive text-white hover:bg-destructive/90"
+                      >
+                        Delete
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </TabsContent>
             </Tabs>
           </>

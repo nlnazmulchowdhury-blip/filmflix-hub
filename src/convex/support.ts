@@ -64,6 +64,34 @@ export const sendFromUser = mutation({
   },
 });
 
+/** The visitor edits their own message (long-press → edit). */
+export const editFromUser = mutation({
+  args: { messageId: v.id("supportMessages"), text: v.string() },
+  handler: async (ctx, { messageId, text }) => {
+    const userId = await currentUserId(ctx);
+    const msg = await ctx.db.get(messageId);
+    if (!msg || msg.userId !== userId || msg.sender !== "user") {
+      throw new Error("Message not found");
+    }
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("Message cannot be empty");
+    await ctx.db.patch(messageId, { text: trimmed.slice(0, MAX_LEN) });
+  },
+});
+
+/** The visitor deletes their own message (long-press → delete). */
+export const deleteFromUser = mutation({
+  args: { messageId: v.id("supportMessages") },
+  handler: async (ctx, { messageId }) => {
+    const userId = await currentUserId(ctx);
+    const msg = await ctx.db.get(messageId);
+    if (!msg || msg.userId !== userId || msg.sender !== "user") {
+      throw new Error("Message not found");
+    }
+    await ctx.db.delete(messageId);
+  },
+});
+
 /** Mark the visitor's side as having read the admin's replies. */
 export const markSeenByUser = mutation({
   args: {},
@@ -202,6 +230,30 @@ export const replyFromAdmin = mutation({
       createdAt: Date.now(),
       seenByUser: false,
     });
+  },
+});
+
+/** Admin edits any message in a conversation (own or the user's). */
+export const editAsAdmin = mutation({
+  args: { messageId: v.id("supportMessages"), text: v.string() },
+  handler: async (ctx, { messageId, text }) => {
+    await requireAdmin(ctx);
+    const msg = await ctx.db.get(messageId);
+    if (!msg) throw new Error("Message not found");
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("Message cannot be empty");
+    await ctx.db.patch(messageId, { text: trimmed.slice(0, MAX_LEN) });
+  },
+});
+
+/** Admin deletes any message in a conversation (own or the user's). */
+export const deleteAsAdmin = mutation({
+  args: { messageId: v.id("supportMessages") },
+  handler: async (ctx, { messageId }) => {
+    await requireAdmin(ctx);
+    const msg = await ctx.db.get(messageId);
+    if (!msg) throw new Error("Message not found");
+    await ctx.db.delete(messageId);
   },
 });
 

@@ -5,6 +5,7 @@ import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 
 const WIDGET_OPEN_KEY = "ff-help-open";
+const LONG_PRESS_MS = 450;
 
 /** Floating help-center button (bottom-right) + live chat with the admin. */
 export default function HelpCenterWidget() {
@@ -12,6 +13,8 @@ export default function HelpCenterWidget() {
   const messages = useQuery(api.support.listMine, isAuthenticated ? {} : "skip");
   const unread = useQuery(api.support.unreadForUser, isAuthenticated ? {} : "skip");
   const send = useMutation(api.support.sendFromUser);
+  const editMsg = useMutation(api.support.editFromUser);
+  const deleteMsg = useMutation(api.support.deleteFromUser);
   const markSeen = useMutation(api.support.markSeenByUser);
 
   const [open, setOpen] = useState(
@@ -20,6 +23,15 @@ export default function HelpCenterWidget() {
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Long-press state: timer ref + which message shows the edit/delete menu.
+  const pressTimer = useRef<number | null>(null);
+  const [menuId, setMenuId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [isEditSaving, setIsEditSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Persist open/closed across pages in the SPA.
   useEffect(() => {
@@ -39,6 +51,13 @@ export default function HelpCenterWidget() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages?.length, open]);
 
+  // Clear a pending long-press timer when the widget unmounts.
+  useEffect(() => {
+    return () => {
+      if (pressTimer.current != null) window.clearTimeout(pressTimer.current);
+    };
+  }, []);
+
   if (isLoading) return null;
 
   const submit = async (e: React.FormEvent) => {
@@ -51,6 +70,52 @@ export default function HelpCenterWidget() {
       setDraft("");
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const startPress = (id: string) => {
+    clearPress();
+    pressTimer.current = window.setTimeout(() => {
+      setMenuId(id);
+    }, LONG_PRESS_MS);
+  };
+  const openEdit = (id: string, text: string) => {
+    setMenuId(null);
+    setEditingId(id);
+    setEditDraft(text);
+  };
+  const askDelete = (id: string) => {
+    setMenuId(null);
+    setDeletingId(id);
+  };
+  const clearPress = () => {
+    if (pressTimer.current != null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+  };
+
+  const saveEdit = async () => {
+    const text = editDraft.trim();
+    if (!text || !editingId || isEditSaving) return;
+    setIsEditSaving(true);
+    try {
+      await editMsg({ messageId: editingId as never, text });
+      setEditingId(null);
+      setEditDraft("");
+    } finally {
+      setIsEditSaving(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingId || isDeleting) return;
+    setIsDeleting(true);
+    try {
+      await deleteMsg({ messageId: deletingId as never });
+      setDeletingId(null);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -111,7 +176,11 @@ export default function HelpCenterWidget() {
           ) : (
             <>
               {/* Messages */}
-              <div ref={scrollRef} className="flex-1 space-y-2.5 overflow-y-auto px-4 py-3">
+              <div
+                ref={scrollRef}
+                onPointerDown={() => menuId && setMenuId(null)}
+                className="flex-1 space-y-2.5 overflow-y-auto px-4 py-3"
+              >
                 {messages === undefined ? (
                   <div className="flex h-full items-center justify-center">
                     <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -124,26 +193,88 @@ export default function HelpCenterWidget() {
                     <p className="text-sm font-medium">Hi {user?.name ?? "there"} 👋</p>
                     <p className="text-xs text-muted-foreground">
                       Ask anything about movies, plans, or playback — we're here
-                      to help.
+                      to help. <span className="sr-only">Hold a message to edit or delete it.</span>
                     </p>
                   </div>
                 ) : (
-                  messages.map((m) => (
-                    <div
-                      key={m._id}
-                      className={`flex ${m.sender === "user" ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm ${
-                          m.sender === "user"
-                            ? "rounded-br-md bg-primary text-primary-foreground"
-                            : "rounded-bl-md bg-muted text-foreground"
-                        }`}
-                      >
-                        {m.text}
+                  messages.map((m) =>
+                    m.sender !== "user" ? (
+                      <div key={m._id} className="flex justify-start">
+                        <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-bl-md bg-muted px-3.5 py-2 text-sm text-foreground">
+                          {m.text}
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    ) : editingId === m._id ? (
+                      /* Inline edit box for the user's own message */
+                      <div key={m._id} className="flex justify-end">
+                        <div className="w-[85%] rounded-2xl rounded-br-md border border-primary/50 bg-background p-2">
+                          <textarea
+                            autoFocus
+                            value={editDraft}
+                            onChange={(e) => setEditDraft(e.target.value)}
+                            maxLength={1000}
+                            rows={2}
+                            className="w-full resize-none rounded-md bg-background px-1.5 py-1 text-sm outline-none"
+                          />
+                          <div className="mt-1 flex justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditingId(null)}
+                              className="rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:bg-secondary"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={saveEdit}
+                              disabled={isEditSaving || !editDraft.trim()}
+                              className="rounded-full bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground disabled:opacity-40"
+                            >
+                              {isEditSaving ? "Saving…" : "Save"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Own message — hold to edit/delete */
+                      <div key={m._id} className="relative flex justify-end">
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-label="Hold to edit or delete message"
+                          onPointerDown={() => startPress(m._id)}
+                          onPointerUp={clearPress}
+                          onPointerLeave={clearPress}
+                          onPointerCancel={clearPress}
+                          onContextMenu={(e) => e.preventDefault()}
+                          className="max-w-[80%] cursor-pointer touch-none select-none whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-sm text-primary-foreground"
+                        >
+                          {m.text}
+                        </div>
+                        {menuId === m._id && (
+                          <div
+                            onPointerDown={(e) => e.stopPropagation()}
+                            className="absolute right-2 top-0 z-10 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-card shadow-lg"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openEdit(m._id, m.text)}
+                              className="block w-full px-4 py-2 text-left text-xs font-medium hover:bg-secondary"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => askDelete(m._id)}
+                              className="block w-full border-t border-border/60 px-4 py-2 text-left text-xs font-medium text-destructive hover:bg-destructive/10"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ),
+                  )
                 )}
               </div>
 
@@ -169,6 +300,35 @@ export default function HelpCenterWidget() {
                   )}
                 </button>
               </form>
+
+              {/* Delete confirmation (own message) */}
+              {deletingId && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-background/80 p-6 backdrop-blur-sm">
+                  <div className="w-full max-w-xs rounded-xl border border-border bg-card p-4 text-center shadow-xl">
+                    <p className="text-sm font-semibold">Delete this message?</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      This cannot be undone.
+                    </p>
+                    <div className="mt-3 flex justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDeletingId(null)}
+                        className="rounded-full px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmDelete}
+                        disabled={isDeleting}
+                        className="rounded-full bg-destructive px-3 py-1.5 text-xs font-semibold text-destructive-foreground disabled:opacity-50"
+                      >
+                        {isDeleting ? "Deleting…" : "Delete"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
