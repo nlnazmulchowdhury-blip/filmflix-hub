@@ -64,14 +64,16 @@ VITE_API_BASE=https://filmflix-api.<আপনার-সাবডোমেইন>
 - ভ্যারিয়েবল দিলে অ্যাপ Worker API-তে চলবে (এখনো ইমপ্লিমেন্ট হচ্ছে — `use-auth-cf`
   আর `src/lib/api.ts` প্রস্তুত; পেজগুলোর সুইচিং পরের ধাপে)
 
-## ধাপ ৫ — ডেটা মাইগ্রেশন (Convex → D1)
+## ধাপ ৫ — ডেটা মাইগ্রেশন (Convex → D1) — ✅ সম্পন্ন
 
 ```bash
-npx tsx scripts/export-convex.ts > data.json      # Convex থেকে JSON এক্সপোর্ট
-node scripts/import-d1.mjs data.json              # D1-তে ইমপোর্ট
+npx convex export --path scripts/data-export.zip
+cd scripts && unzip -o data-export.zip -d export && cd ..
+node scripts/import-d1.mjs            # ড্রাই-রান (SQL জেনারেট)
+node scripts/import-d1.mjs --apply    # রিমোট D1-তে পুশ
 ```
 
-(স্ক্রিপ্ট দুটো এরপরের ধাপে যোগ হবে।)
+রি-রান নিরাপদ (INSERT OR REPLACE)। এক্সপোর্ট ফাইলগুলো gitignore-এ — কমিট হয় না।
 
 ## নোট
 
