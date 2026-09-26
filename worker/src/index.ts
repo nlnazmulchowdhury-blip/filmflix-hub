@@ -91,6 +91,17 @@ const onError = (err: unknown, c: any) => {
 };
 app.onError(onError);
 
+/** Defensive JSON-column parse: NULL or legacy "null" strings -> undefined. */
+function parseJsonArray(col: unknown): any[] | undefined {
+  if (typeof col !== "string" || !col) return undefined;
+  try {
+    const v = JSON.parse(col);
+    return Array.isArray(v) && v.length > 0 ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Shape a movies row like the Convex doc the frontend expects. */
 function movieOut(r: any) {
   return {
@@ -103,15 +114,15 @@ function movieOut(r: any) {
     videoUrl: r.video_url ?? undefined,
     genre: r.genre ?? undefined,
     category: r.category ?? undefined,
-    categories: r.categories ? JSON.parse(r.categories) : undefined,
+    categories: parseJsonArray(r.categories),
     year: r.year ?? undefined,
     rating: r.rating ?? undefined,
     kind: r.kind ?? undefined,
-    qualities: r.qualities ? JSON.parse(r.qualities) : undefined,
-    subtitles: r.subtitles ? JSON.parse(r.subtitles) : undefined,
-    episodes: r.episodes ? JSON.parse(r.episodes) : undefined,
-    dubs: r.dubs ? JSON.parse(r.dubs) : undefined,
-    seasons: r.seasons ? JSON.parse(r.seasons) : undefined,
+    qualities: parseJsonArray(r.qualities),
+    subtitles: parseJsonArray(r.subtitles),
+    episodes: parseJsonArray(r.episodes),
+    dubs: parseJsonArray(r.dubs),
+    seasons: parseJsonArray(r.seasons),
     order: r.sort_order ?? undefined,
     contributorId: r.contributor_id ?? undefined,
   };
@@ -274,6 +285,14 @@ function normalizeCategories(input: { category?: string; categories?: string[] }
   )];
 }
 
+/** JSON columns must hold real JSON arrays or SQL NULL — never the string
+ *  "null" (which JSON.parse turns into a non-iterable null). */
+function toJson(v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  if (!Array.isArray(v)) return null;
+  return v.length > 0 ? JSON.stringify(v) : null;
+}
+
 app.post("/movies", async (c) => {
   await requireAdmin(c);
   const body = await c.req.json<any>();
@@ -290,11 +309,11 @@ app.post("/movies", async (c) => {
     body.posterUrl ?? null, body.backdropUrl ?? null, body.videoUrl ?? null,
     body.genre ?? null, names[0] ?? null, names.length ? JSON.stringify(names) : null,
     body.year ?? null, body.rating ?? null, body.kind ?? null,
-    body.qualities ? JSON.stringify(body.qualities) : null,
-    body.subtitles ? JSON.stringify(body.subtitles) : null,
-    body.episodes ? JSON.stringify(body.episodes) : null,
-    body.dubs ? JSON.stringify(body.dubs) : null,
-    body.seasons ? JSON.stringify(body.seasons) : null,
+    toJson(body.qualities),
+    toJson(body.subtitles),
+    toJson(body.episodes),
+    toJson(body.dubs),
+    toJson(body.seasons),
     order, Date.now(),
   ).run();
   return c.json({ id: mid });
@@ -324,11 +343,11 @@ app.patch("/movies/:mid", async (c) => {
   col(body.rating, "rating", body.rating ?? null);
   col(body.kind, "kind", body.kind ?? null);
   col(body.order, "sort_order", body.order ?? null);
-  col(body.qualities, "qualities", body.qualities ?? null, true);
-  col(body.subtitles, "subtitles", body.subtitles ?? null, true);
-  col(body.episodes, "episodes", body.episodes ?? null, true);
-  col(body.dubs, "dubs", body.dubs ?? null, true);
-  col(body.seasons, "seasons", body.seasons ?? null, true);
+  col(body.qualities, "qualities", toJson(body.qualities), false);
+  col(body.subtitles, "subtitles", toJson(body.subtitles), false);
+  col(body.episodes, "episodes", toJson(body.episodes), false);
+  col(body.dubs, "dubs", toJson(body.dubs), false);
+  col(body.seasons, "seasons", toJson(body.seasons), false);
   if (names.length > 0 || body.categories !== undefined || body.category !== undefined) {
     sets.push(`category = ?`, `categories = ?`);
     binds.push(names[0] ?? null, names.length ? JSON.stringify(names) : null);
@@ -357,7 +376,7 @@ app.post("/movies/remove-category", async (c) => {
   const { results } = await c.env.DB.prepare(`SELECT id, categories FROM movies`).all<{ id: string; categories: string | null }>();
   let changed = 0;
   for (const r of results ?? []) {
-    const names: string[] = r.categories ? JSON.parse(r.categories) : [];
+    const names: string[] = parseJsonArray(r.categories) ?? [];
     if (!names.includes(trimmed)) continue;
     const rest = names.filter((n) => n !== trimmed);
     await c.env.DB.prepare(`UPDATE movies SET categories = ?, category = ? WHERE id = ?`)
@@ -402,7 +421,7 @@ app.delete("/categories/:cid", async (c) => {
   await c.env.DB.prepare(`DELETE FROM categories WHERE id = ?`).bind(cid).run();
   const { results } = await c.env.DB.prepare(`SELECT id, categories FROM movies`).all<{ id: string; categories: string | null }>();
   for (const r of results ?? []) {
-    const names: string[] = r.categories ? JSON.parse(r.categories) : [];
+    const names: string[] = parseJsonArray(r.categories) ?? [];
     if (!names.includes(row.name)) continue;
     const rest = names.filter((n) => n !== row.name);
     await c.env.DB.prepare(`UPDATE movies SET categories = ?, category = ? WHERE id = ?`)
@@ -638,8 +657,8 @@ function tvOut(r: any) {
     name: r.name,
     logoUrl: r.logo_url ?? undefined,
     streamUrl: r.stream_url,
-    backupUrls: r.backup_urls ? JSON.parse(r.backup_urls) : undefined,
-    categories: r.categories ? JSON.parse(r.categories) : undefined,
+    backupUrls: parseJsonArray(r.backup_urls),
+    categories: parseJsonArray(r.categories),
     order: r.sort_order ?? undefined,
     createdAt: r.created_at,
   };
@@ -661,8 +680,8 @@ app.post("/tv/channels", async (c) => {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     cid, (b.name ?? "").trim(), b.logoUrl ?? null, b.streamUrl ?? "",
-    Array.isArray(b.backupUrls) && b.backupUrls.length ? JSON.stringify(b.backupUrls) : null,
-    Array.isArray(b.categories) && b.categories.length ? JSON.stringify(b.categories) : null,
+    toJson(b.backupUrls),
+    toJson(b.categories),
     b.order ?? null, Date.now(),
   ).run();
   return c.json({ id: cid });
@@ -676,8 +695,8 @@ app.patch("/tv/channels/:cid", async (c) => {
     `UPDATE tv_channels SET name = ?, logo_url = ?, stream_url = ?, backup_urls = ?, categories = ?, sort_order = ? WHERE id = ?`,
   ).bind(
     (b.name ?? "").trim(), b.logoUrl ?? null, b.streamUrl ?? "",
-    Array.isArray(b.backupUrls) && b.backupUrls.length ? JSON.stringify(b.backupUrls) : null,
-    Array.isArray(b.categories) && b.categories.length ? JSON.stringify(b.categories) : null,
+    toJson(b.backupUrls),
+    toJson(b.categories),
     b.order ?? null, cid,
   ).run();
   return c.json({ ok: true });

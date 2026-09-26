@@ -3,6 +3,18 @@ import type { Target } from "./types";
 
 const PROBE_TIMEOUT_MS = 8_000;
 
+/** Parse a JSON column defensively: tolerate SQL NULL and legacy "null"
+ *  strings, always return an iterable array. */
+function parseArray(col: unknown): any[] {
+  if (typeof col !== "string" || !col) return [];
+  try {
+    const v = JSON.parse(col);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function probeUrl(url: string): Promise<{
   status: "ok" | "fail";
   httpStatus?: number;
@@ -48,14 +60,14 @@ export async function collectMovieUrls(db: D1Database) {
     const t: Target = { kind: "movie", name: r.title as string, movieId: r.id as string };
     for (const u of [r.video_url]) if (u) out.push({ url: u as string, target: t });
     for (const arr of ["qualities", "dubs"] as const) {
-      for (const q of r[arr] ? JSON.parse(r[arr] as string) : []) {
+      for (const q of parseArray(r[arr])) {
         if (q.videoUrl) out.push({ url: q.videoUrl, target: t });
       }
     }
-    for (const e of r.episodes ? JSON.parse(r.episodes as string) : []) {
+    for (const e of parseArray(r.episodes)) {
       if (e.videoUrl) out.push({ url: e.videoUrl, target: t });
     }
-    for (const s of r.seasons ? JSON.parse(r.seasons as string) : []) {
+    for (const s of parseArray(r.seasons)) {
       for (const e of s.episodes ?? []) {
         if (e.videoUrl) out.push({ url: e.videoUrl, target: t });
       }
@@ -70,7 +82,7 @@ export async function collectTvUrls(db: D1Database) {
   for (const r of results ?? []) {
     const t: Target = { kind: "tv", name: r.name as string, channelId: r.id as string };
     if (r.stream_url) out.push({ url: r.stream_url as string, target: t });
-    for (const b of r.backup_urls ? JSON.parse(r.backup_urls as string) : []) {
+    for (const b of parseArray(r.backup_urls)) {
       out.push({ url: b, target: t });
     }
   }
