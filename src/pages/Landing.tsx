@@ -230,7 +230,6 @@ export default function Landing() {
             >
               <Dices className="size-4" />
             </Button>
-            <ThemeToggle />
             {isAuthenticated ? (
               <Button
                 variant="ghost"
@@ -253,6 +252,7 @@ export default function Landing() {
                 </Link>
               </Button>
             )}
+            <ThemeToggle />
           </div>
         </div>
       </header>

@@ -85,7 +85,6 @@ export default function Checkout() {
             </Badge>
           </div>
           <div className="flex items-center gap-2">
-            <ThemeToggle />
             <Button asChild variant="ghost" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />
@@ -105,6 +104,7 @@ export default function Checkout() {
                 <span className="hidden sm:inline">Sign out</span>
               </Button>
             )}
+            <ThemeToggle />
           </div>
         </div>
       </header>

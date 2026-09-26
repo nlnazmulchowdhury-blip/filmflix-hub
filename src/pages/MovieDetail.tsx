@@ -199,7 +199,6 @@ export default function MovieDetail() {
             <Logo />
           </Link>
           <div className="flex items-center gap-1 sm:gap-2">
-            <ThemeToggle />
             <Button asChild variant="outline" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />
@@ -207,6 +206,7 @@ export default function MovieDetail() {
                 <span className="sm:hidden">Back</span>
               </Link>
             </Button>
+            <ThemeToggle />
           </div>
         </div>
       </header>
