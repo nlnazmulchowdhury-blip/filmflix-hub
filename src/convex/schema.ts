@@ -196,6 +196,14 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_order", ["order"]),
 
+    /** Named TV category chips managed from the admin panel (same idea as
+     *  the movie "categories" table): the chips exist even with zero
+     *  channels attached, and renaming updates every channel that lists it. */
+    tvCategories: defineTable({
+      name: v.string(),
+      createdAt: v.number(),
+    }).index("by_name", ["name"]),
+
     /** Link-health probe result, ONE row per unique media URL (upserted by
      *  the checker: cron every 6h + admin "check now"). Broken URLs surface
      *  as a notification banner in the admin panel. Rows for URLs that

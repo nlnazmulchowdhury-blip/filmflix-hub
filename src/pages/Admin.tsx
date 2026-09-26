@@ -307,6 +307,62 @@ function AdminContent() {
   const [isAddingCategory, setIsAddingCategory] = useState(false);
 
   /* Live TV channels — add/remove logo + stream URL, shown on /tv */
+  const tvCategoryRows = useQuery(api.tvCategories.listAll);
+  const createTvCategory = useMutation(api.tvCategories.create);
+  const renameTvCategory = useMutation(api.tvCategories.rename);
+  const removeTvCategory = useMutation(api.tvCategories.remove);
+  const [newTvCategory, setNewTvCategory] = useState("");
+  const [isAddingTvCategory, setIsAddingTvCategory] = useState(false);
+  const [renamingTvCategory, setRenamingTvCategory] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [renameTvDraft, setRenameTvDraft] = useState("");
+  const [isRenamingTvCategory, setIsRenamingTvCategory] = useState(false);
+
+  const handleAddTvCategory = async () => {
+    const name = newTvCategory.trim();
+    if (!name) return;
+    setIsAddingTvCategory(true);
+    try {
+      await createTvCategory({ name });
+      toast.success(`TV category "${name}" created`);
+      setNewTvCategory("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create category");
+    } finally {
+      setIsAddingTvCategory(false);
+    }
+  };
+
+  const handleRenameTvCategory = async () => {
+    if (!renamingTvCategory) return;
+    const name = renameTvDraft.trim();
+    if (!name || name === renamingTvCategory.name) {
+      setRenamingTvCategory(null);
+      return;
+    }
+    setIsRenamingTvCategory(true);
+    try {
+      await renameTvCategory({ id: renamingTvCategory.id as Id<"tvCategories">, name });
+      toast.success(`TV category renamed to "${name}"`);
+      setRenamingTvCategory(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to rename category");
+    } finally {
+      setIsRenamingTvCategory(false);
+    }
+  };
+
+  const handleDeleteTvCategory = async (id: string, name: string) => {
+    try {
+      await removeTvCategory({ id: id as Id<"tvCategories"> });
+      toast.success(`TV category "${name}" deleted`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete category");
+    }
+  };
+
   const tvChannels = useQuery(api.tvChannels.list);
   const addTvChannel = useMutation(api.tvChannels.add);
   const updateTvChannel = useMutation(api.tvChannels.update);
@@ -1618,6 +1674,135 @@ function AdminContent() {
               {/* Live TV channels */}
               <TabsContent value="tv">
                 <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
+                  {/* TV category manager */}
+                  <Card className="h-fit border-border/60 bg-card/60">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="font-display text-base">
+                        TV categories ({tvCategoryRows?.length ?? 0})
+                      </CardTitle>
+                      <CardDescription>
+                        Chips shown on the /tv page. Renaming updates every
+                        channel that uses it; deleting only removes the chip.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="flex gap-2">
+                        <Input
+                          value={newTvCategory}
+                          onChange={(e) => setNewTvCategory(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void handleAddTvCategory();
+                            }
+                          }}
+                          placeholder="New category name"
+                          maxLength={60}
+                          aria-label="New TV category name"
+                        />
+                        <Button
+                          type="button"
+                          disabled={isAddingTvCategory || !newTvCategory.trim()}
+                          onClick={() => void handleAddTvCategory()}
+                        >
+                          {isAddingTvCategory ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Plus className="size-4" />
+                          )}
+                          Add
+                        </Button>
+                      </div>
+                      {!tvCategoryRows ? (
+                        <div className="space-y-2">
+                          <Skeleton className="h-9 w-full" />
+                          <Skeleton className="h-9 w-full" />
+                        </div>
+                      ) : tvCategoryRows.length === 0 ? (
+                        <p className="py-4 text-center text-sm text-muted-foreground">
+                          No TV categories yet — add the first one above.
+                        </p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {tvCategoryRows.map((cat) =>
+                            renamingTvCategory?.id === cat._id ? (
+                              <div
+                                key={cat._id}
+                                className="flex items-center gap-1 rounded-full border border-primary/50 bg-background py-1 pl-3 pr-1"
+                              >
+                                <Input
+                                  autoFocus
+                                  value={renameTvDraft}
+                                  onChange={(e) => setRenameTvDraft(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      void handleRenameTvCategory();
+                                    }
+                                    if (e.key === "Escape") setRenamingTvCategory(null);
+                                  }}
+                                  className="h-7 w-32 border-0 px-0 text-sm shadow-none focus-visible:ring-0"
+                                  maxLength={60}
+                                />
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  className="size-6 rounded-full"
+                                  disabled={isRenamingTvCategory || !renameTvDraft.trim()}
+                                  onClick={() => void handleRenameTvCategory()}
+                                  aria-label="Save TV category name"
+                                >
+                                  {isRenamingTvCategory ? (
+                                    <Loader2 className="size-3 animate-spin" />
+                                  ) : (
+                                    <Check className="size-3.5" />
+                                  )}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  className="size-6 rounded-full text-muted-foreground"
+                                  onClick={() => setRenamingTvCategory(null)}
+                                  aria-label="Cancel TV category rename"
+                                >
+                                  <X className="size-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <span
+                                key={cat._id}
+                                className="group inline-flex items-center gap-1 rounded-full border border-border/60 bg-secondary/40 py-1 pl-3 pr-1 text-xs font-semibold"
+                              >
+                                {cat.name}
+                                <button
+                                  type="button"
+                                  aria-label={`Edit TV category ${cat.name}`}
+                                  title="Rename"
+                                  onClick={() => {
+                                    setRenamingTvCategory({ id: cat._id, name: cat.name });
+                                    setRenameTvDraft(cat.name);
+                                  }}
+                                  className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                                >
+                                  <Pencil className="size-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label={`Delete TV category ${cat.name}`}
+                                  title="Delete — channels keep playing, they just lose this chip"
+                                  onClick={() => void handleDeleteTvCategory(cat._id, cat.name)}
+                                  className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                                >
+                                  <Trash2 className="size-3" />
+                                </button>
+                              </span>
+                            ),
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
                   {/* Add form */}
                   <Card className="h-fit border-border/60 bg-card/60">
                     <CardHeader className="pb-3">
@@ -1688,14 +1873,55 @@ function AdminContent() {
                       />
                       <div className="space-y-1.5">
                         <label htmlFor="tv-categories" className="text-xs font-medium text-muted-foreground">
-                          Categories (comma-separated)
+                          Categories
                         </label>
-                        <Input
-                          id="tv-categories"
-                          value={tvCategories}
-                          onChange={(e) => setTvCategories(e.target.value)}
-                          placeholder="Sports, Bangla, News"
-                        />
+                        {(() => {
+                          const selectedTvCats = tvCategories
+                            .split(",")
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          const chips = [
+                            ...(tvCategoryRows ?? []).map((c) => c.name),
+                            ...selectedTvCats.filter(
+                              (s) => !(tvCategoryRows ?? []).some((c) => c.name === s),
+                            ),
+                          ];
+                          return chips.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5">
+                              {chips.map((name) => {
+                                const active = selectedTvCats.includes(name);
+                                return (
+                                  <button
+                                    key={name}
+                                    type="button"
+                                    aria-pressed={active}
+                                    onClick={() =>
+                                      setTvCategories(
+                                        active
+                                          ? selectedTvCats.filter((s) => s !== name).join(", ")
+                                          : [...selectedTvCats, name].join(", "),
+                                      )
+                                    }
+                                    className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                                      active
+                                        ? "bg-primary text-primary-foreground"
+                                        : "border border-border/60 bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                    }`}
+                                  >
+                                    {name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <Input
+                              id="tv-categories"
+                              value={tvCategories}
+                              onChange={(e) => setTvCategories(e.target.value)}
+                              placeholder="Sports, Bangla, News"
+                            />
+                          );
+                        })()}
                       </div>
                       <Button
                         type="button"
@@ -2311,14 +2537,55 @@ function AdminContent() {
             />
             <div className="space-y-1.5">
               <label htmlFor="tv-edit-categories" className="text-xs font-medium text-muted-foreground">
-                Categories (comma-separated)
+                Categories
               </label>
-              <Input
-                id="tv-edit-categories"
-                value={editTvCategories}
-                onChange={(e) => setEditTvCategories(e.target.value)}
-                placeholder="Sports, Bangla, News"
-              />
+              {(() => {
+                const selectedTvCats = editTvCategories
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+                const chips = [
+                  ...(tvCategoryRows ?? []).map((c) => c.name),
+                  ...selectedTvCats.filter(
+                    (s) => !(tvCategoryRows ?? []).some((c) => c.name === s),
+                  ),
+                ];
+                return chips.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {chips.map((name) => {
+                      const active = selectedTvCats.includes(name);
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() =>
+                            setEditTvCategories(
+                              active
+                                ? selectedTvCats.filter((s) => s !== name).join(", ")
+                                : [...selectedTvCats, name].join(", "),
+                            )
+                          }
+                          className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                            active
+                              ? "bg-primary text-primary-foreground"
+                              : "border border-border/60 bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                          }`}
+                        >
+                          {name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <Input
+                    id="tv-edit-categories"
+                    value={editTvCategories}
+                    onChange={(e) => setEditTvCategories(e.target.value)}
+                    placeholder="Sports, Bangla, News"
+                  />
+                );
+              })()}
             </div>
             <div className="space-y-1.5">
               <label htmlFor="tv-edit-order" className="text-xs font-medium text-muted-foreground">
