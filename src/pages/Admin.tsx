@@ -81,12 +81,16 @@ function AdminContent() {
   const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
   const analytics = useQuery(api.analytics.summary, isAdmin ? {} : "skip");
 
-  /* Link health: broken movie/TV stream URLs → admin notification banner.
-     Checked automatically every 6h (crons.ts) + manually via "Check now". */
+  /* Link health: broken movie/TV stream URLs → "Links" tab (checked every
+     6h by cron + manually). Toasts once when NEW failures appear. */
   const linkHealth = useQuery(api.linkHealth.summary, isAdmin ? {} : "skip");
   const checkLinks = useAction(api.linkHealth.checkAll);
+  const setLinkIgnored = useMutation(api.linkHealth.setIgnored);
   const [isCheckingLinks, setIsCheckingLinks] = useState(false);
   const notifiedBroken = useRef(false);
+
+  const brokenCount = linkHealth?.failures.length ?? 0;
+  const ignoredCount = linkHealth?.ignoredFailures.length ?? 0;
 
   useEffect(() => {
     if (!linkHealth) return;
@@ -94,11 +98,20 @@ function AdminContent() {
     if (count > 0 && !notifiedBroken.current) {
       notifiedBroken.current = true;
       toast.warning(
-        `${count} stream link${count === 1 ? " is" : "s are"} broken — see the alert below`,
+        `${count} stream link${count === 1 ? " is" : "s are"} broken — see the Links tab`,
         { duration: 8000 },
       );
     }
   }, [linkHealth]);
+
+  const toggleLinkIgnored = async (url: string, ignored: boolean) => {
+    try {
+      await setLinkIgnored({ url, ignored });
+      toast.success(ignored ? "Link hidden from the alert" : "Link restored to the alert");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    }
+  };
 
   /* Ad networks (whose script may have loaded on public pages earlier in the
      session) keep injecting stray anchors (e.g. <a id="lkiir">), hidden
@@ -471,19 +484,6 @@ function AdminContent() {
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
-                  variant="outline"
-                  className="gap-2"
-                  disabled={isCheckingLinks}
-                  onClick={handleCheckLinks}
-                >
-                  {isCheckingLinks ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <ShieldAlert className="size-4" />
-                  )}
-                  Check links
-                </Button>
-                <Button
                   className="glow-accent gap-2"
                   onClick={() => {
                     setEditing(null);
@@ -495,72 +495,6 @@ function AdminContent() {
                 </Button>
               </div>
             </div>
-
-            {/* Link-health alert — broken movie/TV stream URLs */}
-            {linkHealth && linkHealth.failures.length > 0 && (
-              <div className="mb-6 rounded-xl border border-destructive/40 bg-destructive/10 p-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <ShieldAlert className="size-4 shrink-0 text-destructive" />
-                  <p className="font-display text-sm font-semibold text-destructive">
-                    {linkHealth.failures.length} stream link{linkHealth.failures.length === 1 ? "" : "s"} not working
-                  </p>
-                  {linkHealth.lastCheckedAt && (
-                    <span className="text-xs text-muted-foreground">
-                      · last checked {fmtDateTime(linkHealth.lastCheckedAt)}
-                    </span>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="ml-auto gap-1.5"
-                    disabled={isCheckingLinks}
-                    onClick={handleCheckLinks}
-                  >
-                    {isCheckingLinks ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Link2 className="size-3.5" />
-                    )}
-                    Check now
-                  </Button>
-                </div>
-                <ul className="mt-2.5 space-y-2">
-                  {linkHealth.failures.slice(0, 8).map((f) => (
-                    <li key={f.url} className="min-w-0 text-xs">
-                      <span className="text-foreground/90">
-                        {f.targets.map((t, i) => (
-                          <span key={`${t.kind}-${t.name}-${i}`}>
-                            {t.kind === "movie" && t.movieId ? (
-                              <Link
-                                to={`/movie/${t.movieId}`}
-                                className="font-medium text-primary underline-offset-2 hover:underline"
-                              >
-                                {t.name}
-                              </Link>
-                            ) : (
-                              <span className="font-medium">{t.name}</span>
-                            )}
-                            {i < f.targets.length - 1 ? ", " : ""}
-                          </span>
-                        ))}
-                        {" — "}
-                        <span className="font-medium text-destructive">
-                          {f.error ?? "failed"}
-                        </span>
-                      </span>
-                      <span className="block truncate text-muted-foreground" title={f.url}>
-                        {f.url}
-                      </span>
-                    </li>
-                  ))}
-                  {linkHealth.failures.length > 8 && (
-                    <li className="text-xs text-muted-foreground">
-                      …and {linkHealth.failures.length - 8} more
-                    </li>
-                  )}
-                </ul>
-              </div>
-            )}
 
             {/* Stats row */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -643,6 +577,14 @@ function AdminContent() {
                 </TabsTrigger>
                 <TabsTrigger value="tv" className="gap-1.5">
                   <Tv className="size-3.5" /> TV
+                </TabsTrigger>
+                <TabsTrigger value="links" className="gap-1.5">
+                  <ShieldAlert className="size-3.5" /> Links
+                  {brokenCount > 0 && (
+                    <span className="ml-1 inline-flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold leading-4 text-destructive-foreground">
+                      {brokenCount}
+                    </span>
+                  )}
                 </TabsTrigger>
               </TabsList>
               </div>
@@ -1718,6 +1660,182 @@ function AdminContent() {
                     </CardContent>
                   </Card>
                 </div>
+              </TabsContent>
+
+              {/* Links — stream URL health management */}
+              <TabsContent value="links">
+                <Card className="overflow-hidden p-0">
+                  <CardHeader className="border-b border-border/50 py-4">
+                    <CardTitle className="font-display flex flex-wrap items-center gap-2 text-lg">
+                      Stream link health
+                      {brokenCount > 0 && (
+                        <Badge variant="outline" className="border-destructive/50 bg-destructive/10 text-destructive">
+                          {brokenCount} broken
+                        </Badge>
+                      )}
+                      {ignoredCount > 0 && (
+                        <Badge variant="outline" className="border-border/60 text-muted-foreground">
+                          {ignoredCount} ignored
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    <CardDescription>
+                      Every movie & TV stream URL is probed automatically every 6 hours.
+                      Broken links show here — fix, ignore, or re-check them.
+                      {linkHealth?.lastCheckedAt && (
+                        <span className="block">Last checked {fmtDateTime(linkHealth.lastCheckedAt)}.</span>
+                      )}
+                    </CardDescription>
+                  </CardHeader>
+                  <div className="flex flex-wrap items-center gap-2 border-b border-border/50 px-4 py-3">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5"
+                      disabled={isCheckingLinks}
+                      onClick={handleCheckLinks}
+                    >
+                      {isCheckingLinks ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Link2 className="size-3.5" />
+                      )}
+                      Check all links now
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      Ignored links stay tracked but never raise the alert.
+                    </p>
+                  </div>
+
+                  {!linkHealth ? (
+                    <div className="space-y-3 p-6">
+                      <Skeleton className="h-10 w-full" />
+                      <Skeleton className="h-10 w-full" />
+                    </div>
+                  ) : brokenCount === 0 && ignoredCount === 0 ? (
+                    <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
+                      <span className="flex size-12 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-500">
+                        <ShieldCheck className="size-6" />
+                      </span>
+                      <p className="font-display text-lg font-semibold">All stream links are healthy</p>
+                      <p className="max-w-sm text-sm text-muted-foreground">
+                        {linkHealth.trackedCount} link{linkHealth.trackedCount === 1 ? "" : "s"} tracked.
+                        Run a manual check any time to re-probe everything now.
+                      </p>
+                    </CardContent>
+                  ) : (
+                    <div className="divide-y divide-border/50">
+                      {[...linkHealth.failures, ...linkHealth.ignoredFailures].map((f) => (
+                        <div key={f.url} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              {f.targets.map((t, i) => (
+                                <span key={`${t.kind}-${t.name}-${i}`} className="text-sm font-medium">
+                                  {t.kind === "movie" && t.movieId ? (
+                                    <Link
+                                      to={`/movie/${t.movieId}`}
+                                      className="text-primary underline-offset-2 hover:underline"
+                                    >
+                                      {t.name}
+                                    </Link>
+                                  ) : (
+                                    <span>{t.name}</span>
+                                  )}
+                                  {i < f.targets.length - 1 ? "," : ""}
+                                </span>
+                              ))}
+                              <Badge
+                                variant="outline"
+                                className={
+                                  f.ignored
+                                    ? "border-border/60 text-muted-foreground"
+                                    : "border-destructive/50 bg-destructive/10 text-destructive"
+                                }
+                              >
+                                {f.ignored ? "ignored" : (f.error ?? "failed")}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                {fmtDateTime(f.checkedAt)}
+                              </span>
+                            </div>
+                            <p className="mt-1 break-all font-mono text-xs text-muted-foreground" title={f.url}>
+                              {f.url}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-1.5">
+                            {f.targets.map((t) =>
+                              t.kind === "movie" && t.movieId ? (
+                                <Button
+                                  key={`edit-${t.movieId}`}
+                                  size="sm"
+                                  variant="outline"
+                                  className="gap-1.5"
+                                  onClick={() => {
+                                    const movie = (movies ?? []).find((m) => m._id === t.movieId);
+                                    if (movie) {
+                                      setEditing(movie);
+                                      setDialogOpen(true);
+                                    } else {
+                                      toast.error("Movie not found in the catalog");
+                                    }
+                                  }}
+                                >
+                                  <Pencil className="size-3.5" />
+                                  Edit
+                                </Button>
+                              ) : t.kind === "tv" && t.channelId ? (
+                                <Button
+                                  key={`edit-${t.channelId}`}
+                                  size="sm"
+                                  variant="outline"
+                                  className="gap-1.5"
+                                  onClick={() => {
+                                    const ch = (tvChannels ?? []).find((c) => c._id === t.channelId);
+                                    if (ch) {
+                                      openEditTv(ch);
+                                    } else {
+                                      toast.error("Channel not found");
+                                    }
+                                  }}
+                                >
+                                  <Pencil className="size-3.5" />
+                                  Edit
+                                </Button>
+                              ) : null,
+                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1.5"
+                              onClick={() => window.open(f.url, "_blank", "noopener,noreferrer")}
+                            >
+                              <Link2 className="size-3.5" />
+                              Open
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={f.ignored ? "secondary" : "ghost"}
+                              className="gap-1.5"
+                              onClick={() => toggleLinkIgnored(f.url, !f.ignored)}
+                            >
+                              {f.ignored ? (
+                                <>
+                                  <ShieldCheck className="size-3.5" />
+                                  Un-ignore
+                                </>
+                              ) : (
+                                <>
+                                  <X className="size-3.5" />
+                                  Ignore
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
               </TabsContent>
             </Tabs>
           </>

@@ -206,6 +206,9 @@ const schema = defineSchema(
       httpStatus: v.optional(v.number()),
       error: v.optional(v.string()),
       checkedAt: v.number(),
+      /** Admin muted this URL (e.g. known token-expiry noise) — hidden from
+       *  the alert count but still tracked and re-checkable. */
+      ignored: v.optional(v.boolean()),
       /** Where this URL is referenced (movie video/quality/dub/episode,
        *  TV primary/backup). */
       targets: v.array(

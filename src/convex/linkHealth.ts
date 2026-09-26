@@ -1,6 +1,6 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { action, internalAction, internalMutation, internalQuery, query } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
@@ -118,7 +118,7 @@ async function probeUrl(url: string): Promise<ProbeResult> {
   }
 }
 
-/** Upsert the probe result. */
+/** Upsert the probe result (preserves the admin's ignored flag). */
 export const saveResult = internalMutation({
   args: {
     url: v.string(),
@@ -142,6 +142,20 @@ export const saveResult = internalMutation({
     const row = { status, httpStatus, error, checkedAt: Date.now(), targets };
     if (existing) await ctx.db.patch(existing._id, row);
     else await ctx.db.insert("linkHealth", { url, ...row });
+  },
+});
+
+/** Admin toggles the ignored flag on one URL. */
+export const setIgnored = mutation({
+  args: { url: v.string(), ignored: v.boolean() },
+  handler: async (ctx, { url, ignored }) => {
+    await requireAdmin(ctx);
+    const row = await ctx.db
+      .query("linkHealth")
+      .withIndex("by_url", (q) => q.eq("url", url))
+      .unique();
+    if (!row) throw new Error("URL not tracked yet — run a check first");
+    await ctx.db.patch(row._id, { ignored });
   },
 });
 
@@ -227,25 +241,37 @@ export const summary = query({
       .collect();
 
     let lastCheckedAt = 0;
+    let tracked = 0;
     for (const r of await ctx.db.query("linkHealth").collect()) {
       if (r.checkedAt > lastCheckedAt) lastCheckedAt = r.checkedAt;
+      tracked++;
     }
 
+    const toFailure = (r: (typeof failing)[number]) => ({
+      url: r.url,
+      httpStatus: r.httpStatus,
+      error: r.error,
+      checkedAt: r.checkedAt,
+      ignored: r.ignored ?? false,
+      targets: r.targets.map((t) => ({
+        kind: t.kind,
+        name: t.name,
+        movieId: t.movieId,
+        channelId: t.channelId,
+      })),
+    });
+
+    const active = failing.filter((r) => !r.ignored);
+    const ignored = failing
+      .filter((r) => r.ignored)
+      .sort((a, b) => a.url.localeCompare(b.url));
+
     return {
-      failures: failing
+      failures: active
         .sort((a, b) => a.url.localeCompare(b.url))
-        .map((r) => ({
-          url: r.url,
-          httpStatus: r.httpStatus,
-          error: r.error,
-          checkedAt: r.checkedAt,
-          targets: r.targets.map((t) => ({
-            kind: t.kind,
-            name: t.name,
-            movieId: t.movieId,
-            channelId: t.channelId,
-          })),
-        })),
+        .map(toFailure),
+      ignoredFailures: ignored.map(toFailure),
+      trackedCount: tracked,
       lastCheckedAt: lastCheckedAt || null,
     };
   },
