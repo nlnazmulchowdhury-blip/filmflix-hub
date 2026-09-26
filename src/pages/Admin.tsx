@@ -46,6 +46,9 @@ import {
   ArrowLeft,
   BarChart3,
   CalendarClock,
+  ChevronDown,
+  ChevronUp,
+  ChevronsUp,
   Clapperboard,
   CreditCard,
   Film,
@@ -100,6 +103,24 @@ function AdminContent() {
     isAdmin ? {} : "skip",
   );
   const adminUnread = useQuery(api.support.unreadForAdmin, isAdmin ? {} : "skip");
+  const moveMovieTop = useMutation(api.movies.moveToTop);
+  const moveMovieOrder = useMutation(api.movies.moveInOrder);
+  const [busyOrder, setBusyOrder] = useState<string | null>(null);
+
+  const applyMovieMove = async (
+    id: string,
+    fn: () => Promise<unknown>,
+  ) => {
+    setBusyOrder(id);
+    try {
+      await fn();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Move failed");
+    } finally {
+      setBusyOrder(null);
+    }
+  };
+
   const replySupport = useMutation(api.support.replyFromAdmin);
   const editSupport = useMutation(api.support.editAsAdmin);
   const deleteSupport = useMutation(api.support.deleteAsAdmin);
@@ -852,6 +873,7 @@ function AdminContent() {
                         <TableRow className="hover:bg-transparent">
                           <TableHead className="w-16">Poster</TableHead>
                           <TableHead>Title</TableHead>
+                          <TableHead className="w-28">Order</TableHead>
                           <TableHead className="hidden md:table-cell">Category</TableHead>
                           <TableHead className="hidden lg:table-cell">Year</TableHead>
                           <TableHead className="hidden md:table-cell">Rating</TableHead>
@@ -877,6 +899,49 @@ function AdminContent() {
                               <p className="truncate text-xs text-muted-foreground">
                                 {m.videoUrl ? "Video ready" : "No video"}
                               </p>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-0.5">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-6"
+                                  aria-label={`Move ${m.title} to top`}
+                                  title="Move to top — show first on the site"
+                                  disabled={busyOrder === m._id}
+                                  onClick={() =>
+                                    applyMovieMove(m._id, () => moveMovieTop({ id: m._id }))
+                                  }
+                                >
+                                  <ChevronsUp className="size-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-6"
+                                  aria-label={`Move ${m.title} up`}
+                                  title="Move up one slot"
+                                  disabled={busyOrder === m._id}
+                                  onClick={() =>
+                                    applyMovieMove(m._id, () => moveMovieOrder({ id: m._id, dir: "up" }))
+                                  }
+                                >
+                                  <ChevronUp className="size-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-6"
+                                  aria-label={`Move ${m.title} down`}
+                                  title="Move down one slot"
+                                  disabled={busyOrder === m._id}
+                                  onClick={() =>
+                                    applyMovieMove(m._id, () => moveMovieOrder({ id: m._id, dir: "down" }))
+                                  }
+                                >
+                                  <ChevronDown className="size-3.5" />
+                                </Button>
+                              </div>
                             </TableCell>
                             <TableCell className="hidden md:table-cell">
                               {(() => {

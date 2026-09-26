@@ -58,7 +58,10 @@ const movieFields = {
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db.query("movies").withIndex("order").collect();
+    const rows = await ctx.db.query("movies").withIndex("order").collect();
+    // Newest uploads first: `add` assigns a growing `order`, so sorting
+    // descending puts the latest upload at the very top of the catalog.
+    return rows.sort((a, b) => (b.order ?? 0) - (a.order ?? 0));
   },
 });
 
@@ -129,6 +132,44 @@ export const remove = mutation({
   handler: async (ctx, { id }) => {
     await requireAdmin(ctx);
     await ctx.db.delete(id);
+  },
+});
+
+/** Admin: pin a movie to the very front of the catalog (shows first). */
+export const moveToTop = mutation({
+  args: { id: v.id("movies") },
+  handler: async (ctx, { id }) => {
+    await requireAdmin(ctx);
+    const rows = await ctx.db.query("movies").withIndex("order").collect();
+    const max = rows.reduce((acc, r) => Math.max(acc, r.order ?? 0), 0);
+    await ctx.db.patch(id, { order: max + 1 });
+  },
+});
+
+/** Admin: nudge a movie one slot up/down in the displayed order. */
+export const moveInOrder = mutation({
+  args: { id: v.id("movies"), dir: v.union(v.literal("up"), v.literal("down")) },
+  handler: async (ctx, { id, dir }) => {
+    await requireAdmin(ctx);
+    const rows = await ctx.db.query("movies").withIndex("order").collect();
+    rows.sort((a, b) => (b.order ?? 0) - (a.order ?? 0)); // display order
+    const idx = rows.findIndex((r) => r._id === id);
+    if (idx === -1) throw new Error("Movie not found");
+    const neighborIdx = dir === "up" ? idx - 1 : idx + 1;
+    if (neighborIdx < 0 || neighborIdx >= rows.length) return; // at the edge
+    const me = rows[idx];
+    const other = rows[neighborIdx];
+    const myOrder = me.order ?? 0;
+    const otherOrder = other.order ?? 0;
+    if (myOrder === otherOrder) {
+      // Rare legacy tie — nudge the neighbor so the display order is strict.
+      await ctx.db.patch(other._id, {
+        order: dir === "up" ? otherOrder + 1 : otherOrder - 1,
+      });
+    } else {
+      await ctx.db.patch(me._id, { order: otherOrder });
+      await ctx.db.patch(other._id, { order: myOrder });
+    }
   },
 });
 
