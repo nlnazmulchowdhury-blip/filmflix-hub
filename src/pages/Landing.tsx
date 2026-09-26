@@ -153,7 +153,7 @@ export default function Landing() {
             <SheetTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
                 className="md:hidden text-muted-foreground hover:text-foreground"
                 aria-label="Open menu"
               >
@@ -174,6 +174,17 @@ export default function Landing() {
                     to: isAuthenticated ? "/dashboard" : "/auth?returnTo=%2Fdashboard",
                   },
                   { label: "TV", to: "/tv" },
+                  ...(isAuthenticated
+                    ? [
+                        {
+                          label: "Sign out",
+                          action: () => {
+                            setMenuOpen(false);
+                            void signOut();
+                          },
+                        },
+                      ]
+                    : []),
                 ].map((item) =>
                   item.action ? (
                     <button
@@ -224,7 +235,7 @@ export default function Landing() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="text-muted-foreground"
+                className="hidden text-muted-foreground md:inline-flex"
                 onClick={async () => {
                   await signOut();
                 }}
