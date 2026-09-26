@@ -38,6 +38,7 @@ import {
   Clapperboard,
   CreditCard,
   Film,
+  Headset,
   KeyRound,
   Loader2,
   LogOut,
@@ -45,6 +46,7 @@ import {
   Pencil,
   Plus,
   Search,
+  Send,
   ShieldAlert,
   ShieldCheck,
   ShieldOff,
@@ -80,6 +82,48 @@ function AdminContent() {
   const markOrderPaid = useMutation(api.orders.markPaid);
   const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
   const analytics = useQuery(api.analytics.summary, isAdmin ? {} : "skip");
+
+  /* Help-center chat: visitor conversations + admin replies */
+  const conversations = useQuery(
+    api.support.listConversations,
+    isAdmin ? {} : "skip",
+  );
+  const adminUnread = useQuery(api.support.unreadForAdmin, isAdmin ? {} : "skip");
+  const replySupport = useMutation(api.support.replyFromAdmin);
+  const markSupportSeen = useMutation(api.support.markSeenByAdmin);
+  const [activeThread, setActiveThread] = useState<string | null>(null);
+  const [supportDraft, setSupportDraft] = useState("");
+  const [isReplying, setIsReplying] = useState(false);
+  const thread = useQuery(
+    api.support.listThread,
+    activeThread ? { userId: activeThread as Id<"users"> } : "skip",
+  );
+  const supportScroll = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = supportScroll.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [thread?.length, activeThread]);
+
+  useEffect(() => {
+    if (activeThread && (thread ?? []).some((m) => m.sender === "user")) {
+      markSupportSeen({ userId: activeThread as Id<"users"> });
+    }
+  }, [activeThread, thread, markSupportSeen]);
+
+  const sendSupportReply = async () => {
+    const text = supportDraft.trim();
+    if (!text || !activeThread || isReplying) return;
+    setIsReplying(true);
+    try {
+      await replySupport({ userId: activeThread as Id<"users">, text });
+      setSupportDraft("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send");
+    } finally {
+      setIsReplying(false);
+    }
+  };
 
   /* Link health: broken movie/TV stream URLs → "Links" tab (checked every
      6h by cron + manually). Toasts once when NEW failures appear. */
@@ -577,6 +621,14 @@ function AdminContent() {
                 </TabsTrigger>
                 <TabsTrigger value="tv" className="gap-1.5">
                   <Tv className="size-3.5" /> TV
+                </TabsTrigger>
+                <TabsTrigger value="support" className="gap-1.5">
+                  <Headset className="size-3.5" /> Support
+                  {(adminUnread ?? 0) > 0 && (
+                    <span className="ml-1 inline-flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold leading-4 text-destructive-foreground">
+                      {adminUnread}
+                    </span>
+                  )}
                 </TabsTrigger>
                 <TabsTrigger value="links" className="gap-1.5">
                   <ShieldAlert className="size-3.5" /> Links
@@ -1831,6 +1883,134 @@ function AdminContent() {
                               )}
                             </Button>
                           </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </TabsContent>
+
+              {/* Support — help-center chat inbox */}
+              <TabsContent value="support">
+                <Card className="overflow-hidden p-0">
+                  <CardHeader className="border-b border-border/50 py-4">
+                    <CardTitle className="font-display flex flex-wrap items-center gap-2 text-lg">
+                      Help center inbox
+                      {(adminUnread ?? 0) > 0 && (
+                        <Badge variant="outline" className="border-destructive/50 bg-destructive/10 text-destructive">
+                          {adminUnread} unread
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    <CardDescription>
+                      Messages from the floating help-center widget on the site.
+                      Pick a conversation to reply — the user sees it live.
+                    </CardDescription>
+                  </CardHeader>
+
+                  {!conversations ? (
+                    <div className="space-y-3 p-6">
+                      <Skeleton className="h-10 w-full" />
+                      <Skeleton className="h-10 w-full" />
+                    </div>
+                  ) : conversations.length === 0 ? (
+                    <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
+                      <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                        <Headset className="size-6" />
+                      </span>
+                      <p className="font-display text-lg font-semibold">No conversations yet</p>
+                      <p className="max-w-sm text-sm text-muted-foreground">
+                        When visitors use the help-center widget (bottom-right
+                        of the site), their messages appear here.
+                      </p>
+                    </CardContent>
+                  ) : (
+                    <div className="divide-y divide-border/50">
+                      {conversations.map((c) => (
+                        <div key={c.userId} className="px-4 py-3">
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-3 text-left"
+                            onClick={() =>
+                              setActiveThread(activeThread === c.userId ? null : c.userId)
+                            }
+                          >
+                            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-bold text-primary">
+                              {(c.userName ?? "G").slice(0, 1).toUpperCase()}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-2">
+                                <span className="truncate text-sm font-semibold">{c.userName}</span>
+                                {c.isAnonymous && (
+                                  <Badge variant="secondary" className="text-[10px]">guest</Badge>
+                                )}
+                                {c.unread > 0 && (
+                                  <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold leading-5 text-destructive-foreground">
+                                    {c.unread}
+                                  </span>
+                                )}
+                              </span>
+                              <span className="block truncate text-xs text-muted-foreground">
+                                {c.lastSender === "admin" ? "You: " : ""}
+                                {c.lastText}
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {fmtDateTime(c.lastAt)}
+                            </span>
+                          </button>
+
+                          {activeThread === c.userId && (
+                            <div className="mt-3 rounded-lg border border-border/60 bg-background/60 p-3">
+                              <div
+                                ref={supportScroll}
+                                className="max-h-72 space-y-2 overflow-y-auto"
+                              >
+                                {(thread ?? []).map((m) => (
+                                  <div
+                                    key={m._id}
+                                    className={`flex ${m.sender === "admin" ? "justify-end" : "justify-start"}`}
+                                  >
+                                    <div
+                                      className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-1.5 text-sm ${
+                                        m.sender === "admin"
+                                          ? "rounded-br-md bg-primary text-primary-foreground"
+                                          : "rounded-bl-md bg-muted text-foreground"
+                                      }`}
+                                    >
+                                      {m.text}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                              <form
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  sendSupportReply();
+                                }}
+                                className="mt-3 flex items-center gap-2"
+                              >
+                                <Input
+                                  value={supportDraft}
+                                  onChange={(e) => setSupportDraft(e.target.value)}
+                                  placeholder="Reply as admin…"
+                                  maxLength={1000}
+                                />
+                                <Button
+                                  type="submit"
+                                  size="icon"
+                                  className="size-10 shrink-0"
+                                  disabled={isReplying || !supportDraft.trim()}
+                                >
+                                  {isReplying ? (
+                                    <Loader2 className="size-4 animate-spin" />
+                                  ) : (
+                                    <Send className="size-4" />
+                                  )}
+                                </Button>
+                              </form>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>

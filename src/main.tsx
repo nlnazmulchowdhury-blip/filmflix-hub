@@ -3,6 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { MiniPlayerProvider } from "@/components/MiniPlayerProvider";
 import AnalyticsTracker from "@/components/AnalyticsTracker";
+import HelpCenterWidget from "@/components/HelpCenterWidget";
 import InstallPrompt from "@/components/InstallPrompt";
 import { ThemeProvider } from "next-themes";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
@@ -140,6 +141,14 @@ function RouteSyncer() {
   return null;
 }
 
+/** HelpCenterWidget on every public route — the admin panel has its own
+ *  conversations inbox, so the floating widget would just be noise there. */
+function HelpCenterRouteGate() {
+  const location = useLocation();
+  if (location.pathname.startsWith("/nazmul")) return null;
+  return <HelpCenterWidget />;
+}
+
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -156,6 +165,8 @@ createRoot(document.getElementById("root")!).render(
           <RouteSyncer />
           <AnalyticsTracker />
           <InstallPrompt />
+          {/* Floating help-center chat — hidden on the admin route */}
+          <HelpCenterRouteGate />
           <Suspense fallback={<RouteLoading />}>
             <PageFade>
             <Routes>

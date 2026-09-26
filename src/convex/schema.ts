@@ -232,6 +232,22 @@ const schema = defineSchema(
     })
       .index("by_user", ["userId"])
       .index("by_user_movie", ["userId", "movieId"]),
+
+    /** Help-center chat: one message per row. Each conversation is keyed by
+     *  the visitor's userId (guest sessions included). Admins read/reply from
+     *  the admin panel; users see replies live in the widget. */
+    supportMessages: defineTable({
+      userId: v.id("users"),
+      /** "user" = from the visitor, "admin" = reply from the team. */
+      sender: v.union(v.literal("user"), v.literal("admin")),
+      text: v.string(),
+      createdAt: v.number(),
+      /** Set when the recipient side has seen the latest messages. */
+      seenByAdmin: v.optional(v.boolean()),
+      seenByUser: v.optional(v.boolean()),
+    })
+      .index("by_user", ["userId"])
+      .index("by_created", ["createdAt"]),
   },
   {
     schemaValidation: false,
