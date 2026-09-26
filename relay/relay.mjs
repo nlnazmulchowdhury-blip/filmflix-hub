@@ -7,6 +7,8 @@
  * from ANY network (mobile data, other ISPs, networks that block private IPs/FTP).
  *
  * Routes:
+ *   /api/stream/<ch>    -> range-aware progressive video streaming (seek/resume,
+ *                          HTTP 206 Partial Content, Accept-Ranges: bytes)
  *   /c/<channel>        -> channel entry from channels.json (nice URLs for the app)
  *   /r/<base64url(url)> -> generic hop to any upstream playlist or segment
  *   /healthz            -> ok
@@ -16,7 +18,11 @@
  *     (segments, variant playlists, keys, maps) points back at this relay.
  *   - Segments (.ts/.m4s/...) are proxied and cached in an in-memory LRU, so
  *     N simultaneous viewers still cost the upstream roughly one playback.
- *   - Byte-range requests are streamed straight through without caching.
+ *   - Video files (.mp4/.mkv/...) and /api/stream requests are streamed chunk
+ *     by chunk with full HTTP Range support: the upstream timeout only covers
+ *     response HEADERS — once headers arrive the body streams without a hard
+ *     deadline (an idle watchdog replaces it), so long playback never dies
+ *     mid-stream and players can seek/resume via Range requests.
  *
  * Run:   node relay.mjs        (config via .env next to this file or env vars)
  * Test:  node selftest.mjs     (offline self-test, no real stream needed)
@@ -71,7 +77,10 @@ const CFG = {
     process.env.RELAY_CHANNELS_PATH || path.join(HERE, "channels.json"),
   cacheMaxBytes: int(process.env.RELAY_CACHE_MAX_MB, 600) * 1024 * 1024,
   playlistTtlMs: int(process.env.RELAY_PLAYLIST_TTL_MS, 1000),
+  /** HEADERS timeout only — never kills a streaming body. */
   upstreamTimeoutMs: int(process.env.RELAY_UPSTREAM_TIMEOUT_MS, 10000),
+  /** Kill a stream when no bytes flow for this long (stalled upstream). */
+  streamIdleTimeoutMs: int(process.env.RELAY_STREAM_IDLE_TIMEOUT_MS, 30000),
 };
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -127,6 +136,31 @@ function looksLikePlaylist(url) {
     return p.endsWith(".m3u8") || p.endsWith(".m3u");
   } catch {
     return false;
+  }
+}
+
+const VIDEO_EXTS = [".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".flv", ".3gp", ".ogv"];
+
+/** Big progressive video files must stream, never buffer whole into the LRU. */
+function looksLikeVideoFile(url) {
+  try {
+    const p = new URL(url).pathname.toLowerCase();
+    return VIDEO_EXTS.some((ext) => p.endsWith(ext));
+  } catch {
+    return false;
+  }
+}
+
+function guessVideoType(url) {
+  try {
+    const p = new URL(url).pathname.toLowerCase();
+    if (p.endsWith(".webm")) return "video/webm";
+    if (p.endsWith(".mkv")) return "video/x-matroska";
+    if (p.endsWith(".mov")) return "video/quicktime";
+    if (p.endsWith(".ogv")) return "video/ogg";
+    return "video/mp4";
+  } catch {
+    return "video/mp4";
   }
 }
 
@@ -250,14 +284,30 @@ function sendPlaylist(res, body, extra = {}) {
   res.end(body);
 }
 
+/**
+ * Fetch an upstream with a HEADERS-ONLY timeout: AbortSignal.timeout would
+ * also kill a healthy mid-stream body after 10s, so instead we arm a timer
+ * that is cleared the moment response headers arrive. The body then streams
+ * freely (callers add their own idle watchdog when streaming).
+ */
 function fetchUpstream(url, extraHeaders = {}, req) {
   const headers = { "user-agent": "FilmFlixRelay/1.0", ...extraHeaders };
   if (req?.headers?.range) headers.range = req.headers.range;
-  return fetch(url, {
-    headers,
-    redirect: "follow",
-    signal: AbortSignal.timeout(CFG.upstreamTimeoutMs),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error("upstream headers timeout")),
+    CFG.upstreamTimeoutMs,
+  );
+  return fetch(url, { headers, redirect: "follow", signal: controller.signal }).then(
+    (res) => {
+      clearTimeout(timer);
+      return res;
+    },
+    (err) => {
+      clearTimeout(timer);
+      throw err;
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -358,7 +408,227 @@ function serveResource(upstreamUrl, extraHeaders, req, res) {
   if (looksLikePlaylist(upstreamUrl)) {
     return servePlaylist(upstreamUrl, extraHeaders, req, res);
   }
+  if (looksLikeVideoFile(upstreamUrl)) {
+    return serveFileStream(upstreamUrl, extraHeaders, req, res);
+  }
   return serveSegment(upstreamUrl, extraHeaders, req, res);
+}
+
+// ---------------------------------------------------------------------------
+// Range-aware progressive video streaming (seek / resume / 206)
+// ---------------------------------------------------------------------------
+
+/** Parse "bytes=a-b" (also open-ended "bytes=a-" and suffix "bytes=-n"). */
+function parseRange(header, size) {
+  if (!header) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m || (m[1] === "" && m[2] === "")) return null;
+  let start, end;
+  if (m[1] === "") {
+    // suffix range: last N bytes
+    const n = parseInt(m[2], 10);
+    if (n === 0 || size <= 0) return null;
+    start = Math.max(0, size - n);
+    end = size - 1;
+  } else {
+    start = parseInt(m[1], 10);
+    end = m[2] === "" ? size - 1 : Math.min(parseInt(m[2], 10), size - 1);
+  }
+  if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
+    return { invalid: true, size };
+  }
+  return { start, end, size };
+}
+
+/**
+ * Stream a video file through the relay with full HTTP Range semantics:
+ *  - HEAD -> same headers, no body (players probe this first)
+ *  - no Range -> 200 with Accept-Ranges: bytes (whole file, chunked)
+ *  - Range -> 206 Partial Content + Content-Range, seek/resume anywhere
+ *  - unsatisfiable range -> 416 with "Content-Range: bytes STAR/size"
+ * The upstream timeout covers headers only; the body streams with an idle
+ * watchdog instead of a hard deadline, so long playback never dies at 10s.
+ */
+async function serveFileStream(upstreamUrl, extraHeaders, req, res) {
+  const rangeHeader = req.headers.range;
+
+  // ---- HEAD preflight: cheap length/type lookup --------------------------
+  if (req.method === "HEAD") {
+    let r;
+    try {
+      r = await fetchUpstream(upstreamUrl, { ...extraHeaders, method: "HEAD" }, req);
+    } catch {
+      return sendText(res, 502, "Upstream unreachable");
+    }
+    try { await r.body?.cancel(); } catch { /* ignore */ }
+    if (!r.ok) return sendText(res, r.status, `Upstream returned HTTP ${r.status}`);
+    const len = r.headers.get("content-length");
+    const headers = {
+      "content-type": r.headers.get("content-type") || guessVideoType(upstreamUrl),
+      "accept-ranges": "bytes",
+      "cache-control": "no-store",
+    };
+    if (len) headers["content-length"] = len;
+    res.writeHead(200, cors(headers));
+    return res.end();
+  }
+
+  // ---- decide the byte window we need from upstream ----------------------
+  // First ask the upstream (ranged when the client asked for a range) so we
+  // learn the full size from Content-Range even when serving a sub-window.
+  const upInit = { ...extraHeaders };
+  if (rangeHeader) upInit.range = rangeHeader;
+
+  let r;
+  try {
+    r = await fetchUpstream(upstreamUrl, upInit, req);
+  } catch (err) {
+    log("stream fetch failed:", upstreamUrl, "-", err.message);
+    return sendText(res, 502, "Upstream unreachable");
+  }
+
+  const contentType = r.headers.get("content-type") || guessVideoType(upstreamUrl);
+  const contentRange = r.headers.get("content-range");
+
+  // Full size: prefer upstream Content-Range "bytes a-b/size", else Content-Length.
+  let totalSize = 0;
+  if (contentRange) {
+    const m = /\/(\d+)\s*$/.exec(contentRange);
+    if (m) totalSize = parseInt(m[1], 10);
+  }
+  if (!totalSize) {
+    const cl = parseInt(r.headers.get("content-length") || "0", 10);
+    if (cl) totalSize = cl + (contentRange ? parseInt(contentRange, 10) : 0);
+  }
+  // Fall back: probe upstream size with a 1-byte ranged request.
+  if (!totalSize) {
+    try {
+      await r.body?.cancel();
+    } catch { /* ignore */ }
+    try {
+      const probe = await fetchUpstream(
+        upstreamUrl,
+        { ...extraHeaders, range: "bytes=0-1" },
+        req,
+      );
+      try { await probe.body?.cancel(); } catch { /* ignore */ }
+      const pr = probe.headers.get("content-range");
+      const pm = pr ? /\/(\d+)\s*$/.exec(pr) : null;
+      if (pm) totalSize = parseInt(pm[1], 10);
+    } catch { /* leave 0 */ }
+    if (!totalSize) {
+      return sendText(res, 502, "Upstream did not report a size (no Content-Range/Length)");
+    }
+    // Re-issue the client's actual range request now that we know the size.
+    const retry = { ...extraHeaders };
+    if (rangeHeader) retry.range = rangeHeader;
+    try {
+      r = await fetchUpstream(upstreamUrl, retry, req);
+    } catch (err) {
+      log("stream retry failed:", upstreamUrl, "-", err.message);
+      return sendText(res, 502, "Upstream unreachable");
+    }
+  }
+
+  const clientRange = parseRange(rangeHeader, totalSize);
+
+  if (clientRange?.invalid) {
+    return sendText(res, 416, "Requested range not satisfiable");
+  }
+
+  if (!rangeHeader) {
+    // Whole file: answer 200 with the upstream body streamed through.
+    const headers = {
+      "content-type": contentType,
+      "accept-ranges": "bytes",
+      "content-length": String(totalSize),
+      "cache-control": "no-store",
+    };
+    res.writeHead(200, cors(headers));
+    if (!r.body) return res.end();
+    return pipeWithWatchdog(Readable.fromWeb(r.body), res, upstreamUrl);
+  }
+
+  // ---- client asked for a range ------------------------------------------
+  if (r.status !== 206 && r.status !== 200) {
+    return sendText(res, r.status, `Upstream returned HTTP ${r.status}`);
+  }
+
+  // When the upstream ignored our Range (200 + full body), slice locally.
+  let body = r.body;
+  let start = clientRange.start;
+  let end = clientRange.end;
+  const upstreamHonored = r.status === 206;
+  if (!upstreamHonored && start > 0) {
+    // Skip the leading bytes on the wire.
+    const stream = Readable.fromWeb(body);
+    let skipped = 0;
+    stream.on("data", function onData(chunk) {
+      skipped += chunk.length;
+      if (skipped < start) return; // still before the window
+      const over = skipped - start;
+      const head = over > 0 ? chunk.subarray(chunk.length - over) : chunk;
+      stream.pause();
+      const headers = {
+        "content-type": contentType,
+        "accept-ranges": "bytes",
+        "content-range": `bytes ${start}-${end}/${totalSize}`,
+        "content-length": String(end - start + 1),
+        "cache-control": "no-store",
+      };
+      res.writeHead(206, cors(headers));
+      res.write(head);
+      stream.removeListener("data", onData);
+      stream.pipe(res);
+      stream.resume();
+    });
+    stream.on("end", () => {
+      if (!res.headersSent) {
+        res.writeHead(206, cors({
+          "content-type": contentType,
+          "accept-ranges": "bytes",
+          "content-range": `bytes ${start}-${end}/${totalSize}`,
+          "content-length": String(end - start + 1),
+          "cache-control": "no-store",
+        }));
+        res.end();
+      }
+    });
+    return;
+  }
+
+  const headers = {
+    "content-type": contentType,
+    "accept-ranges": "bytes",
+    "content-range": `bytes ${start}-${end}/${totalSize}`,
+    "content-length": String(end - start + 1),
+    "cache-control": "no-store",
+  };
+  res.writeHead(206, cors(headers));
+  if (!body) return res.end();
+  return pipeWithWatchdog(Readable.fromWeb(body), res, upstreamUrl);
+}
+
+/** Pipe the upstream body to the client; abort when bytes stop flowing. */
+function pipeWithWatchdog(stream, res, label) {
+  let idleTimer = null;
+  const arm = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      log("stream idle timeout:", label);
+      stream.destroy();
+      res.destroy();
+    }, CFG.streamIdleTimeoutMs);
+  };
+  arm();
+  stream.on("data", arm);
+  stream.on("close", () => clearTimeout(idleTimer));
+  stream.on("error", (err) => {
+    log("stream error:", label, "-", err.message);
+    clearTimeout(idleTimer);
+    res.destroy();
+  });
+  stream.pipe(res);
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +655,16 @@ const server = http.createServer(async (req, res) => {
 
     let upstreamUrl = null;
     let entryHeaders = {};
+
+    if (parts[0] === "api" && parts[1] === "stream" && parts[2]) {
+      const entry = getChannels().get(parts[2]);
+      if (!entry) {
+        return sendText(res, 404, `Unknown channel: ${parts[2]}`);
+      }
+      upstreamUrl = entry.url;
+      entryHeaders = entry.headers;
+      return await serveFileStream(upstreamUrl, entryHeaders, req, res);
+    }
 
     if (parts[0] === "c" && parts[1]) {
       const entry = getChannels().get(parts[1]);

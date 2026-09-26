@@ -7,13 +7,17 @@
 - কোনো `npm install` লাগে না — শুধু Node.js 18+ চাই (সবকিছু Node-এর বিল্ট-ইন মডিউলে লেখা)
 - প্লেলিস্ট রিরাইট (master → variant → segment সব স্তরে), সেগমেন্ট ইন-মেমরি ক্যাশ
 - N জন দর্শক = আপস্ট্রিমে ~১ বার ডাউনলোড
+- **প্রগ্রেসিভ ভিডিও স্ট্রিমিং:** `/api/stream/<চ্যানেল>` — HTTP Range (206 Partial Content),
+  `Accept-Ranges: bytes`, seek/resume সমর্থিত; আপস্ট্রিম টাইমআউট শুধু হেডার পর্যন্ত —
+  বডি idle-watchdog দিয়ে চলে, তাই লম্বা সিনেমাও ১০ সেকেন্ডে কাটে না
 - HTTPS হয় Nginx + Let's Encrypt দিয়ে (ফ্রি)
 
 ## আর্কিটেকচার
 
 ```
 দর্শক (মোবাইল ডাটা / যেকোনো Wi-Fi)
-      │  https://tv.example.com/c/news24?k=TOKEN     ← HTTPS, সব নেটওয়ার্কে খোলে
+      │  https://tv.example.com/c/news24?k=TOKEN     ← HLS চ্যানেল
+      │  https://tv.example.com/api/stream/movie?k=TOKEN ← প্রগ্রেসিভ ভিডিও (seek/resume)
       ▼
 Nginx (TLS) — এই VPS-এ
       │  http://127.0.0.1:8077
@@ -124,6 +128,20 @@ sudo certbot --nginx -d tv.example.com            # ফ্রি HTTPS + অট�
 | Stream URL (primary) | `https://tv.example.com/c/news24?k=YOUR-TOKEN` |
 | Backup URL ১ | `http://10.200.13.14/live/news24/index.m3u8` (লোকাল ISP-এর দর্শকদের জন্য) |
 
+**প্রগ্রেসিভ ভিডিও (MP4/MKV ফাইল) হলে** primary হিসেবে `/api/stream/<চ্যানেল>` দিন —
+তখন প্লেয়ার seek করলে Range রিকোয়েস্ট (206) ব্যবহার করবে আর resume-ও কাজ করবে:
+
+```json
+{
+  "movie-hd": "http://10.16.100.213/files/movie.mp4"
+}
+```
+
+→ অ্যাডমিনে primary: `https://tv.example.com/api/stream/movie-hd?k=YOUR-TOKEN`
+
+(চ্যানেল কনফিগ যে URL-ই হোক, `.mp4`/`.mkv`-জাতীয় এক্সটেনশন দেখলে রিলে নিজে থেকেই
+স্ট্রিম-মোডে চলে যায় — `/api/stream` স্পষ্ট বোঝানোর জন্য।)
+
 ফেইলওভার আগে থেকেই বানানো — পাবলিক URL না চললে প্লেয়ার নিজেই ব্যাকআপে চলে যায়।
 
 ## Docker দিয়ে চালানো (এক কমান্ড)
@@ -179,6 +197,7 @@ sudo docker compose logs -f relay
 | `.env.example` | কনফিগ নমুনা |
 | `relay.service` | systemd ইউনিট |
 | `nginx-relay.conf` | HTTPS সাইট কনফিগ |
-| `selftest.mjs` | অফলাইন সেলফ-টেস্ট |
+| `selftest.mjs` | অফলাইন সেলফ-টেস্ট (HLS) |
+| `streamtest.mjs` | অফলাইন রেঞ্জ-স্ট্রিমিং টেস্ট (206/seek/416/HEAD) |
 | `demo-player.html` | লোকাল পরীক্ষার ডেমো প্লেয়ার |
 | `Dockerfile` + `docker-compose.yml` | এক কমান্ডে Docker ডিপ্লয় |
