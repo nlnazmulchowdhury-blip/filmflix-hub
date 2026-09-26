@@ -5,6 +5,7 @@ import {
   Volume2,
   VolumeX,
   X,
+  ZoomOut,
 } from "lucide-react";
 import {
   useCallback,
@@ -513,20 +514,258 @@ function VideoSurface({
       ? Math.min(box.w, box.h) / Math.max(box.w, box.h)
       : 1;
 
-  /* Show exactly the chosen caption track; re-apply after every src swap. */
+  /* ---------------- Pinch-to-zoom & pan (touch) -------------------------
+   * Two-finger pinch zooms (1x–5x), one finger pans while zoomed, and a
+   * double-tap toggles between normal and "fill the screen" (cover) zoom —
+   * so letterboxed movies can be enlarged to use the whole phone screen.
+   * The transform composes translate → rotate → scale, so panning always
+   * follows the finger in screen space, with or without rotation. */
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [gesturing, setGesturing] = useState(false);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const panRef = useRef(pan);
+  panRef.current = pan;
+
+  /** On-screen size of the picture at zoom `z` (rotation-aware). */
+  const pictureSize = useCallback(
+    (z: number) => {
+      const el = videoRef.current;
+      const vw = el?.videoWidth || 16;
+      const vh = el?.videoHeight || 9;
+      if (!box.w || !box.h) return { w: 0, h: 0 };
+      // object-contain footprint inside the box, before zoom:
+      const cw = Math.min(box.w, (box.h * vw) / vh);
+      const ch = Math.min(box.h, (box.w * vh) / vw);
+      const base = rotated ? fitScale : 1;
+      return {
+        w: (rotated ? ch : cw) * base * z,
+        h: (rotated ? cw : ch) * base * z,
+      };
+    },
+    [box.w, box.h, rotated, fitScale, videoRef],
+  );
+
+  /** Never let the picture be dragged past its own edges. */
+  const clampPan = useCallback(
+    (z: number, p: { x: number; y: number }) => {
+      if (z <= 1.001) return { x: 0, y: 0 };
+      const { w, h } = pictureSize(z);
+      const mx = Math.max(0, (w - box.w) / 2);
+      const my = Math.max(0, (h - box.h) / 2);
+      return {
+        x: Math.max(-mx, Math.min(mx, p.x)),
+        y: Math.max(-my, Math.min(my, p.y)),
+      };
+    },
+    [pictureSize, box.w, box.h],
+  );
+
+  /** Zoom at which the picture covers the whole container (fill mode). */
+  const coverZoom = useCallback(() => {
+    if (!box.w || !box.h) return 2;
+    const { w, h } = pictureSize(1);
+    if (!w || !h) return 2;
+    return Math.min(5, Math.max(1, box.w / w, box.h / h));
+  }, [box.w, box.h, pictureSize]);
+
+  const resetZoom = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  /* A new movie, a swapped file (dub/quality) or a rotation starts clean. */
   useEffect(() => {
+    resetZoom();
+  }, [src, rotation, resetZoom]);
+
+  /* Container resized (e.g. fullscreen toggle) → re-clamp the pan. */
+  useEffect(() => {
+    setPan((p) => clampPan(zoomRef.current, p));
+  }, [box.w, box.h, clampPan]);
+
+  /* Stop iOS Safari's non-standard page pinch over the picture. */
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const stop = (ev: Event) => ev.preventDefault();
+    el.addEventListener("gesturestart", stop);
+    el.addEventListener("gesturechange", stop);
+    return () => {
+      el.removeEventListener("gesturestart", stop);
+      el.removeEventListener("gesturechange", stop);
+    };
+  }, []);
+
+  const pinch = useRef<{
+    pointers: Map<number, { x: number; y: number }>;
+    startDist: number;
+    startZoom: number;
+    startPan: { x: number; y: number };
+    lastPos: { x: number; y: number };
+    moved: boolean;
+    pointerType: string;
+  } | null>(null);
+  const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTap = useRef({ t: 0, x: 0, y: 0 });
+  const lastPointerType = useRef("mouse");
+
+  const clearTapTimer = () => {
+    if (tapTimer.current) {
+      clearTimeout(tapTimer.current);
+      tapTimer.current = null;
+    }
+  };
+  useEffect(() => clearTapTimer, []);
+
+  const toggleVideoPlay = () => {
     const el = videoRef.current;
     if (!el) return;
-    const apply = () => {
-      for (let i = 0; i < el.textTracks.length; i++) {
-        const t = el.textTracks[i];
-        t.mode = activeSubtitle && t.label === activeSubtitle ? "showing" : "disabled";
+    if (el.paused) el.play().catch(() => undefined);
+    else el.pause();
+  };
+
+  const onSurfacePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    lastPointerType.current = e.pointerType;
+    clearTapTimer();
+    const g = pinch.current;
+    if (!g) {
+      pinch.current = {
+        pointers: new Map([[e.pointerId, { x: e.clientX, y: e.clientY }]]),
+        startDist: 1,
+        startZoom: 1,
+        startPan: { x: 0, y: 0 },
+        lastPos: { x: e.clientX, y: e.clientY },
+        moved: false,
+        pointerType: e.pointerType,
+      };
+    } else {
+      g.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (g.pointers.size === 2) {
+        /* Pinch begins: snapshot geometry (tap detection is cancelled by
+           the clearTapTimer above). */
+        const pts = [...g.pointers.values()];
+        const a = pts[0];
+        const b = pts[1];
+        if (a && b) {
+          g.startDist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+          g.startZoom = zoomRef.current;
+          g.startPan = { ...panRef.current };
+        }
       }
-    };
-    apply();
-    el.addEventListener("loadedmetadata", apply);
-    return () => el.removeEventListener("loadedmetadata", apply);
-  }, [activeSubtitle, videoRef]);
+    }
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* capture is best-effort */
+    }
+  };
+
+  const onSurfacePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const g = pinch.current;
+    if (!g || !g.pointers.has(e.pointerId)) return;
+    g.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (g.pointers.size >= 2) {
+      const pts = [...g.pointers.values()];
+      const a = pts[0];
+      const b = pts[1];
+      if (!a || !b) return;
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const next = Math.min(5, Math.max(1, g.startZoom * (dist / g.startDist)));
+      /* Keep the pinch midpoint anchored under the fingers. The midpoint is
+         converted to container-center-relative coordinates so it lives in
+         the same space as the pan offset. */
+      const rect = e.currentTarget.getBoundingClientRect();
+      const ux = (a.x + b.x) / 2 - (rect.left + rect.width / 2);
+      const uy = (a.y + b.y) / 2 - (rect.top + rect.height / 2);
+      const k = next / g.startZoom;
+      setGesturing(true);
+      setZoom(next);
+      setPan(
+        clampPan(next, {
+          x: ux - (ux - g.startPan.x) * k,
+          y: uy - (uy - g.startPan.y) * k,
+        }),
+      );
+      if (Math.abs(dist - g.startDist) > 8) g.moved = true;
+    } else if (zoomRef.current > 1.001) {
+      /* One finger pans while zoomed in. */
+      const dx = e.clientX - g.lastPos.x;
+      const dy = e.clientY - g.lastPos.y;
+      if (dx || dy) g.moved = true;
+      setGesturing(true);
+      setPan((p) => clampPan(zoomRef.current, { x: p.x + dx, y: p.y + dy }));
+    }
+    g.lastPos = { x: e.clientX, y: e.clientY };
+  };
+
+  const onSurfacePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const g = pinch.current;
+    if (!g || !g.pointers.has(e.pointerId)) return;
+    g.pointers.delete(e.pointerId);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* best-effort */
+    }
+    if (g.pointers.size === 1) {
+      /* One finger lifted from a pinch: keep panning with the other. */
+      const only = [...g.pointers.values()][0];
+      if (only) g.lastPos = { x: only.x, y: only.y };
+      return;
+    }
+    pinch.current = null;
+    setGesturing(false);
+    if (g.moved) return;
+    if (g.pointerType !== "touch") {
+      /* Mouse keeps the old instant click-to-pause behavior; double-click
+         still reaches the container's fullscreen handler. */
+      toggleVideoPlay();
+      return;
+    }
+    /* Touch: double-tap toggles fill zoom, single tap plays/pauses. */
+    const now = Date.now();
+    const lt = lastTap.current;
+    if (now - lt.t < 320 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 40) {
+      lastTap.current = { t: 0, x: 0, y: 0 };
+      clearTapTimer();
+      if (zoomRef.current > 1.05) {
+        resetZoom();
+      } else {
+        /* Fill the screen (cover); skip when the aspect already matches. */
+        const c = coverZoom();
+        if (c > 1.02) {
+          setZoom(c);
+          setPan({ x: 0, y: 0 });
+        }
+      }
+    } else {
+      lastTap.current = { t: now, x: e.clientX, y: e.clientY };
+      clearTapTimer();
+      tapTimer.current = setTimeout(() => {
+        tapTimer.current = null;
+        toggleVideoPlay();
+      }, 280);
+    }
+  };
+
+  const onSurfacePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    const g = pinch.current;
+    if (!g) return;
+    g.pointers.delete(e.pointerId);
+    if (g.pointers.size === 0) {
+      pinch.current = null;
+      setGesturing(false);
+      clearTapTimer();
+    }
+  };
+
+  /* Touch double-taps must not also trigger the container's
+     double-click fullscreen toggle. */
+  const onSurfaceDoubleClick = (e: React.MouseEvent) => {
+    if (lastPointerType.current === "touch") e.stopPropagation();
+  };
 
   return (
     <div
@@ -534,40 +773,67 @@ function VideoSurface({
       data-slot="persistent-video-wrap"
       className={visible ? "absolute inset-0" : "absolute inset-0 opacity-0"}
     >
-      <video
-        ref={videoRef}
-        src={src}
-        loop={loop}
-        className="absolute inset-0 size-full object-contain"
-        style={{
-          transform:
-            rotation !== 0
-              ? `rotate(${rotation}deg) scale(${rotated ? fitScale : 1})`
-              : undefined,
-          filter: nightMode ? "brightness(0.6)" : undefined,
-        }}
-        playsInline
-        preload="metadata"
-        /* No crossOrigin here: most video hosts do not send CORS headers,
-           and the attribute would make the browser refuse the video file
-           entirely. Subtitle <track>s still load CORS-anonymously on their
-           own, so captions keep working independently of the video. */
-        onPlay={onPlay}
-        onPause={onPause}
-        onTimeUpdate={(e) =>
-          onTime(e.currentTarget.currentTime, e.currentTarget.duration || 0)
-        }
-        onEnded={onEnded}
-        onClick={(e) => {
-          const el = e.currentTarget;
-          if (el.paused) el.play().catch(() => undefined);
-          else el.pause();
-        }}
+      <div
+        data-slot="zoom-surface"
+        onPointerDown={onSurfacePointerDown}
+        onPointerMove={onSurfacePointerMove}
+        onPointerUp={onSurfacePointerUp}
+        onPointerCancel={onSurfacePointerCancel}
+        onDoubleClick={onSurfaceDoubleClick}
+        className="absolute inset-0"
+        /* pan-y: single-finger vertical swipes still scroll the page while
+           zoomed out; once zoomed (or mid-pinch) the surface owns all
+           gestures so the picture pans instead of the page. */
+        style={{ touchAction: zoom > 1 || gesturing ? "none" : "pan-y" }}
       >
-        {subtitles.map((s) => (
-          <track key={s.label} kind="subtitles" src={s.url} label={s.label} />
-        ))}
-      </video>
+        <video
+          ref={videoRef}
+          src={src}
+          loop={loop}
+          className="absolute inset-0 size-full object-contain"
+          style={{
+            transformOrigin: "center",
+            transform:
+              zoom === 1
+                ? rotation !== 0
+                  ? `rotate(${rotation}deg) scale(${rotated ? fitScale : 1})`
+                  : undefined
+                : `translate(${pan.x}px, ${pan.y}px) rotate(${rotation}deg) scale(${
+                    (rotated ? fitScale : 1) * zoom
+                  })`,
+            filter: nightMode ? "brightness(0.6)" : undefined,
+          }}
+          playsInline
+          preload="metadata"
+          /* No crossOrigin here: most video hosts do not send CORS headers,
+             and the attribute would make the browser refuse the video file
+             entirely. Subtitle <track>s still load CORS-anonymously on their
+             own, so captions keep working independently of the video. */
+          onPlay={onPlay}
+          onPause={onPause}
+          onTimeUpdate={(e) =>
+            onTime(e.currentTarget.currentTime, e.currentTarget.duration || 0)
+          }
+          onEnded={onEnded}
+        >
+          {subtitles.map((s) => (
+            <track key={s.label} kind="subtitles" src={s.url} label={s.label} />
+          ))}
+        </video>
+      </div>
+
+      {zoom > 1.05 && (
+        <button
+          type="button"
+          onClick={resetZoom}
+          className="absolute left-3 top-3 z-30 flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-xs font-medium text-white/90 backdrop-blur transition-colors hover:bg-black/85"
+          aria-label="Reset zoom"
+          title="Reset zoom"
+        >
+          <ZoomOut className="size-3.5" />
+          {Math.round(zoom * 10) / 10}×
+        </button>
+      )}
     </div>
   );
 }
