@@ -29,6 +29,7 @@ import { z } from "zod";
 import { movieCategoryNames } from "@/lib/categories";
 import { isShortLink } from "@/lib/shortlinks";
 import { X, Languages, MonitorPlay, Captions } from "lucide-react";
+import UploadFileButton from "@/components/UploadFileButton";
 
 const episodeSchema = z.object({
   title: z.string().min(1, "Episode title is required"),
@@ -150,6 +151,7 @@ export default function MovieFormDialog({
     control,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<MovieFormValues>({
     resolver: zodResolver(movieSchema),
@@ -349,11 +351,27 @@ export default function MovieFormDialog({
             </h3>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="posterUrl">Poster URL</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="posterUrl">Poster URL</Label>
+                  <UploadFileButton
+                    accept="image/*"
+                    label="Upload poster"
+                    ariaLabel="Upload poster image"
+                    onUploaded={(url) => setValue("posterUrl", url, { shouldDirty: true })}
+                  />
+                </div>
                 <Input id="posterUrl" placeholder="https://…" {...register("posterUrl")} />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="backdropUrl">Backdrop URL</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="backdropUrl">Backdrop URL</Label>
+                  <UploadFileButton
+                    accept="image/*"
+                    label="Upload backdrop"
+                    ariaLabel="Upload backdrop image"
+                    onUploaded={(url) => setValue("backdropUrl", url, { shouldDirty: true })}
+                  />
+                </div>
                 <Input id="backdropUrl" placeholder="https://…" {...register("backdropUrl")} />
               </div>
             </div>
@@ -367,19 +385,29 @@ export default function MovieFormDialog({
               Video
             </h3>
             <div className="space-y-2">
-              <Label htmlFor="videoUrl">Main video URL (mp4 link)</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="videoUrl">Main video URL (mp4 link)</Label>
+                <UploadFileButton
+                  accept="video/*"
+                  label="Upload video"
+                  ariaLabel="Upload main video file"
+                  onUploaded={(url) => setValue("videoUrl", url, { shouldDirty: true })}
+                />
+              </div>
               <Input
                 id="videoUrl"
                 placeholder="http://…/movie.mp4 or https://…"
                 {...register("videoUrl")}
               />
               <p className="text-xs text-muted-foreground">
-                The trailer or main feature. Shortener links (tinyurl/is.gd…)
-                are automatically resolved to the real video URL before saving.
-                Plain <code>http://</code> links (e.g. from a file server) are
-                served to users through the app's HTTPS proxy, so they play on
-                every network. FTP links (port 21) and LAN-only addresses
-                cannot be proxied.
+                Upload a file from this device (no size limit — recommended;
+                the file streams from cloud storage and always plays) or paste
+                a public URL. Shortener links (tinyurl/is.gd…) are
+                automatically resolved to the real video URL before saving.
+                Plain <code>http://</code> links are served through the app's
+                HTTPS proxy. FTP links and LAN-only addresses (10.x /
+                192.168.x) cannot be reached from the cloud — use Upload for
+                those.
               </p>
             </div>
 
@@ -442,6 +470,14 @@ export default function MovieFormDialog({
                           placeholder="Dubbed video URL (https://…/hindi.mp4)"
                           className="h-8 min-w-0 flex-1 text-sm"
                           {...register(`dubs.${index}.videoUrl` as const)}
+                        />
+                        <UploadFileButton
+                          accept="video/*"
+                          label="Upload"
+                          ariaLabel={`Upload dubbed video for ${dubFields[index]?.label || "language " + (index + 1)}`}
+                          onUploaded={(url) =>
+                            setValue(`dubs.${index}.videoUrl`, url, { shouldDirty: true })
+                          }
                         />
                       </div>
                       {errors.dubs?.[index] && (
@@ -516,6 +552,14 @@ export default function MovieFormDialog({
                           className="h-8 min-w-0 flex-1 text-sm"
                           {...register(`qualities.${index}.videoUrl` as const)}
                         />
+                        <UploadFileButton
+                          accept="video/*"
+                          label="Upload"
+                          ariaLabel={`Upload video for ${qualityFields[index]?.label || "quality " + (index + 1)}`}
+                          onUploaded={(url) =>
+                            setValue(`qualities.${index}.videoUrl`, url, { shouldDirty: true })
+                          }
+                        />
                       </div>
                       {errors.qualities?.[index] && (
                         <p className="mt-1 text-xs text-destructive min-[420px]:pl-[38px]">
@@ -588,6 +632,14 @@ export default function MovieFormDialog({
                           placeholder=".vtt file URL (https://…/english.vtt)"
                           className="h-8 min-w-0 flex-1 text-sm"
                           {...register(`subtitles.${index}.url` as const)}
+                        />
+                        <UploadFileButton
+                          accept=".vtt,text/vtt"
+                          label="Upload"
+                          ariaLabel={`Upload subtitle file for ${subtitleFields[index]?.label || "track " + (index + 1)}`}
+                          onUploaded={(url) =>
+                            setValue(`subtitles.${index}.url`, url, { shouldDirty: true })
+                          }
                         />
                       </div>
                       {errors.subtitles?.[index] && (
@@ -682,11 +734,21 @@ export default function MovieFormDialog({
                         </div>
                       </div>
                       <div className="mt-1.5 flex flex-col gap-1.5 pl-0 min-[420px]:flex-row min-[420px]:items-start min-[420px]:pl-[38px]">
-                        <Input
-                          placeholder="Episode video URL (https://…/ep1.mp4)"
-                          className="h-8 min-w-0 flex-1 text-sm"
-                          {...register(`episodes.${index}.videoUrl` as const)}
-                        />
+                        <div className="flex min-w-0 flex-1 gap-1.5">
+                          <Input
+                            placeholder="Episode video URL (https://…/ep1.mp4)"
+                            className="h-8 min-w-0 flex-1 text-sm"
+                            {...register(`episodes.${index}.videoUrl` as const)}
+                          />
+                          <UploadFileButton
+                            accept="video/*"
+                            label="Upload"
+                            ariaLabel={`Upload video for episode ${index + 1}`}
+                            onUploaded={(url) =>
+                              setValue(`episodes.${index}.videoUrl`, url, { shouldDirty: true })
+                            }
+                          />
+                        </div>
                         <Input
                           placeholder="Sec"
                           inputMode="numeric"

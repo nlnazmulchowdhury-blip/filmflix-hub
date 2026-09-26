@@ -29,6 +29,7 @@ import type * as tvChannels from "../tvChannels.js";
 import type * as users from "../users.js";
 import type * as usersHelpers from "../usersHelpers.js";
 import type * as videoProxy from "../videoProxy.js";
+import type * as videoUpload from "../videoUpload.js";
 import type * as watchlist from "../watchlist.js";
 
 import type {
@@ -59,6 +60,7 @@ declare const fullApi: ApiFromModules<{
   users: typeof users;
   usersHelpers: typeof usersHelpers;
   videoProxy: typeof videoProxy;
+  videoUpload: typeof videoUpload;
   watchlist: typeof watchlist;
 }>;
 
