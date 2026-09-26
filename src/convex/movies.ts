@@ -1,8 +1,34 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query, QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { getCurrentUser } from "./users";
 import { movieCategoryNames } from "../lib/categories";
+
+/** Every media URL referenced by a movie row (main + arrays). Mirrors the
+ *  collector in storageCleanup.ts so purge-before-delete stays exact. */
+function movieMediaUrls(m: {
+  videoUrl?: string;
+  posterUrl?: string;
+  backdropUrl?: string;
+  episodes?: { videoUrl: string }[];
+  dubs?: { videoUrl: string }[];
+  qualities?: { videoUrl: string }[];
+  subtitles?: { url: string }[];
+  seasons?: { episodes?: { videoUrl: string }[] }[];
+}): string[] {
+  const urls: string[] = [];
+  if (m.videoUrl) urls.push(m.videoUrl);
+  if (m.posterUrl) urls.push(m.posterUrl);
+  if (m.backdropUrl) urls.push(m.backdropUrl);
+  for (const e of m.episodes ?? []) if (e.videoUrl) urls.push(e.videoUrl);
+  for (const d of m.dubs ?? []) if (d.videoUrl) urls.push(d.videoUrl);
+  for (const q of m.qualities ?? []) if (q.videoUrl) urls.push(q.videoUrl);
+  for (const s of m.subtitles ?? []) if (s.url) urls.push(s.url);
+  for (const s of m.seasons ?? [])
+    for (const e of s.episodes ?? []) if (e.videoUrl) urls.push(e.videoUrl);
+  return urls;
+}
 
 const episodeObj = v.object({
   id: v.string(),
@@ -110,6 +136,8 @@ export const update = mutation({
   args: { id: v.id("movies"), ...movieFields },
   handler: async (ctx, { id, ...args }) => {
     await requireAdmin(ctx);
+    const before = await ctx.db.get(id);
+    if (!before) throw new Error("Movie not found");
     const { category, categories, ...rest } = args;
     const names = [
       ...new Set(
@@ -123,6 +151,17 @@ export const update = mutation({
       categories: names.length > 0 ? names : undefined,
       category: names[0],
     });
+    /* Files the edit dropped (replaced poster/video, removed dub…) are
+       orphaned in cloud storage — purge them unless another movie still
+       uses the same URL. */
+    const dropped = movieMediaUrls(before).filter(
+      (u) => !movieMediaUrls({ ...before, ...rest }).includes(u),
+    );
+    if (dropped.length > 0) {
+      await ctx.runMutation(internal.storageCleanup.purgeUrlsIfUnreferenced, {
+        urls: dropped,
+      });
+    }
     return id;
   },
 });
@@ -131,7 +170,15 @@ export const remove = mutation({
   args: { id: v.id("movies") },
   handler: async (ctx, { id }) => {
     await requireAdmin(ctx);
+    const movie = await ctx.db.get(id);
     await ctx.db.delete(id);
+    /* Delete the movie's uploaded files from cloud storage too, unless
+       another movie still references the same URL. */
+    if (movie) {
+      await ctx.runMutation(internal.storageCleanup.purgeUrlsIfUnreferenced, {
+        urls: movieMediaUrls(movie),
+      });
+    }
   },
 });
 

@@ -11,4 +11,13 @@ crons.interval(
   {},
 );
 
+// Sweep cloud storage hourly: delete uploaded files no movie references
+// anymore (24h grace period protects in-progress upload form sessions).
+crons.interval(
+  "storage-orphan-sweep",
+  { hours: 1 },
+  internal.storageCleanup.sweepOrphans,
+  {},
+);
+
 export default crons;
