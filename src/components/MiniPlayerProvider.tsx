@@ -5,6 +5,7 @@ import {
   Volume2,
   VolumeX,
   X,
+  AudioLines,
   ZoomOut,
 } from "lucide-react";
 import {
@@ -363,6 +364,8 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
             rotation={rotation}
             loop={loop}
             visible={Boolean(inlineOnPage || miniActive)}
+            posterUrl={movie.backdropUrl ?? movie.posterUrl ?? null}
+            title={movie.title}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
             onTime={(t, d) => {
@@ -474,6 +477,8 @@ function VideoSurface({
   rotation,
   loop,
   visible,
+  posterUrl,
+  title,
   onPlay,
   onPause,
   onTime,
@@ -487,6 +492,8 @@ function VideoSurface({
   rotation: PlayerRotation;
   loop: boolean;
   visible: boolean;
+  posterUrl?: string | null;
+  title?: string;
   onPlay: () => void;
   onPause: () => void;
   onTime: (t: number, d: number) => void;
@@ -506,6 +513,29 @@ function VideoSurface({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  /* Audio-only sources (mp3 links etc.) render no picture at all — the
+     screen would be a silent-looking black box. When the file has no video
+     track, show the movie's art behind the (invisible) media element and a
+     small badge so users know playback itself is fine. */
+  const [audioOnly, setAudioOnly] = useState(false);
+  useEffect(() => {
+    setAudioOnly(false);
+    const el = videoRef.current;
+    if (!el) return;
+    const check = () => {
+      /* height 0 with a real duration = audio-only content */
+      const noVideo = el.videoHeight === 0;
+      setAudioOnly(noVideo && Number.isFinite(el.duration) && el.duration > 0);
+    };
+    check();
+    el.addEventListener("loadedmetadata", check);
+    el.addEventListener("durationchange", check);
+    return () => {
+      el.removeEventListener("loadedmetadata", check);
+      el.removeEventListener("durationchange", check);
+    };
+  }, [src, videoRef]);
 
   /* Rotate: swap the box so the rotated picture stays fully visible. */
   const rotated = rotation === 90 || rotation === 270;
@@ -786,6 +816,32 @@ function VideoSurface({
            gestures so the picture pans instead of the page. */
         style={{ touchAction: zoom > 1 || gesturing ? "none" : "pan-y" }}
       >
+        {audioOnly && (
+          <>
+            {posterUrl ? (
+              <img
+                src={posterUrl}
+                alt=""
+                className="absolute inset-0 size-full object-cover blur-sm brightness-[0.55]"
+              />
+            ) : (
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(var(--primary-rgb,124,58,237),0.25),transparent_65%)]" />
+            )}
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <span
+                className={`flex size-20 items-center justify-center rounded-full bg-primary/25 text-primary backdrop-blur ${
+                  visible ? "animate-pulse" : ""
+                }`}
+              >
+                <AudioLines className="size-10" />
+              </span>
+            </div>
+            <div className="pointer-events-none absolute left-3 top-3 z-30 flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-xs font-medium text-white/90 backdrop-blur">
+              <AudioLines className="size-3.5" />
+              Audio only{title ? ` — ${title}` : ""}
+            </div>
+          </>
+        )}
         <video
           ref={videoRef}
           src={src}
