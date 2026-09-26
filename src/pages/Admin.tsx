@@ -100,6 +100,34 @@ function AdminContent() {
     }
   }, [linkHealth]);
 
+  /* Ad networks (whose script may have loaded on public pages earlier in the
+     session) keep injecting stray anchors (e.g. <a id="lkiir">), hidden
+     iframes and popunder handlers straight into <body> — those must never
+     touch the admin panel. While this route is open, strip the ad script and
+     any artifacts it appends. */
+  useEffect(() => {
+    const AD_SRC = /profitableratecpm/i;
+    const isAdAnchor = (a: HTMLAnchorElement) =>
+      a.parentElement === document.body &&
+      (!a.getAttribute("href") || AD_SRC.test(a.href)) &&
+      !(a.textContent ?? "").includes("Freebuff");
+    const prune = () => {
+      document.querySelectorAll("script[src]").forEach((s) => {
+        if (AD_SRC.test((s as HTMLScriptElement).src)) s.remove();
+      });
+      document.querySelectorAll("body > a").forEach((a) => {
+        if (isAdAnchor(a as HTMLAnchorElement)) a.remove();
+      });
+      document.querySelectorAll("body > iframe").forEach((f) => {
+        if (AD_SRC.test((f as HTMLIFrameElement).src || "")) f.remove();
+      });
+    };
+    prune();
+    const observer = new MutationObserver(prune);
+    observer.observe(document.body, { childList: true });
+    return () => observer.disconnect();
+  }, []);
+
   const handleCheckLinks = async () => {
     setIsCheckingLinks(true);
     try {
