@@ -135,6 +135,20 @@ export default function PlayerStage({
     return () => clearTimeout(t);
   }, [playing, isHost, controlsVisible, hoveringControls]);
 
+  /* While a movie is actually playing, leaving the page (closing the tab,
+     reloading, an ad-script redirect) kills the show. Ask first — the
+     browser shows its native "Leave site?" confirm. SPA navigation to the
+     mini player is unaffected; this only guards full page unloads. */
+  useEffect(() => {
+    if (!playing || !isHost) return;
+    const guard = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [playing, isHost]);
+
   const seekBy = useCallback(
     (delta: number) => {
       controls.seekBy(delta);

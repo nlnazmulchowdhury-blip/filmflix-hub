@@ -78,7 +78,27 @@
           // Installed app: show ads right away, no tap needed.
           setTimeout(loadAds, 1500);
         } else {
-          document.addEventListener("click", loadAds, true);
+          // Ads load on the visitor's first click — but never count clicks
+          // inside the video player: a stray tap on the picture would fire
+          // the ad network right as playback starts, and those networks
+          // respond with popunders/redirects that yank the user off the
+          // movie page (the classic "video stops playing" complaint).
+          document.addEventListener(
+            "click",
+            function (e) {
+              if (
+                e.target &&
+                e.target.closest &&
+                e.target.closest(
+                  '[data-slot="persistent-video-wrap"], .group\\/player'
+                )
+              ) {
+                return; // ignore player clicks for ad-start purposes
+              }
+              loadAds();
+            },
+            true,
+          );
         }
       })();
     </script>
