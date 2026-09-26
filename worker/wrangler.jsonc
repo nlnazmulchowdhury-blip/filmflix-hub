@@ -9,15 +9,10 @@
     {
       "binding": "DB",
       "database_name": "filmflix-hub",
-      "database_id": "FILL_AFTER_D1_CREATE"
+      "database_id": "7f734098-dc9a-4e75-9305-6483aad82b84"
     }
   ],
-  "r2_buckets": [
-    {
-      "binding": "DUBS",
-      "bucket_name": "filmflix-dubs"
-    }
-  ],
+  // R2: enable R2 in the dashboard, then restore this block (see README)
   "triggers": {
     "crons": ["0 */6 * * *"]
   },

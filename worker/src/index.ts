@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { sha256 } from "./crypto";
+import { sha256, HttpError } from "./crypto";
+export { HttpError };
 import { probeUrl, collectMovieUrls, collectTvUrls } from "./linkcheck";
 import { resolveRedirect, isShortLink } from "./shortlinks";
 import { dubbingRoutes } from "./dubbing";
@@ -83,17 +84,12 @@ export async function requireAdmin(c: any) {
   return user;
 }
 
-export class HttpError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
-}
-
 const onError = (err: unknown, c: any) => {
   const status = err instanceof HttpError ? err.status : 500;
   const message = err instanceof Error ? err.message : "Internal error";
   return c.json({ error: message }, { status });
 };
+app.onError(onError);
 
 /** Shape a movies row like the Convex doc the frontend expects. */
 function movieOut(r: any) {
