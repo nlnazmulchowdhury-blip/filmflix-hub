@@ -6,6 +6,7 @@ import {
   VolumeX,
   X,
   AudioLines,
+  TriangleAlert,
   ZoomOut,
 } from "lucide-react";
 import {
@@ -148,6 +149,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       const nextSrc = playableVideoUrl(
         dub ? dub.videoUrl : m.videoUrl,
         convexSiteUrl(),
+        m,
       );
       if (!nextSrc || nextSrc === el.currentSrc || nextSrc === el.src) {
         setActiveDub(label);
@@ -168,6 +170,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     const nextSrc = playableVideoUrl(
       q ? q.videoUrl : m.videoUrl,
       convexSiteUrl(),
+      m,
     );
     if (!nextSrc || nextSrc === el.currentSrc || nextSrc === el.src) {
       setActiveQuality(label);
@@ -357,7 +360,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
         createPortal(
           <VideoSurface
             videoRef={videoRef}
-            src={playableVideoUrl(movie.videoUrl, convexSiteUrl())}
+            src={playableVideoUrl(movie.videoUrl, convexSiteUrl(), movie)}
             subtitles={movie.subtitles ?? []}
             activeSubtitle={activeSubtitle}
             nightMode={nightMode}
@@ -535,6 +538,25 @@ function VideoSurface({
       el.removeEventListener("loadedmetadata", check);
       el.removeEventListener("durationchange", check);
     };
+  }, [src, videoRef]);
+
+  /* Unplayable sources (dead links, HTML download pages, wrong formats)
+     would otherwise leave a silent black box — surface a short reason.
+     MediaError.code: 2 = network failure, 3/4 = decode/format. */
+  const [loadError, setLoadError] = useState<string | null>(null);
+  useEffect(() => {
+    setLoadError(null);
+    const el = videoRef.current;
+    if (!el) return;
+    const fail = () => {
+      setLoadError(
+        el.error?.code === 2
+          ? "Connection problem — the video source could not be loaded."
+          : "This video link cannot be played (dead link, blocked host, or unsupported format).",
+      );
+    };
+    el.addEventListener("error", fail);
+    return () => el.removeEventListener("error", fail);
   }, [src, videoRef]);
 
   /* Rotate: swap the box so the rotated picture stays fully visible. */
@@ -841,6 +863,14 @@ function VideoSurface({
               Audio only{title ? ` — ${title}` : ""}
             </div>
           </>
+        )}
+        {loadError && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/70 p-4 text-center">
+            <p className="flex max-w-md items-center gap-2.5 rounded-2xl bg-black/80 px-4 py-3 text-sm font-medium text-white/90 backdrop-blur">
+              <TriangleAlert className="size-5 shrink-0 text-amber-400" />
+              {loadError}
+            </p>
+          </div>
         )}
         <video
           ref={videoRef}

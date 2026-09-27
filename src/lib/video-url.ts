@@ -10,11 +10,37 @@
 export function playableVideoUrl(
   raw: string | null | undefined,
   siteUrl: string,
+  /** Optional movie row — lets us keep the movie's own subtitle tracks
+   *  unproxied: .vtt files are fetched as plain text by the browser, not
+   *  played by the video element. */
+  movie?: { subtitles?: { url: string }[] } | null,
 ): string {
   const url = (raw ?? "").trim();
   if (!url) return "";
-  if (url.startsWith("https://")) return url;
+  const isOwnSubtitle = movie?.subtitles?.some((s) => s.url === url) ?? false;
+  if (isOwnSubtitle) return url;
+  const needsProxy = !url.startsWith("https://") || isForceProxyUrl(url);
+  if (!needsProxy) return url;
   return `${siteUrl.replace(/\/+$/, "")}/video-proxy?url=${encodeURIComponent(url)}`;
+}
+
+/**
+ * Hosts that never serve raw video bytes to hotlinking players — they
+ * redirect to expiring download pages or browser checks. Even on https they
+ * are routed through the proxy so it can respond with a clear "this link
+ * serves a web page, not a video" error instead of a silent decode failure.
+ */
+const FORCE_PROXY_HOST_SUFFIXES = ["gofile.io", "katfile.com", "rapidgator.net", "mega.nz"];
+
+export function isForceProxyUrl(raw: string | null | undefined): boolean {
+  const url = (raw ?? "").trim();
+  if (!url) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return FORCE_PROXY_HOST_SUFFIXES.some((s) => host === s || host.endsWith("." + s));
+  } catch {
+    return false;
+  }
 }
 
 /** The Convex HTTP endpoint base for the current environment. */

@@ -71,6 +71,52 @@ const PASS_THROUGH_HEADERS = [
   "etag",
 ];
 
+/**
+ * File-locker hosts (gofile, katfile, etc.) never serve raw bytes to
+ * hotlinking players — they redirect to an expiring download page or a
+ * browser-check page, which arrives here as `text/html`. Peek at the first
+ * chunk so admins get a clear message instead of a player that silently
+ * fails to decode.
+ */
+const HTML_SNIFF_BYTES = 512;
+
+function isHtmlHead(bytes: Uint8Array | undefined): boolean {
+  if (!bytes) return false;
+  const head = new TextDecoder()
+    .decode(bytes.slice(0, HTML_SNIFF_BYTES))
+    .replace(/^\uFEFF/, "")
+    .trimStart()
+    .toLowerCase();
+  return head.startsWith("<!doctype html") || head.startsWith("<html");
+}
+
+/** Reads the first body chunk (to sniff it) and returns the remainder. */
+async function peekFirstChunk(
+  upstream: Response,
+): Promise<{ first: Uint8Array | undefined; rest: ReadableStream<Uint8Array> }> {
+  const reader = (upstream.body ?? new ReadableStream<Uint8Array>()).getReader();
+  const { value, done } = await reader.read();
+  const first = done ? undefined : value;
+  const rest = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const pump = async () => {
+        try {
+          for (;;) {
+            const { done: d, value: v } = await reader.read();
+            if (d) break;
+            controller.enqueue(v);
+          }
+          controller.close();
+        } catch (err) {
+          controller.error(err);
+        }
+      };
+      void pump();
+    },
+  });
+  return { first, rest };
+}
+
 function errorResponse(status: number, error: string, detail?: string) {
   return new Response(JSON.stringify({ error, detail }), {
     status,
@@ -149,6 +195,24 @@ export const handleVideoProxy = httpAction(async (ctx, request) => {
     );
   }
 
+  // File-locker hosts (gofile, katfile, …) answer hotlinking players with an
+  // HTML download page instead of video bytes — the <video> element then fails
+  // with an inscrutable decode error. Catch it here with a clear message.
+  const { first, rest } = await peekFirstChunk(upstream);
+  if (isHtmlHead(first)) {
+    try {
+      await upstream.body?.cancel();
+    } catch {
+      // ignore — upstream may already be closed
+    }
+    return errorResponse(
+      415,
+      "This link serves a web page, not a video file. File-sharing hosts " +
+        "like gofile.io do not allow direct playback — download the file and " +
+        "use the Upload button in the admin panel instead.",
+    );
+  }
+
   const headers = new Headers();
   for (const h of PASS_THROUGH_HEADERS) {
     const value = upstream.headers.get(h);
@@ -162,6 +226,30 @@ export const handleVideoProxy = httpAction(async (ctx, request) => {
   }
   headers.set("Access-Control-Allow-Origin", "*");
 
+  // Re-attach the sniffed first chunk so the player still gets complete bytes.
+  const body = first
+    ? new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(first);
+          void rest
+            .pipeTo(
+              new WritableStream<Uint8Array>({
+                write(chunk) {
+                  controller.enqueue(chunk);
+                },
+                close() {
+                  controller.close();
+                },
+                abort(reason) {
+                  controller.error(reason);
+                },
+              }),
+            )
+            .catch(() => {});
+        },
+      })
+    : rest;
+
   // Stream the body straight through — no buffering of the whole movie.
-  return new Response(upstream.body, { status: upstream.status, headers });
+  return new Response(body, { status: upstream.status, headers });
 });
