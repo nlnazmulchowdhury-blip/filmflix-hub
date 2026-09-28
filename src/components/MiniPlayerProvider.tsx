@@ -510,6 +510,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
             controlsOverlayVisible={controlsOverlayVisible}
             togglePlay={togglePlay}
             playing={playing}
+            hasStarted={hasStarted}
             seekFlash={seekFlash}
           />,
           portalTarget,
@@ -643,6 +644,7 @@ function VideoSurface({
   controlsOverlayVisible,
   togglePlay,
   playing,
+  hasStarted,
   seekFlash,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -665,6 +667,8 @@ function VideoSurface({
   togglePlay: () => void;
   /** Live playing state (drives the center button icon). */
   playing: boolean;
+  /** Whether playback has begun — hides the center button before start. */
+  hasStarted: boolean;
   /** Brief ±10s flash indicator after a double-tap seek (null = hidden). */
   seekFlash: "back" | "fwd" | null;
   onPlay: () => void;
@@ -1058,18 +1062,25 @@ function VideoSurface({
           </div>
         )}
 
-        {/* Center play/pause — shows with the controls overlay; a quick
-            double-tap flash marks ±10s seeks on the side zones. */}
+        {/* Center play/pause — shows with the controls overlay once
+            playback has started (before start the poster's own play button
+            sits there); a quick double-tap flash marks ±10s seeks on the
+            side zones. Hidden state also drops pointer events so the
+            invisible button never swallows taps meant for the tap zones. */}
         <div
           className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-200 ${
-            controlsOverlayVisible ? "opacity-100" : "opacity-0"
+            controlsOverlayVisible && hasStarted ? "opacity-100" : "opacity-0"
           }`}
         >
           <button
             type="button"
-            tabIndex={controlsOverlayVisible ? 0 : -1}
+            tabIndex={controlsOverlayVisible && hasStarted ? 0 : -1}
             onClick={togglePlay}
-            className="pointer-events-auto flex size-16 items-center justify-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur transition-transform hover:scale-105 sm:size-[72px]"
+            className={`flex size-16 items-center justify-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur transition-transform hover:scale-105 sm:size-[72px] ${
+              controlsOverlayVisible && hasStarted
+                ? "pointer-events-auto"
+                : "pointer-events-none"
+            }`}
             aria-label={playing ? "Pause" : "Play"}
           >
             {playing ? (
