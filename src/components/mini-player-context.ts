@@ -76,6 +76,10 @@ export interface MiniPlayerContextValue {
   setControlsHold: (v: boolean) => void;
   /** Any user activity — re-arms the auto-hide countdown. */
   bumpControlsActivity: () => void;
+  /** Mouse entered the player surface: reveal controls, arm 5s idle hide. */
+  handleSurfaceMouseEnter: (e: { pointerType: string }) => void;
+  /** Mouse left the player surface: hide the controls immediately. */
+  handleSurfaceMouseLeave: (e: { pointerType: string }) => void;
   /** Currently playing audio version: null = original, else the dub label. */
   activeDub: string | null;
   /** Switch audio version without losing the playback position. */
@@ -127,6 +131,8 @@ export const MiniPlayerContext = createContext<MiniPlayerContextValue>({
   setControlsOverlayVisible: () => undefined,
   setControlsHold: () => undefined,
   bumpControlsActivity: () => undefined,
+  handleSurfaceMouseEnter: () => undefined,
+  handleSurfaceMouseLeave: () => undefined,
   activeDub: null,
   setDub: () => undefined,
   nightMode: false,

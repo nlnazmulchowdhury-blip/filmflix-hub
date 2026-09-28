@@ -62,6 +62,9 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   const [playing, setPlaying] = useState(false);
   /* Brief ±10s indicator after a double-tap seek on the side zones. */
   const [seekFlash, setSeekFlash] = useState<"back" | "fwd" | null>(null);
+  /* Timestamp of the last tap-zone controls-toggle (blocks the follow-up
+     synthetic click from re-showing the just-hidden overlay). */
+  const tapToggleAtRef = useRef(0);
   const seekFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flashSeek = useCallback((dir: "back" | "fwd") => {
     setSeekFlash(dir);
@@ -229,7 +232,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     hasStartedRef.current = hasStarted;
   }, [hasStarted]);
 
-  /* Re-arm (or disarm) the 2.6s auto-hide countdown from current state. */
+  /* Re-arm (or disarm) the 5s auto-hide countdown from current state. */
   const armOverlayHide = useCallback(() => {
     if (overlayTimer.current) {
       clearTimeout(overlayTimer.current);
@@ -239,7 +242,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       overlayTimer.current = setTimeout(() => {
         overlayTimer.current = null;
         if (!overlayHoldRef.current) setOverlayVisible(false);
-      }, 2600);
+      }, 5000);
     }
   }, []);
 
@@ -251,6 +254,9 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
 
   /** Tap on the video: toggle the controls (never play/pause directly). */
   const toggleOverlay = useCallback(() => {
+    /* The click event that follows a real touch tap must not re-show the
+       overlay we just hid (activity bump would undo the toggle). */
+    tapToggleAtRef.current = Date.now();
     setOverlayVisible((v) => {
       const next = !v;
       if (next) armOverlayHide();
@@ -275,8 +281,10 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     [armOverlayHide],
   );
 
-  /** Any user activity re-arms the countdown (without forcing visible). */
+  /** Any user activity (mouse move, clicks) re-arms the 5s countdown. */
   const bumpControlsActivity = useCallback(() => {
+    /* Ignore the synthetic click right after a tap-zone toggle. */
+    if (Date.now() - tapToggleAtRef.current < 400) return;
     setOverlayVisible(true);
     armOverlayHide();
   }, [armOverlayHide]);
@@ -369,6 +377,48 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   const controlsOverlayVisible = overlayVisible;
   const toggleControlsOverlay = toggleOverlay;
 
+  /** Pointer is a real mouse (not touch/pen)? */
+  const isMousePointer = (e: { pointerType?: string }) => e.pointerType === "mouse";
+
+  /* Native mouse listeners for the video surface live in VideoSurface
+     (React's synthetic pointer events proved unreliable there) — it calls
+     these stable callbacks. Hover in/move: show + re-arm 5s idle hide;
+     rest 5s: hide; leave: hide now. */
+  const handleSurfaceMouseEnter = useCallback(
+    (e: { pointerType?: string }) => {
+      if (!isMousePointer(e)) return;
+      setOverlayVisible(true);
+      armOverlayHide();
+    },
+    [armOverlayHide],
+  );
+
+  /** Mouse left the player surface: hide the controls immediately. */
+  const handleSurfaceMouseLeave = useCallback(
+    (e: { pointerType?: string }) => {
+      if (!isMousePointer(e)) return;
+      if (overlayHoldRef.current) return; /* open menu — keep it */
+      if (playingRef.current && hasStartedRef.current) {
+        if (overlayTimer.current) {
+          clearTimeout(overlayTimer.current);
+          overlayTimer.current = null;
+        }
+        setOverlayVisible(false);
+      }
+    },
+    [],
+  );
+
+  /** Mouse activity inside the surface: show + re-arm the idle hide. */
+  const handleSurfaceMouseMove = useCallback(
+    (e: { pointerType?: string }) => {
+      if (e.pointerType !== "mouse") return;
+      setOverlayVisible(true);
+      armOverlayHide();
+    },
+    [armOverlayHide],
+  );
+
   /* Reset viewer settings when a different movie starts. */
   useEffect(() => {
     setNightMode(false);
@@ -397,6 +447,8 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       setControlsOverlayVisible: setOverlayVisible,
       setControlsHold,
       bumpControlsActivity,
+      handleSurfaceMouseEnter,
+      handleSurfaceMouseLeave,
       activeDub,
       setDub,
       nightMode,
@@ -431,6 +483,8 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       toggleControlsOverlay,
       setControlsHold,
       bumpControlsActivity,
+      handleSurfaceMouseEnter,
+      handleSurfaceMouseLeave,
       activeDub,
       setDub,
       nightMode,
@@ -512,6 +566,8 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
             playing={playing}
             hasStarted={hasStarted}
             seekFlash={seekFlash}
+            onSurfaceMouseEnter={handleSurfaceMouseEnter}
+            onSurfaceMouseMove={handleSurfaceMouseMove}
           />,
           portalTarget,
         )}
@@ -646,6 +702,8 @@ function VideoSurface({
   playing,
   hasStarted,
   seekFlash,
+  onSurfaceMouseEnter,
+  onSurfaceMouseMove,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   src: string;
@@ -671,6 +729,9 @@ function VideoSurface({
   hasStarted: boolean;
   /** Brief ±10s flash indicator after a double-tap seek (null = hidden). */
   seekFlash: "back" | "fwd" | null;
+  /** Native mouse listeners: enter/move show + re-arm the idle hide. */
+  onSurfaceMouseEnter: (e: { pointerType?: string }) => void;
+  onSurfaceMouseMove: (e: { pointerType?: string }) => void;
   onPlay: () => void;
   onPause: () => void;
   onTime: (t: number, d: number, bufferedEnd: number) => void;
@@ -678,6 +739,19 @@ function VideoSurface({
 }) {
   /* Container size — needed to keep a rotated picture fully in view. */
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const zoomSurfaceRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = zoomSurfaceRef.current;
+    if (!el) return;
+    const enter = (e: PointerEvent) => onSurfaceMouseEnter(e);
+    const move = (e: PointerEvent) => onSurfaceMouseMove(e);
+    el.addEventListener("pointerenter", enter);
+    el.addEventListener("pointermove", move);
+    return () => {
+      el.removeEventListener("pointerenter", enter);
+      el.removeEventListener("pointermove", move);
+    };
+  }, [onSurfaceMouseEnter, onSurfaceMouseMove]);
   const [box, setBox] = useState({ w: 0, h: 0 });
 
   useEffect(() => {
@@ -1016,6 +1090,7 @@ function VideoSurface({
       className={visible ? "absolute inset-0" : "absolute inset-0 opacity-0"}
     >
       <div
+        ref={zoomSurfaceRef}
         data-slot="zoom-surface"
         onPointerDown={onSurfacePointerDown}
         onPointerMove={onSurfacePointerMove}

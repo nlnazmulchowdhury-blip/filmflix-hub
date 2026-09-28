@@ -61,6 +61,7 @@ export default function PlayerStage({
     duration,
     bufferedEnd,
     controlsOverlayVisible,
+    setControlsOverlayVisible,
     setControlsHold,
     bumpControlsActivity,
     activeDub,
@@ -93,9 +94,9 @@ export default function PlayerStage({
   const scrubbingRef = useRef(false);
   const scrubRef = useRef<HTMLDivElement | null>(null);
 
-  /* The overlay is visible when the provider says so, when the cursor rests
-     on the control bar, or whenever playback is not running (paused/never
-     started). */
+  /* The overlay is visible when the provider says so (mouse hover inside
+     the surface or a recent tap), when the cursor rests on the control bar,
+     or whenever playback is not running (paused/never started). */
   const controlsVisible =
     controlsOverlayVisible || hoveringControls || !playing || !hasStarted;
   const [settingsView, setSettingsView] = useState<
@@ -137,6 +138,22 @@ export default function PlayerStage({
   useEffect(() => {
     setControlsHold(langOpen || settingsOpen);
   }, [langOpen, settingsOpen, setControlsHold]);
+
+  /* Native pointerleave on the whole player box (video + control bar):
+     when the mouse leaves the player, hide the controls immediately.
+     (React synthetic pointer events proved unreliable here.) */
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof PointerEvent === "undefined") return;
+    const onLeave = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse") return;
+      setHoveringControls(false);
+      if (!playing) return; /* paused/never started: always show */
+      setControlsOverlayVisible(false);
+    };
+    el.addEventListener("pointerleave", onLeave);
+    return () => el.removeEventListener("pointerleave", onLeave);
+  }, [isHost, playing, setControlsOverlayVisible]);
 
   /* Keyboard shortcuts: space = play/pause, ←/→ = ±10s, ↑/↓ = volume,
      M = mute, F = fullscreen. */
@@ -368,8 +385,10 @@ export default function PlayerStage({
           ? "fixed inset-0 z-[80] rounded-none border-0"
           : "aspect-video w-full rounded-xl border border-border/60"
       }`}
-      onMouseMove={() => bumpControlsActivity()}
-      onMouseLeave={() => playing && setHoveringControls(false)}
+      onPointerMove={(e) => {
+        if (e.pointerType !== "mouse") return;
+        bumpControlsActivity();
+      }}
       onClickCapture={(e) => {
         bumpControlsActivity();
         // Clicking anywhere outside an open player menu closes it.
