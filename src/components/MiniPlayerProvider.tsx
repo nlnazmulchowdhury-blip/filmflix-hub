@@ -6,6 +6,8 @@ import {
   VolumeX,
   X,
   AudioLines,
+  RotateCcw,
+  RotateCw,
   TriangleAlert,
   ZoomOut,
 } from "lucide-react";
@@ -58,6 +60,27 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<"inline" | "mini">("inline");
   const [hasStarted, setHasStarted] = useState(false);
   const [playing, setPlaying] = useState(false);
+  /* Brief ±10s indicator after a double-tap seek on the side zones. */
+  const [seekFlash, setSeekFlash] = useState<"back" | "fwd" | null>(null);
+  const seekFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashSeek = useCallback((dir: "back" | "fwd") => {
+    setSeekFlash(dir);
+    if (seekFlashTimer.current) clearTimeout(seekFlashTimer.current);
+    seekFlashTimer.current = setTimeout(() => setSeekFlash(null), 550);
+  }, []);
+  useEffect(
+    () => () => {
+      if (seekFlashTimer.current) clearTimeout(seekFlashTimer.current);
+    },
+    [],
+  );
+  /* Tap-toggled controls overlay: hidden by default while playing, always
+     shown before playback starts / while paused. */
+  const [overlayVisible, setOverlayVisible] = useState(true);
+  /* While true (open menu, active scrub) the overlay never auto-hides. */
+  const overlayHoldRef = useRef(false);
+  const overlayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [bufferedEnd, setBufferedEnd] = useState(0);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
@@ -193,7 +216,83 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     setCurrentTime(0);
     setDuration(0);
     setActiveDub(null);
+    setOverlayVisible(true);
   }, []);
+
+  /* Latest live state for the overlay timer callbacks. */
+  const playingRef = useRef(playing);
+  const hasStartedRef = useRef(hasStarted);
+  useEffect(() => {
+    playingRef.current = playing;
+  }, [playing]);
+  useEffect(() => {
+    hasStartedRef.current = hasStarted;
+  }, [hasStarted]);
+
+  /* Re-arm (or disarm) the 2.6s auto-hide countdown from current state. */
+  const armOverlayHide = useCallback(() => {
+    if (overlayTimer.current) {
+      clearTimeout(overlayTimer.current);
+      overlayTimer.current = null;
+    }
+    if (playingRef.current && !overlayHoldRef.current && hasStartedRef.current) {
+      overlayTimer.current = setTimeout(() => {
+        overlayTimer.current = null;
+        if (!overlayHoldRef.current) setOverlayVisible(false);
+      }, 2600);
+    }
+  }, []);
+
+  /** Show the controls overlay and restart the auto-hide countdown. */
+  const showOverlay = useCallback(() => {
+    setOverlayVisible(true);
+    armOverlayHide();
+  }, [armOverlayHide]);
+
+  /** Tap on the video: toggle the controls (never play/pause directly). */
+  const toggleOverlay = useCallback(() => {
+    setOverlayVisible((v) => {
+      const next = !v;
+      if (next) armOverlayHide();
+      else if (overlayTimer.current) {
+        clearTimeout(overlayTimer.current);
+        overlayTimer.current = null;
+      }
+      return next;
+    });
+  }, [armOverlayHide]);
+
+  /** While held true the overlay never auto-hides. */
+  const setControlsHold = useCallback(
+    (v: boolean) => {
+      overlayHoldRef.current = v;
+      if (v && overlayTimer.current) {
+        clearTimeout(overlayTimer.current);
+        overlayTimer.current = null;
+      }
+      if (!v) armOverlayHide();
+    },
+    [armOverlayHide],
+  );
+
+  /** Any user activity re-arms the countdown (without forcing visible). */
+  const bumpControlsActivity = useCallback(() => {
+    setOverlayVisible(true);
+    armOverlayHide();
+  }, [armOverlayHide]);
+
+  /* Keep the countdown in sync with play/pause transitions. */
+  useEffect(() => {
+    armOverlayHide();
+  }, [playing, hasStarted, armOverlayHide]);
+
+  /* Clean up the timer on unmount. */
+  useEffect(
+    () => () => {
+      if (overlayTimer.current) clearTimeout(overlayTimer.current);
+    },
+    [],
+  );
 
   /* ------------------- YouTube behavior: navigate away => mini ---------- */
 
@@ -267,6 +366,9 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     [playVideo, pauseVideo, togglePlay, toggleMute, setVolumeTo, seekBy, seekToRatio],
   );
 
+  const controlsOverlayVisible = overlayVisible;
+  const toggleControlsOverlay = toggleOverlay;
+
   /* Reset viewer settings when a different movie starts. */
   useEffect(() => {
     setNightMode(false);
@@ -289,6 +391,12 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       volume,
       currentTime,
       duration,
+      bufferedEnd,
+      controlsOverlayVisible,
+      toggleControlsOverlay,
+      setControlsOverlayVisible: setOverlayVisible,
+      setControlsHold,
+      bumpControlsActivity,
       activeDub,
       setDub,
       nightMode,
@@ -318,6 +426,11 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       volume,
       currentTime,
       duration,
+      bufferedEnd,
+      controlsOverlayVisible,
+      toggleControlsOverlay,
+      setControlsHold,
+      bumpControlsActivity,
       activeDub,
       setDub,
       nightMode,
@@ -371,11 +484,33 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
             title={movie.title}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
-            onTime={(t, d) => {
+            onTime={(t, d, b) => {
               setCurrentTime(t);
               setDuration(d);
+              setBufferedEnd(b);
             }}
             onEnded={close}
+            onSurfaceTap={(zone) => {
+              if (zone === "center") {
+                toggleOverlay();
+              } else {
+                /* Single tap on side zones: same as double-tap (YouTube-like
+                   instant seek), since these zones have no other meaning. */
+                seekBy(zone === "left" ? -10 : 10);
+                setOverlayVisible(true);
+                armOverlayHide();
+              }
+            }}
+            onSurfaceDoubleTap={(zone) => {
+              seekBy(zone === "left" ? -10 : 10);
+              flashSeek(zone === "left" ? "back" : "fwd");
+              setOverlayVisible(true);
+              armOverlayHide();
+            }}
+            controlsOverlayVisible={controlsOverlayVisible}
+            togglePlay={togglePlay}
+            playing={playing}
+            seekFlash={seekFlash}
           />,
           portalTarget,
         )}
@@ -390,8 +525,21 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
             {/* Portal target for the persistent video */}
             <div ref={setMiniSlot} className="absolute inset-0" />
 
+            {/* Tap-to-toggle controls on the mini card (instead of pausing). */}
+            <div
+              className="absolute inset-0 z-10"
+              onPointerUp={(e) => {
+                if (e.pointerType === "mouse") return;
+                toggleControlsOverlay();
+              }}
+            />
+
             {/* Title + close */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between bg-gradient-to-b from-black/80 to-transparent p-2 opacity-0 transition-opacity group-hover/mp:pointer-events-auto group-hover/mp:opacity-100">
+            <div className={`absolute inset-x-0 top-0 z-20 flex items-start justify-between bg-gradient-to-b from-black/80 to-transparent p-2 transition-opacity ${
+              controlsOverlayVisible
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0 group-hover/mp:pointer-events-auto group-hover/mp:opacity-100"
+            }`}>
               <p className="line-clamp-1 pr-2 text-xs font-medium text-white/90">
                 {movie.title}
               </p>
@@ -406,7 +554,11 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
             </div>
 
             {/* Controls */}
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center gap-0.5 bg-gradient-to-t from-black/85 to-transparent p-1.5 opacity-0 transition-opacity group-hover/mp:pointer-events-auto group-hover/mp:opacity-100">
+            <div className={`absolute inset-x-0 bottom-0 z-20 flex items-center gap-0.5 bg-gradient-to-t from-black/85 to-transparent p-1.5 transition-opacity ${
+              controlsOverlayVisible
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0 group-hover/mp:pointer-events-auto group-hover/mp:opacity-100"
+            }`}>
               <button
                 type="button"
                 onClick={togglePlay}
@@ -486,6 +638,12 @@ function VideoSurface({
   onPause,
   onTime,
   onEnded,
+  onSurfaceTap,
+  onSurfaceDoubleTap,
+  controlsOverlayVisible,
+  togglePlay,
+  playing,
+  seekFlash,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   src: string;
@@ -497,9 +655,21 @@ function VideoSurface({
   visible: boolean;
   posterUrl?: string | null;
   title?: string;
+  /** Single tap on a zone: "left" | "center" | "right". */
+  onSurfaceTap: (zone: "left" | "center" | "right") => void;
+  /** Double tap on a SIDE zone (center double-tap is handled internally). */
+  onSurfaceDoubleTap: (zone: "left" | "right") => void;
+  /** Whether the tap-toggled controls overlay is visible. */
+  controlsOverlayVisible: boolean;
+  /** Toggle play/pause (used by the big center button). */
+  togglePlay: () => void;
+  /** Live playing state (drives the center button icon). */
+  playing: boolean;
+  /** Brief ±10s flash indicator after a double-tap seek (null = hidden). */
+  seekFlash: "back" | "fwd" | null;
   onPlay: () => void;
   onPause: () => void;
-  onTime: (t: number, d: number) => void;
+  onTime: (t: number, d: number, bufferedEnd: number) => void;
   onEnded: () => void;
 }) {
   /* Container size — needed to keep a rotated picture fully in view. */
@@ -659,28 +829,82 @@ function VideoSurface({
     moved: boolean;
     pointerType: string;
   } | null>(null);
-  const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastTap = useRef({ t: 0, x: 0, y: 0 });
   const lastPointerType = useRef("mouse");
 
-  const clearTapTimer = () => {
-    if (tapTimer.current) {
-      clearTimeout(tapTimer.current);
-      tapTimer.current = null;
+  /* ------------------- Tap zones (single / double tap) ------------------
+     Touch: single tap → controls toggle / side seek (reported to the
+     provider after a short delay so a rapid second tap can upgrade it to a
+     double-tap). Double tap center → fill-zoom toggle, sides → ±10s seek.
+     Mouse: handled by native dblclick (center bubbles up to the stage
+     container's fullscreen toggle) — pointer taps are ignored entirely so
+     clicking the video never pauses playback by accident. */
+  const zoneTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const zoneLastTap = useRef({ t: 0, x: 0, y: 0, zone: "" });
+
+  const toggleFillZoom = () => {
+    if (zoomRef.current > 1.05) {
+      resetZoom();
+    } else {
+      /* Fill the screen (cover); skip when the aspect already matches. */
+      const c = coverZoom();
+      if (c > 1.02) {
+        setZoom(c);
+        setPan({ x: 0, y: 0 });
+      }
     }
   };
-  useEffect(() => clearTapTimer, []);
 
-  const toggleVideoPlay = () => {
-    const el = videoRef.current;
-    if (!el) return;
-    if (el.paused) el.play().catch(() => undefined);
-    else el.pause();
+  const handleTapZone = (
+    e: React.PointerEvent<HTMLDivElement>,
+    zone: "left" | "center" | "right",
+  ) => {
+    /* Desktop: native dblclick/click handle everything; a plain click on
+       the picture must NOT pause (the old confusing behavior). */
+    if (e.pointerType === "mouse") return;
+    /* Ignore the pointerup that ends a pan/pinch drag. */
+    if (pinch.current?.moved) return;
+
+    const now = Date.now();
+    const lt = zoneLastTap.current;
+    const isDouble =
+      now - lt.t < 320 &&
+      Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 40 &&
+      lt.zone === zone;
+
+    if (isDouble) {
+      if (zoneTapTimer.current) {
+        clearTimeout(zoneTapTimer.current);
+        zoneTapTimer.current = null;
+      }
+      zoneLastTap.current = { t: 0, x: 0, y: 0, zone: "" };
+      if (zone === "center") toggleFillZoom();
+      else onSurfaceDoubleTap(zone);
+      return;
+    }
+
+    zoneLastTap.current = { t: now, x: e.clientX, y: e.clientY, zone };
+    if (zoneTapTimer.current) clearTimeout(zoneTapTimer.current);
+    zoneTapTimer.current = setTimeout(() => {
+      zoneTapTimer.current = null;
+      onSurfaceTap(zone);
+    }, 240);
   };
+
+  /* Touch double-taps must not also trigger the stage container's
+     double-click fullscreen toggle; mouse dblclick bubbles on purpose. */
+  const handleCenterDoubleClick = (e: React.MouseEvent) => {
+    if (lastPointerType.current === "touch") e.stopPropagation();
+  };
+
+  useEffect(
+    () => () => {
+      if (zoneTapTimer.current) clearTimeout(zoneTapTimer.current);
+    },
+    [],
+  );
 
   const onSurfacePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     lastPointerType.current = e.pointerType;
-    clearTapTimer();
     const g = pinch.current;
     if (!g) {
       pinch.current = {
@@ -750,9 +974,7 @@ function VideoSurface({
       setPan((p) => clampPan(zoomRef.current, { x: p.x + dx, y: p.y + dy }));
     }
     g.lastPos = { x: e.clientX, y: e.clientY };
-  };
-
-  const onSurfacePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+  };  const onSurfacePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const g = pinch.current;
     if (!g || !g.pointers.has(e.pointerId)) return;
     g.pointers.delete(e.pointerId);
@@ -769,37 +991,8 @@ function VideoSurface({
     }
     pinch.current = null;
     setGesturing(false);
-    if (g.moved) return;
-    if (g.pointerType !== "touch") {
-      /* Mouse keeps the old instant click-to-pause behavior; double-click
-         still reaches the container's fullscreen handler. */
-      toggleVideoPlay();
-      return;
-    }
-    /* Touch: double-tap toggles fill zoom, single tap plays/pauses. */
-    const now = Date.now();
-    const lt = lastTap.current;
-    if (now - lt.t < 320 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 40) {
-      lastTap.current = { t: 0, x: 0, y: 0 };
-      clearTapTimer();
-      if (zoomRef.current > 1.05) {
-        resetZoom();
-      } else {
-        /* Fill the screen (cover); skip when the aspect already matches. */
-        const c = coverZoom();
-        if (c > 1.02) {
-          setZoom(c);
-          setPan({ x: 0, y: 0 });
-        }
-      }
-    } else {
-      lastTap.current = { t: now, x: e.clientX, y: e.clientY };
-      clearTapTimer();
-      tapTimer.current = setTimeout(() => {
-        tapTimer.current = null;
-        toggleVideoPlay();
-      }, 280);
-    }
+    /* Tap handling itself lives in the tap zones above the video; this
+       handler only manages the pinch/pan gesture state. */
   };
 
   const onSurfacePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -809,14 +1002,7 @@ function VideoSurface({
     if (g.pointers.size === 0) {
       pinch.current = null;
       setGesturing(false);
-      clearTapTimer();
     }
-  };
-
-  /* Touch double-taps must not also trigger the container's
-     double-click fullscreen toggle. */
-  const onSurfaceDoubleClick = (e: React.MouseEvent) => {
-    if (lastPointerType.current === "touch") e.stopPropagation();
   };
 
   return (
@@ -831,7 +1017,6 @@ function VideoSurface({
         onPointerMove={onSurfacePointerMove}
         onPointerUp={onSurfacePointerUp}
         onPointerCancel={onSurfacePointerCancel}
-        onDoubleClick={onSurfaceDoubleClick}
         className="absolute inset-0"
         /* pan-y: single-finger vertical swipes still scroll the page while
            zoomed out; once zoomed (or mid-pinch) the surface owns all
@@ -872,6 +1057,40 @@ function VideoSurface({
             </p>
           </div>
         )}
+
+        {/* Center play/pause — shows with the controls overlay; a quick
+            double-tap flash marks ±10s seeks on the side zones. */}
+        <div
+          className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-200 ${
+            controlsOverlayVisible ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          <button
+            type="button"
+            tabIndex={controlsOverlayVisible ? 0 : -1}
+            onClick={togglePlay}
+            className="pointer-events-auto flex size-16 items-center justify-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur transition-transform hover:scale-105 sm:size-[72px]"
+            aria-label={playing ? "Pause" : "Play"}
+          >
+            {playing ? (
+              <Pause className="size-8 fill-current" />
+            ) : (
+              <Play className="ml-1 size-8 fill-current" />
+            )}
+          </button>
+        </div>
+        {seekFlash && (
+          <div className="pointer-events-none absolute inset-y-0 z-20 flex items-center" style={seekFlash === "back" ? { left: "8%" } : { right: "8%" }}>
+            <span className="flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-sm font-semibold text-white backdrop-blur">
+              {seekFlash === "back" ? (
+                <RotateCcw className="size-4" />
+              ) : (
+                <RotateCw className="size-4" />
+              )}
+              10s
+            </span>
+          </div>
+        )}
         <video
           ref={videoRef}
           src={src}
@@ -897,15 +1116,45 @@ function VideoSurface({
              own, so captions keep working independently of the video. */
           onPlay={onPlay}
           onPause={onPause}
-          onTimeUpdate={(e) =>
-            onTime(e.currentTarget.currentTime, e.currentTarget.duration || 0)
-          }
+          onTimeUpdate={(e) => {
+            const el = e.currentTarget;
+            let buffered = 0;
+            for (let i = 0; i < el.buffered.length; i++) {
+              if (el.buffered.start(i) <= el.currentTime && el.currentTime < el.buffered.end(i)) {
+                buffered = el.buffered.end(i);
+              }
+            }
+            onTime(el.currentTime, el.duration || 0, buffered);
+          }}
           onEnded={onEnded}
         >
           {subtitles.map((s) => (
             <track key={s.label} kind="subtitles" src={s.url} label={s.label} />
           ))}
         </video>
+
+        {/* Tap zones — the video itself never receives taps, so a single
+            tap toggles the controls instead of instantly pausing. Left
+            third: -10s, right third: +10s, center: toggle controls. The
+            double-tap seek uses the pending single-tap delay for a smooth
+            rapid-tap experience (YouTube-style). */}
+        <div className="absolute inset-0 z-10 flex" data-slot="tap-zones">
+          <div
+            className="h-full flex-1"
+            onPointerUp={(e) => handleTapZone(e, "left")}
+            onDoubleClick={(e) => e.stopPropagation()}
+          />
+          <div
+            className="h-full flex-1"
+            onPointerUp={(e) => handleTapZone(e, "center")}
+            onDoubleClick={handleCenterDoubleClick}
+          />
+          <div
+            className="h-full flex-1"
+            onPointerUp={(e) => handleTapZone(e, "right")}
+            onDoubleClick={(e) => e.stopPropagation()}
+          />
+        </div>
       </div>
 
       {zoom > 1.05 && (
