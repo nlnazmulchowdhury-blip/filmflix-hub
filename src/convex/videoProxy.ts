@@ -69,6 +69,9 @@ const PASS_THROUGH_HEADERS = [
   "accept-ranges",
   "last-modified",
   "etag",
+  // HLS manifests are served with cache headers tuned for their CDN — a
+  // locally cached playlist goes stale when the signed token rotates.
+  "cache-control",
 ];
 
 /**
@@ -198,8 +201,13 @@ export const handleVideoProxy = httpAction(async (ctx, request) => {
   // File-locker hosts (gofile, katfile, …) answer hotlinking players with an
   // HTML download page instead of video bytes — the <video> element then fails
   // with an inscrutable decode error. Catch it here with a clear message.
+  // HLS playlists are TEXT manifests (#EXTM3U …) — they must skip this sniff
+  // or every tokenized .m3u8 stream would be rejected as "a web page".
+  const upstreamType = (upstream.headers.get("content-type") ?? "").toLowerCase();
+  const isHlsPlaylist =
+    upstreamType.includes("mpegurl") || /\.m3u8(\?|$)/i.test(upstreamUrl);
   const { first, rest } = await peekFirstChunk(upstream);
-  if (isHtmlHead(first)) {
+  if (!isHlsPlaylist && isHtmlHead(first)) {
     try {
       await upstream.body?.cancel();
     } catch {
@@ -225,6 +233,9 @@ export const handleVideoProxy = httpAction(async (ctx, request) => {
     headers.set("accept-ranges", "bytes");
   }
   headers.set("Access-Control-Allow-Origin", "*");
+  // HLS playlists regenerate per viewer (signed, short-lived URLs) — a cached
+  // stale playlist would 403 after the token expires. Never cache them here.
+  if (isHlsPlaylist) headers.set("Cache-Control", "no-store");
 
   // Re-attach the sniffed first chunk so the player still gets complete bytes.
   const body = first

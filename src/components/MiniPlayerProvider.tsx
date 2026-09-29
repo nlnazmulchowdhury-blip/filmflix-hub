@@ -27,7 +27,14 @@ import {
   type PlayerControls,
   type PlayerRotation,
 } from "./mini-player-context";
-import { convexSiteUrl, playableVideoUrl } from "@/lib/video-url";
+import { convexSiteUrl, isHlsUrl, playableVideoUrl } from "@/lib/video-url";
+import {
+  applyToken,
+  attachTokenRefresh,
+  makeTokenLoader,
+  type TokenContext,
+} from "@/lib/hls-token";
+import Hls from "hls.js";
 function formatTime(sec: number) {
   if (!Number.isFinite(sec)) return "0:00";
   const m = Math.floor(sec / 60);
@@ -36,12 +43,17 @@ function formatTime(sec: number) {
 }
 
 /** Swap the video's file in place: keep the playback position, speed and
- *  play/pause state. Used by language (dub) and quality switching. */
-function swapSrcKeepingPosition(el: HTMLVideoElement, nextSrc: string, rate: number) {
+ *  play/pause state. Used by language (dub) and quality switching.
+ *  HLS sources are detached/attached through the same hook the initial
+ *  load uses (setHlsSource), so hls.js is destroyed and rebuilt cleanly. */
+function swapSrcKeepingPosition(
+  el: HTMLVideoElement,
+  nextSrc: string,
+  rate: number,
+  isHls: boolean,
+) {
   const resumeAt = el.currentTime;
   const wasPlaying = !el.paused;
-  el.src = nextSrc;
-  el.load();
   const restore = () => {
     el.removeEventListener("loadedmetadata", restore);
     if (Number.isFinite(resumeAt) && resumeAt > 0) {
@@ -52,7 +64,94 @@ function swapSrcKeepingPosition(el: HTMLVideoElement, nextSrc: string, rate: num
       el.play().catch(() => undefined);
     }
   };
-  el.addEventListener("loadedmetadata", restore);
+  if (isHls) {
+    setHlsSource(el, nextSrc, restore);
+  } else {
+    el.src = nextSrc;
+    el.load();
+    el.addEventListener("loadedmetadata", restore);
+  }
+}
+
+/** Module-level handle for the single persistent video element's HLS engine.
+ *  hls.js fetches the playlist + segments over fetch/XHR and feeds MSE;
+ *  setting el.src to a .m3u8 would only work on Safari, so non-Safari
+ *  browsers get this wired in setHlsSource. One instance at a time. */
+let activeHls: Hls | null = null;
+/** Token auto-refresh + loader stamping for the active IP-bound stream. */
+let activeTokenCtx: TokenContext | null = null;
+let disposeTokenRefresh: (() => void) | null = null;
+
+/** Point the player's video element at a source: hls.js for .m3u8 (unless
+ *  the browser plays HLS natively), plain src for MP4/everything else.
+ *  `afterReady` runs on loadedmetadata (used by src swaps to restore
+ *  position/speed/play state). */
+function setHlsSource(
+  el: HTMLVideoElement,
+  src: string,
+  afterReady?: () => void,
+) {
+  const nativeHls =
+    el.canPlayType("application/vnd.apple.mpegurl") !== "";
+  if (isHlsUrl(src) && Hls.isSupported() && !nativeHls) {
+    /* First HLS source for this movie: create the token context and start
+       the hourly refresh (viewer-bound tokens expire after 4h). The URL in
+       the catalog may already carry an old/foreign token — a fresh one is
+       stamped before the first request. */
+    destroyHls();
+    activeTokenCtx = { token: { current: "" }, hosts: new Set() };
+    disposeTokenRefresh = attachTokenRefresh(src, activeTokenCtx, (fresh) => {
+      const live = document.querySelector("video");
+      if (live && !live.paused) buildHls(live, fresh);
+    });
+    if (afterReady) el.addEventListener("loadedmetadata", afterReady, { once: true });
+    buildHls(el, src);
+  } else {
+    destroyHls();
+    el.src = src;
+    el.load();
+    if (afterReady) el.addEventListener("loadedmetadata", afterReady, { once: true });
+  }
+}
+
+/** Tear down the module-level HLS engine (surface unmount / movie close). */
+function destroyHls() {
+  if (activeHls) {
+    activeHls.destroy();
+    activeHls = null;
+  }
+  if (disposeTokenRefresh) {
+    disposeTokenRefresh();
+    disposeTokenRefresh = null;
+  }
+  activeTokenCtx = null;
+}
+
+/** Wire one HLS URL into the engine, stamping tokenized requests and
+ *  resuming position/rate across (re)builds — hourly token refresh must
+ *  never visibly restart the movie. */
+function buildHls(el: HTMLVideoElement, src: string) {
+  if (activeHls) {
+    activeHls.destroy();
+    activeHls = null;
+  }
+  const resumeAt = Number.isFinite(el.currentTime) ? el.currentTime : 0;
+  const rate = el.playbackRate || 1;
+  const hls = new Hls({
+    enableWorker: true,
+    // Tokenized playlists must never come from cache: a stale manifest 403s.
+    loader: activeTokenCtx
+      ? (makeTokenLoader(activeTokenCtx) as (typeof Hls.DefaultConfig)["loader"])
+      : undefined,
+  });
+  activeHls = hls;
+  hls.on(Hls.Events.MANIFEST_PARSED, () => {
+    if (resumeAt > 0) el.currentTime = resumeAt;
+    el.playbackRate = rate;
+    el.play().catch(() => undefined);
+  });
+  hls.loadSource(src);
+  hls.attachMedia(el);
 }
 
 export function MiniPlayerProvider({ children }: { children: ReactNode }) {
@@ -181,7 +280,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
         setActiveDub(label);
         return;
       }
-      swapSrcKeepingPosition(el, nextSrc, playbackRateRef.current);
+      swapSrcKeepingPosition(el, nextSrc, playbackRateRef.current, isHlsUrl(nextSrc));
       setActiveDub(label);
     },
     [],
@@ -202,7 +301,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       setActiveQuality(label);
       return;
     }
-    swapSrcKeepingPosition(el, nextSrc, playbackRateRef.current);
+    swapSrcKeepingPosition(el, nextSrc, playbackRateRef.current, isHlsUrl(nextSrc));
     setActiveQuality(label);
   }, []);
 
@@ -212,6 +311,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
 
   const close = useCallback(() => {
     videoRef.current?.pause();
+    destroyHls();
     setMovie(null);
     setModeState("inline");
     setHasStarted(false);
@@ -535,6 +635,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
           <VideoSurface
             videoRef={videoRef}
             src={playableVideoUrl(movie.videoUrl, convexSiteUrl(), movie)}
+            onSourceChanged={destroyHls}
             subtitles={movie.subtitles ?? []}
             activeSubtitle={activeSubtitle}
             nightMode={nightMode}
@@ -713,6 +814,7 @@ function VideoSurface({
   onSurfaceClick,
   onSurfaceMouseEnter,
   onSurfaceMouseMove,
+  onSourceChanged,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   src: string;
@@ -743,6 +845,9 @@ function VideoSurface({
   /** Native mouse listeners: enter/move show + re-arm the idle hide. */
   onSurfaceMouseEnter: (e: { pointerType?: string }) => void;
   onSurfaceMouseMove: (e: { pointerType?: string }) => void;
+  /** Called before a new source rewires the element — lets the owner
+   *  destroy the module-level hls.js engine (it is global, not per-surface). */
+  onSourceChanged: () => void;
   onPlay: () => void;
   onPause: () => void;
   onTime: (t: number, d: number, bufferedEnd: number) => void;
@@ -781,15 +886,23 @@ function VideoSurface({
      track, show the movie's art behind the (invisible) media element and a
      small badge so users know playback itself is fine. */
   const [audioOnly, setAudioOnly] = useState(false);
+  const isHlsSrc = isHlsUrl(src);
   useEffect(() => {
     setAudioOnly(false);
     const el = videoRef.current;
     if (!el) return;
+    /* hls.js delivers duration BEFORE the first video frame decodes, so an
+       immediate videoHeight check false-positives "Audio only" on HLS
+       streams. MP4s are decided on loadedmetadata; HLS waits for the first
+       actual frame (loadeddata) before concluding there is no video track. */
     const check = () => {
-      /* height 0 with a real duration = audio-only content */
       const noVideo = el.videoHeight === 0;
       setAudioOnly(noVideo && Number.isFinite(el.duration) && el.duration > 0);
     };
+    if (isHlsSrc) {
+      el.addEventListener("loadeddata", check);
+      return () => el.removeEventListener("loadeddata", check);
+    }
     check();
     el.addEventListener("loadedmetadata", check);
     el.addEventListener("durationchange", check);
@@ -797,7 +910,7 @@ function VideoSurface({
       el.removeEventListener("loadedmetadata", check);
       el.removeEventListener("durationchange", check);
     };
-  }, [src, videoRef]);
+  }, [src, isHlsSrc, videoRef]);
 
   /* Unplayable sources (dead links, HTML download pages, wrong formats)
      would otherwise leave a silent black box — surface a short reason.
@@ -817,6 +930,25 @@ function VideoSurface({
     el.addEventListener("error", fail);
     return () => el.removeEventListener("error", fail);
   }, [src, videoRef]);
+
+  /* HLS sources (.m3u8): src=<playlist> only plays on Safari — every other
+     browser gets hls.js wired via the module-level setHlsSource. Runs after
+     onSourceChanged cleanup, so the previous engine is already destroyed.
+     MP4/direct files keep the plain <video src> path. */
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (!isHlsSrc) {
+      /* Leaving HLS (next movie is MP4): the plain-src path must own the
+         element — tear down the token loader and old engine first. */
+      destroyHls();
+      return;
+    }
+    setHlsSource(el, src);
+    return () => {
+      onSourceChanged();
+    };
+  }, [src, isHlsSrc, videoRef, onSourceChanged]);
 
   /* Rotate: swap the box so the rotated picture stays fully visible. */
   const rotated = rotation === 90 || rotation === 270;
@@ -1208,7 +1340,7 @@ function VideoSurface({
         )}
         <video
           ref={videoRef}
-          src={src}
+          src={isHlsSrc ? undefined : src}
           loop={loop}
           className="absolute inset-0 size-full object-contain"
           style={{

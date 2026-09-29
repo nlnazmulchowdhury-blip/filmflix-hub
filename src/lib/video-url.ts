@@ -19,9 +19,23 @@ export function playableVideoUrl(
   if (!url) return "";
   const isOwnSubtitle = movie?.subtitles?.some((s) => s.url === url) ?? false;
   if (isOwnSubtitle) return url;
-  const needsProxy = !url.startsWith("https://") || isForceProxyUrl(url);
+  // HLS playlists (token-signed or plain) must go straight to hls.js —
+  // see isHlsUrl. Everything else keeps the mixed-content proxy rules.
+  const needsProxy =
+    (!url.startsWith("https://") || isForceProxyUrl(url)) && !isHlsUrl(url);
   if (!needsProxy) return url;
   return `${siteUrl.replace(/\/+$/, "")}/video-proxy?url=${encodeURIComponent(url)}`;
+}
+
+/**
+ * True if the URL is an HLS playlist (.m3u8, optionally signed with a
+ * `?token=` query — tokenized playlists still contain ".m3u8"). HLS is
+ * played in-browser by hls.js and must NOT be routed through the proxy:
+ * these streams chain signed, IP-bound token URLs (playlist → variants →
+ * segments), which a proxy would break out of range and 403.
+ */
+export function isHlsUrl(raw: string | null | undefined): boolean {
+  return (raw ?? "").trim().toLowerCase().includes(".m3u8");
 }
 
 /**
