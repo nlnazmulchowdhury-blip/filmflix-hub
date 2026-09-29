@@ -419,6 +419,13 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     [armOverlayHide],
   );
 
+  /** Desktop click on the picture: toggle play/pause + show controls. */
+  const handleMovieSurfaceClick = useCallback(() => {
+    togglePlay();
+    setOverlayVisible(true);
+    armOverlayHide();
+  }, [togglePlay, armOverlayHide]);
+
   /* Reset viewer settings when a different movie starts. */
   useEffect(() => {
     setNightMode(false);
@@ -568,6 +575,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
             seekFlash={seekFlash}
             onSurfaceMouseEnter={handleSurfaceMouseEnter}
             onSurfaceMouseMove={handleSurfaceMouseMove}
+            onSurfaceClick={handleMovieSurfaceClick}
           />,
           portalTarget,
         )}
@@ -702,6 +710,7 @@ function VideoSurface({
   playing,
   hasStarted,
   seekFlash,
+  onSurfaceClick,
   onSurfaceMouseEnter,
   onSurfaceMouseMove,
 }: {
@@ -729,6 +738,8 @@ function VideoSurface({
   hasStarted: boolean;
   /** Brief ±10s flash indicator after a double-tap seek (null = hidden). */
   seekFlash: "back" | "fwd" | null;
+  /** Desktop click on the picture: toggle play/pause + show controls. */
+  onSurfaceClick: () => void;
   /** Native mouse listeners: enter/move show + re-arm the idle hide. */
   onSurfaceMouseEnter: (e: { pointerType?: string }) => void;
   onSurfaceMouseMove: (e: { pointerType?: string }) => void;
@@ -1083,6 +1094,23 @@ function VideoSurface({
     }
   };
 
+  /* Desktop click on the picture: toggle play/pause and show the controls.
+     This covers the confusing dead-click case where the controls have
+     auto-hidden while the cursor rests inside the player: no pointerenter/
+     move fires on a stationary click, so without this the center button
+     (pointer-events: none while hidden) silently swallows nothing and the
+     user's click does... nothing. Touch taps are handled by the tap zones
+     (toggle controls, never pause); double-click still fullscreens via the
+     stage handler. */
+  const handleSurfaceClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const t = e.target as HTMLElement;
+    /* Ignore clicks that land on real controls (menus, buttons, scrubber). */
+    if (t.closest("button, [data-player-scrubber], [data-player-menu], a")) return;
+    if (zoomRef.current > 1.05) return; /* zoomed: clicks pan, don't pause */
+    if (!hasStarted) return;
+    onSurfaceClick();
+  };
+
   return (
     <div
       ref={wrapRef}
@@ -1096,6 +1124,7 @@ function VideoSurface({
         onPointerMove={onSurfacePointerMove}
         onPointerUp={onSurfacePointerUp}
         onPointerCancel={onSurfacePointerCancel}
+        onClick={handleSurfaceClick}
         className="absolute inset-0"
         /* pan-y: single-finger vertical swipes still scroll the page while
            zoomed out; once zoomed (or mid-pinch) the surface owns all
