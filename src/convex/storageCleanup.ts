@@ -32,6 +32,7 @@ function movieMediaUrls(m: {
   episodes?: { videoUrl: string }[];
   dubs?: { videoUrl: string }[];
   qualities?: { videoUrl: string }[];
+  downloads?: { url: string }[];
   subtitles?: { url: string }[];
   seasons?: { episodes?: { videoUrl: string }[] }[];
 }): string[] {
@@ -42,6 +43,7 @@ function movieMediaUrls(m: {
   for (const e of m.episodes ?? []) if (e.videoUrl) urls.push(e.videoUrl);
   for (const d of m.dubs ?? []) if (d.videoUrl) urls.push(d.videoUrl);
   for (const q of m.qualities ?? []) if (q.videoUrl) urls.push(q.videoUrl);
+  for (const d of m.downloads ?? []) if (d.url) urls.push(d.url);
   for (const s of m.subtitles ?? []) if (s.url) urls.push(s.url);
   for (const s of m.seasons ?? [])
     for (const e of s.episodes ?? []) if (e.videoUrl) urls.push(e.videoUrl);

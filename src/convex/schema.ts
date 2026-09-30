@@ -66,6 +66,16 @@ const schema = defineSchema(
           }),
         ),
       ),
+      /** Download links shown as a quality menu next to the title on the
+       *  movie page (separate from playback qualities). */
+      downloads: v.optional(
+        v.array(
+          v.object({
+            label: v.string(),
+            url: v.string(),
+          }),
+        ),
+      ),
       /** Subtitle / caption tracks (WebVTT files) with a display label. */
       subtitles: v.optional(
         v.array(
