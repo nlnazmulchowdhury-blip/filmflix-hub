@@ -18,6 +18,7 @@ import type * as crons from "../crons.js";
 import type * as dubbing from "../dubbing.js";
 import type * as http from "../http.js";
 import type * as linkHealth from "../linkHealth.js";
+import type * as movieApi from "../movieApi.js";
 import type * as movies from "../movies.js";
 import type * as orders from "../orders.js";
 import type * as screenings from "../screenings.js";
@@ -50,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   dubbing: typeof dubbing;
   http: typeof http;
   linkHealth: typeof linkHealth;
+  movieApi: typeof movieApi;
   movies: typeof movies;
   orders: typeof orders;
   screenings: typeof screenings;

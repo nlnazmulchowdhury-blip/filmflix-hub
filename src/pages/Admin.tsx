@@ -32,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import Logo from "@/components/Logo";
+import MovieApiPanel from "@/components/MovieApiPanel";
 import MovieFormDialog from "@/components/MovieFormDialog";
 import RelayUrlHelper from "@/components/RelayUrlHelper";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -752,6 +753,9 @@ function AdminContent() {
                       {adminUnread}
                     </span>
                   )}
+                </TabsTrigger>
+                <TabsTrigger value="api" className="gap-1.5">
+                  <Clapperboard className="size-3.5" /> API
                 </TabsTrigger>
                 <TabsTrigger value="links" className="gap-1.5">
                   <ShieldAlert className="size-3.5" /> Links
@@ -2049,6 +2053,11 @@ function AdminContent() {
                     </CardContent>
                   </Card>
                 </div>
+              </TabsContent>
+
+              {/* API — external movie API search & import */}
+              <TabsContent value="api">
+                <MovieApiPanel />
               </TabsContent>
 
               {/* Links — stream URL health management */}
