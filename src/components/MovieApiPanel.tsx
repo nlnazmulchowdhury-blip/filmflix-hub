@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { api } from "@/convex/_generated/api";
 import type { ApiSearchHit } from "@/convex/movieApi";
+import type { MbSearchHit } from "@/convex/movieBox";
 import { useAction, useMutation, useQuery } from "convex/react";
 import {
   Clapperboard,
@@ -35,6 +36,8 @@ export default function MovieApiPanel() {
   const probe = useAction(api.movieApi.probeAction);
   const search = useAction(api.movieApi.searchAction);
   const importMovie = useMutation(api.movieApi.importMovie);
+  const mbSearch = useAction(api.movieBox.searchAction);
+  const mbImport = useAction(api.movieBox.importMovie);
 
   const [testBase, setTestBase] = useState("");
   const [probing, setProbing] = useState(false);
@@ -104,6 +107,77 @@ export default function MovieApiPanel() {
     }
   };
 
+  const [mbQ, setMbQ] = useState("");
+  const [mbSearching, setMbSearching] = useState(false);
+  const [mbHits, setMbHits] = useState<MbSearchHit[]>([]);
+  const [mbImporting, setMbImporting] = useState<string | null>(null);
+  const [mbImported, setMbImported] = useState<Set<string>>(new Set());
+  const [mbImportedInfo, setMbImportedInfo] = useState<
+    Record<
+      string,
+      { downloads: number; detailError?: string; resourceError?: string }
+    >
+  >({});
+
+  const runMbSearch = async () => {
+    const query = mbQ.trim();
+    if (!query) return;
+    setMbSearching(true);
+    try {
+      const hits = await mbSearch({ q: query });
+      setMbHits(hits);
+      if (hits.length === 0) toast.info("MovieBox-এ কিছু পাওয়া যায়নি");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "MovieBox search failed");
+    } finally {
+      setMbSearching(false);
+    }
+  };
+
+  const doMbImport = async (hit: MbSearchHit) => {
+    setMbImporting(hit.subjectId);
+    try {
+      const res = await mbImport({
+        subjectId: hit.subjectId,
+        fallback: {
+          title: hit.title,
+          year: hit.year,
+          posterUrl: hit.posterUrl,
+          overview: hit.overview,
+          rating: hit.rating,
+          kind: hit.kind,
+          genre: hit.genre,
+        },
+      });
+      setMbImported((prev) => new Set(prev).add(hit.subjectId));
+      setMbImportedInfo((prev) => ({
+        ...prev,
+        [hit.subjectId]: {
+          downloads: res.downloads,
+          detailError: res.detailError,
+          resourceError: res.resourceError,
+        },
+      }));
+      if (res.downloads > 0 && !res.detailError) {
+        toast.success(
+          `"${res.title}" ইমপোর্ট হয়েছে — ${res.downloads} টি ডাউনলোড লিংক সহ`,
+        );
+      } else if (res.downloads > 0) {
+        toast.warning(
+          `"${res.title}" ইমপোর্ট হয়েছে (${res.downloads} লিংক), কিন্তু মেটাডেটা আসেনি: ${res.detailError}`,
+        );
+      } else {
+        toast.error(
+          `"${res.title}" ক্যাটালগে গেছে, কিন্তু ডাউনলোড লিংক পাওয়া যায়নি — ${res.resourceError ?? res.detailError ?? "অজানা কারণ"}`,
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Import failed");
+    } finally {
+      setMbImporting(null);
+    }
+  };
+
   return (
     <Card className="overflow-hidden p-0">
       <CardHeader className="border-b border-border/50 py-4">
@@ -132,6 +206,127 @@ export default function MovieApiPanel() {
       </CardHeader>
 
       <CardContent className="space-y-6 p-4">
+        {/* MovieBox (AOneRoom) — no key needed, signed like the official app */}
+        <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">MovieBox (AOneRoom)</span>
+            <Badge
+              variant="outline"
+              className="border-emerald-500/50 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+            >
+              <ShieldCheck className="size-3" /> কী ছাড়া চলে
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            মুভি সার্চ করে ইমপোর্ট করলে পোস্টার, বর্ষ, রেটিং ও
+            <span className="font-medium"> 360p–1080p ডাউনলোড লিংক</span> অটোমেটিক ভরে যাবে — পরে চাইলে এডিট করে নিতে পারবেন।
+          </p>
+          <form
+            className="flex flex-col gap-2 sm:flex-row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              runMbSearch();
+            }}
+          >
+            <Input
+              value={mbQ}
+              onChange={(e) => setMbQ(e.target.value)}
+              placeholder="MovieBox-এ মুভি সার্চ করুন…"
+              aria-label="MovieBox search"
+              className="flex-1"
+            />
+            <Button
+              type="submit"
+              className="gap-2 sm:w-auto"
+              disabled={mbSearching || !mbQ.trim()}
+            >
+              {mbSearching ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Search className="size-4" />
+              )}
+              MovieBox-এ সার্চ
+            </Button>
+          </form>
+
+          {mbHits.length > 0 && (
+            <div className="divide-y divide-border/50 overflow-hidden rounded-lg border border-border/50 bg-background">
+              {mbHits.map((hit) => (
+                <div key={hit.subjectId} className="flex items-center gap-3 p-2.5">
+                  {hit.posterUrl ? (
+                    <img
+                      src={hit.posterUrl}
+                      alt=""
+                      className="h-16 w-11 flex-none rounded object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <span className="flex h-16 w-11 flex-none items-center justify-center rounded bg-muted text-muted-foreground">
+                      <Clapperboard className="size-4" />
+                    </span>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">
+                      {hit.title}
+                      {hit.year ? ` (${hit.year})` : ""}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {hit.kind === "series" ? "সিরিজ" : "মুভি"}
+                      {hit.rating ? ` • ★ ${hit.rating.toFixed(1)}` : ""}
+                      {hit.genre ? ` • ${hit.genre}` : ""}
+                    </p>
+                    {hit.overview && (
+                      <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                        {hit.overview}
+                      </p>
+                    )}
+                    {mbImported.has(hit.subjectId) &&
+                      mbImportedInfo[hit.subjectId] &&
+                      (mbImportedInfo[hit.subjectId].downloads > 0 ||
+                        mbImportedInfo[hit.subjectId].resourceError) && (
+                        <p
+                          className={`mt-1 text-xs ${
+                            mbImportedInfo[hit.subjectId].downloads > 0
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : "text-destructive"
+                          }`}
+                        >
+                          {mbImportedInfo[hit.subjectId].downloads > 0
+                            ? `${mbImportedInfo[hit.subjectId].downloads} টি ডাউনলোড লিংক যোগ হয়েছে`
+                            : "কোনো ডাউনলোড লিংক পাওয়া যায়নি"}
+                          {mbImportedInfo[hit.subjectId].resourceError &&
+                            ` — ${mbImportedInfo[hit.subjectId].resourceError}`}
+                        </p>
+                      )}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5"
+                    disabled={
+                      mbImporting === hit.subjectId || mbImported.has(hit.subjectId)
+                    }
+                    onClick={() => doMbImport(hit)}
+                  >
+                    {mbImported.has(hit.subjectId) ?
+                      `যোগ হয়েছে${
+                        mbImportedInfo[hit.subjectId]?.downloads
+                          ? ` (${mbImportedInfo[hit.subjectId].downloads} লিংক)`
+                          : ""
+                      }`
+                    : mbImporting === hit.subjectId ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Download className="size-3.5" />
+                    )}
+                    ইমপোর্ট
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Provider check */}
         <div className="space-y-2">
           <div className="flex flex-col gap-2 sm:flex-row">

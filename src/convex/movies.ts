@@ -1,5 +1,5 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { mutation, query, QueryCtx } from "./_generated/server";
+import { internalMutation, mutation, query, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { getCurrentUser } from "./users";
@@ -122,6 +122,31 @@ export const add = mutation({
       (await ctx.db.query("movies").withIndex("order").collect()).length;
     // Single source of truth is the categories array; mirror the first name
     // into the legacy field so older reads keep working.
+    const { category, categories, ...rest } = args;
+    const names = [
+      ...new Set(
+        [...(categories ?? []), category ?? ""]
+          .map((c) => c.trim())
+          .filter(Boolean),
+      ),
+    ];
+    return await ctx.db.insert("movies", {
+      ...rest,
+      categories: names.length > 0 ? names : undefined,
+      category: names[0],
+      order,
+    });
+  },
+});
+
+/** Internal variant of `add` for server-to-server imports (e.g. the
+ *  MovieBox action); auth is the caller's responsibility. */
+export const addInternal = internalMutation({
+  args: movieFields,
+  handler: async (ctx, args) => {
+    const order =
+      args.order ??
+      (await ctx.db.query("movies").withIndex("order").collect()).length;
     const { category, categories, ...rest } = args;
     const names = [
       ...new Set(
