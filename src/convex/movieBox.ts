@@ -22,6 +22,12 @@ import { action, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createHmac, createHash } from "node:crypto";
+import {
+  fetchWebDetail,
+  fetchWebDownloads,
+  REGION_BLOCK_HINT,
+  isRegionBlock,
+} from "./mbWeb";
 
 /* ------------------------------------------------------------------ */
 /* Role gate — reuses movieApi.userRoleById (queries can't live in a
@@ -55,7 +61,6 @@ const HOST_POOL = [
 
 const SEARCH_PATH = "/wefeed-mobile-bff/subject-api/search";
 const SUBJECT_GET_PATH = "/wefeed-mobile-bff/subject-api/get";
-const RESOURCE_PATH = "/wefeed-mobile-bff/subject-api/resource";
 
 function md5Hex(data: string): string {
   return createHash("md5").update(data, "utf8").digest("hex");
@@ -423,55 +428,6 @@ export const searchAction = action({
 /* Download resources (per-quality mp4 links)                          */
 /* ------------------------------------------------------------------ */
 
-interface MbFile {
-  label: string;
-  url: string;
-}
-
-/**
- * Parse the downloadable-files response. Two shapes are seen in the wild:
- *  - { downloads: [{ url, resolution, size, … }] }   (current fixtures)
- *  - { list: [{ resourceLink, resolution, … }] }     (older recordings)
- */
-function parseDownloadFiles(data: any): MbFile[] {
-  const raw: any[] = Array.isArray(data?.downloads)
-    ? data.downloads
-    : Array.isArray(data?.list)
-      ? data.list
-      : [];
-  const seen = new Set<string>();
-  const files: MbFile[] = [];
-  for (const f of raw) {
-    const link = f?.url ?? f?.resourceLink ?? f?.resource_link;
-    const res = Number(f?.resolution);
-    if (!link || !Number.isFinite(res) || seen.has(link)) continue;
-    seen.add(link);
-    files.push({ label: `${res}p`, url: String(link) });
-  }
-  files.sort((a, b) => Number(b.label) - Number(a.label));
-  return files;
-}
-
-async function fetchDownloadFiles(
-  subjectId: string,
-  preferred?: string,
-): Promise<MbFile[]> {
-  const { data } = await mbRequestAny(
-    "GET",
-    RESOURCE_PATH,
-    {
-      params: {
-        subjectId,
-        resolution: "0", // UNSPECIFIED → server returns every quality
-        page: "1",
-        perPage: "20",
-      },
-    },
-    preferred,
-  );
-  return parseDownloadFiles(data);
-}
-
 async function fetchDetail(
   subjectId: string,
   preferred?: string,
@@ -491,11 +447,21 @@ async function fetchDetail(
 
 export interface MbImportResult {
   movieId: string;
+  /** Number of download entries actually saved (real files, or Trailer). */
   downloads: number;
   title: string;
+  /** What the player will actually show. */
+  videoKind: "movie" | "trailer" | "none";
   detailError?: string;
   resourceError?: string;
 }
+
+/** A file below this size is not a movie — the provider hands anonymous
+ *  (guest-token) sessions the same ~1 MB sample clip for every title.
+ *  Real movie files are hundreds of MB; trailers are 5–100 MB. The web
+ *  download response reports each file's exact size, so this check needs
+ *  no byte-probing. */
+const MIN_REAL_BYTES = 20 * 1024 * 1024;
 
 export const importMovie = action({
   args: {
@@ -529,12 +495,16 @@ export const importMovie = action({
       detailError = err instanceof Error ? err.message : String(err);
     }
 
-    let files: MbFile[] = [];
     let resourceError: string | undefined;
+    let webFiles: Array<{ label: string; sizeBytes?: number }> = [];
     try {
-      files = await fetchDownloadFiles(subjectId, preferred);
+      webFiles = await fetchWebDownloads(subjectId);
     } catch (err) {
-      resourceError = err instanceof Error ? err.message : String(err);
+      const msg = err instanceof Error ? err.message : String(err);
+      // The provider geo-blocks data-center IPs on the download endpoint
+      // (403 "invalid region") — see the region note in mbWeb.ts. Say so
+      // plainly instead of a raw status code.
+      resourceError = isRegionBlock(msg) ? REGION_BLOCK_HINT : msg;
     }
 
     const title: string = detail?.title ?? fallback?.title ?? "Untitled";
@@ -565,8 +535,51 @@ export const importMovie = action({
           ? "series"
           : "movie"
         : (fallback?.kind ?? "movie");
-    // First direct .mp4 file (if any) doubles as the playable main video.
-    const mainVideo = files.find((f) => f.url.includes(".mp4"))?.url;
+    // The mobile API serves anonymous sessions ONE shared ~1 MB sample clip
+    // for every title — its file list is useless for playback. The REAL
+    // full-movie files come from the web endpoint (Referer-locked, works
+    // anonymously — see mbWeb.ts). Store stable mbres:// references, never
+    // the provider's short-lived signed URLs.
+
+    // Real movie = file big enough to not be the shared sample. The web
+    // response's `size` field is exact, so no byte-probing is needed.
+    const realFiles = webFiles.filter(
+      (f) => (f.sizeBytes ?? Infinity) >= MIN_REAL_BYTES,
+    );
+
+    // Fallback: the official trailer from the WEB detail (the mobile detail
+    // sometimes carries the shared sample as its "trailer").
+    let trailerUrl: string | undefined;
+    try {
+      const webDetail = await fetchWebDetail(subjectId);
+      const t =
+        webDetail?.subject?.trailer?.VideoAddress ??
+        webDetail?.subject?.trailer?.videoAddress;
+      const u = t?.url;
+      if (
+        typeof u === "string" &&
+        u.startsWith("https://") &&
+        !u.includes("/other/") // the shared sample lives under /other/
+      ) {
+        trailerUrl = u;
+      }
+    } catch {
+      // web detail failed — trailer stays undefined
+    }
+
+    // Player source: prefer a real movie file (highest resolution), else the
+    // trailer — but never the shared placeholder sample.
+    const candidates = [...realFiles].sort(
+      (a, b) => Number(b.label) - Number(a.label),
+    );
+    let mainVideo: string | undefined = candidates[0]
+      ? `mbres://${subjectId}/${candidates[0].label}`
+      : trailerUrl;
+    let videoKind: "movie" | "trailer" | "none" = candidates[0]
+      ? "movie"
+      : trailerUrl
+        ? "trailer"
+        : "none";
 
     const movieId = await ctx.runMutation(internal.movies.addInternal, {
       title: year ? `${title} (${year})` : title,
@@ -578,13 +591,23 @@ export const importMovie = action({
       year,
       rating: rating !== undefined && Number.isFinite(rating) ? rating : undefined,
       kind,
-      downloads: files.length > 0 ? files : undefined,
+      downloads:
+        realFiles.length > 0
+          ? realFiles.map((f) => ({
+              label: f.label,
+              url: `mbres://${subjectId}/${f.label}`,
+            }))
+          : trailerUrl
+            ? [{ label: "Trailer", url: trailerUrl }]
+            : undefined,
     });
 
     return {
       movieId,
-      downloads: files.length,
+      downloads:
+        realFiles.length > 0 ? realFiles.length : trailerUrl ? 1 : 0,
       title,
+      videoKind,
       detailError,
       resourceError,
     };

@@ -115,7 +115,12 @@ export default function MovieApiPanel() {
   const [mbImportedInfo, setMbImportedInfo] = useState<
     Record<
       string,
-      { downloads: number; detailError?: string; resourceError?: string }
+      {
+        downloads: number;
+        videoKind?: "movie" | "trailer" | "none";
+        detailError?: string;
+        resourceError?: string;
+      }
     >
   >({});
 
@@ -154,17 +159,22 @@ export default function MovieApiPanel() {
         ...prev,
         [hit.subjectId]: {
           downloads: res.downloads,
+          videoKind: res.videoKind,
           detailError: res.detailError,
           resourceError: res.resourceError,
         },
       }));
-      if (res.downloads > 0 && !res.detailError) {
+      if (res.videoKind === "movie") {
         toast.success(
-          `"${res.title}" ইমপোর্ট হয়েছে — ${res.downloads} টি ডাউনলোড লিংক সহ`,
+          `"${res.title}" ইমপোর্ট হয়েছে — প্লেয়ারে পুরো মুভি চলবে`,
+        );
+      } else if (res.videoKind === "trailer") {
+        toast.info(
+          `"${res.title}" ইমপোর্ট হয়েছে — পুরো মুভি প্রোভাইডারে লকড, প্লেয়ারে ট্রেলার চলবে`,
         );
       } else if (res.downloads > 0) {
         toast.warning(
-          `"${res.title}" ইমপোর্ট হয়েছে (${res.downloads} লিংক), কিন্তু মেটাডেটা আসেনি: ${res.detailError}`,
+          `"${res.title}" ইমপোর্ট হয়েছে (${res.downloads} লিংক) কিন্তু প্লেয়ারে চালানোর মতো ভিডিও পাওয়া যায়নি`,
         );
       } else {
         toast.error(
@@ -221,6 +231,63 @@ export default function MovieApiPanel() {
             মুভি সার্চ করে ইমপোর্ট করলে পোস্টার, বর্ষ, রেটিং ও
             <span className="font-medium"> 360p–1080p ডাউনলোড লিংক</span> অটোমেটিক ভরে যাবে — পরে চাইলে এডিট করে নিতে পারবেন।
           </p>
+          <p className="text-xs text-muted-foreground">
+            {settings?.mbProxy ? (
+              <>
+                <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                  পুরো মুভি রেজলভার প্রক্সি চালু
+                </span>{
+                  " "
+                }
+                <span className="font-mono">{settings.mbProxy}</span>
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-amber-600 dark:text-amber-400">
+                  পুরো মুভি ফাইল এখন বন্ধ:
+                </span>{
+                  " "
+                }
+                প্রোভাইডার ডেটা-সেন্টার IP (মানে এই সার্ভার) থেকে ডাউনলোড
+                এন্ডপয়েন্ট ব্লক করে — তাই ইমপোর্টে প্লেয়ারে প্রোভাইডারের আসল
+                ট্রেলার যোগ হয়। নিচের গাইড অনুযায়ী Convex-এ
+                <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-[11px]">MOVIEBOX_WEB_PROXY</code>
+                সেট করলে ইমপোর্ট থেকেই পুরো মুভি প্লে হবে।
+              </>
+            )}
+          </p>
+          <details className="group rounded-lg border border-border/50 bg-background/50 p-2.5 text-xs">
+            <summary className="cursor-pointer select-none font-medium">
+              পুরো মুভি চালাতে প্রক্সি সেটআপ গাইড (Cloudflare Worker)
+            </summary>
+            <div className="mt-2 space-y-2 text-muted-foreground">
+              <p>
+                ১. Cloudflare Workers-এ ফ্রি একটা Worker বানান (residential
+                egress সাধারণত ব্লক হয় না) আর নিচের কোডটা বসান —
+                এটা প্রোভাইডারের দরকারি Referer হেডার নিজে বসিয়ে দেয়:
+              </p>
+              <pre className="overflow-x-auto rounded bg-muted p-2 font-mono text-[11px] leading-relaxed text-foreground">
+{`export default {
+  async fetch(req) {
+    const u = new URL(req.url);
+    const sid = u.searchParams.get("subjectId");
+    const target = "https://h5.aoneroom.com/wefeed-h5-bff/web/subject/download"
+      + "?subjectId=" + sid + "&se=0&ep=0";
+    return fetch(target, { headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Referer": "https://h5.aoneroom.com/movies/m-x?id=" + sid,
+    }});
+  },
+}`}
+              </pre>
+              <p>
+                ২. Convex ড্যাশবোর্ড → Settings → Environment Variables-এ
+                যোগ করুন:
+                <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">MOVIEBOX_WEB_PROXY = https://আপনার-worker.workers.dev</code>
+              </p>
+              <p>৩. এরপর ইমপোর্ট করলেই প্লেয়ারে পুরো মুভি চলবে (360p–1080p কোয়ালিটি মেনুসহ)।</p>
+            </div>
+          </details>
           <form
             className="flex flex-col gap-2 sm:flex-row"
             onSubmit={(e) => {
@@ -286,14 +353,20 @@ export default function MovieApiPanel() {
                         mbImportedInfo[hit.subjectId].resourceError) && (
                         <p
                           className={`mt-1 text-xs ${
-                            mbImportedInfo[hit.subjectId].downloads > 0
-                              ? "text-emerald-600 dark:text-emerald-400"
-                              : "text-destructive"
+                            mbImportedInfo[hit.subjectId].videoKind === "trailer"
+                              ? "text-amber-600 dark:text-amber-400"
+                              : mbImportedInfo[hit.subjectId].videoKind === "movie"
+                                ? "text-emerald-600 dark:text-emerald-400"
+                                : "text-destructive"
                           }`}
                         >
-                          {mbImportedInfo[hit.subjectId].downloads > 0
-                            ? `${mbImportedInfo[hit.subjectId].downloads} টি ডাউনলোড লিংক যোগ হয়েছে`
-                            : "কোনো ডাউনলোড লিংক পাওয়া যায়নি"}
+                          {mbImportedInfo[hit.subjectId].videoKind === "movie"
+                            ? "পুরো মুভি প্লেয়ারে চলবে"
+                            : mbImportedInfo[hit.subjectId].videoKind === "trailer"
+                              ? "প্রোভাইডারে পুরো মুভি লকড — প্লেয়ারে ট্রেলার যোগ হয়েছে"
+                              : mbImportedInfo[hit.subjectId].downloads > 0
+                                ? `${mbImportedInfo[hit.subjectId].downloads} টি লিংক যোগ হয়েছে, কিন্তু চালানোর মতো ভিডিও নেই`
+                                : "কোনো ডাউনলোড লিংক পাওয়া যায়নি"}
                           {mbImportedInfo[hit.subjectId].resourceError &&
                             ` — ${mbImportedInfo[hit.subjectId].resourceError}`}
                         </p>

@@ -22,6 +22,7 @@ const schema = defineSchema(
     ...authTables, // do not remove or modify
 
     // the users table is the default users table that is brought in by the authTables
+
     users: defineTable({
       name: v.optional(v.string()), // name of the user. do not remove
       image: v.optional(v.string()), // image of the user. do not remove

@@ -93,6 +93,9 @@ export const collectTargets = internalQuery({
  *  (405/501) or forbidden (403). A 4xx/5xx response still proves the server
  *  is alive only for the fallback cases — everything else counts as failure. */
 async function probeUrl(url: string): Promise<ProbeResult> {
+  /* MovieBox mbres:// references have no static URL to probe — they resolve
+     to fresh signed URLs only at play time. Treat them as healthy. */
+  if (url.startsWith("mbres://")) return { status: "ok" };
   try {
     let res = await fetch(url, {
       method: "HEAD",

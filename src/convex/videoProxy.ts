@@ -1,5 +1,6 @@
 import { httpAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { resolveMovieBoxSigned } from "./mbWeb";
 
 /**
  * HTTPS streaming proxy for admin-registered video links.
@@ -154,23 +155,47 @@ export const handleVideoProxy = httpAction(async (ctx, request) => {
   if (upstreamUrl.length > 2048) {
     return errorResponse(400, "Video URL is too long");
   }
-  const problem = blockReason(upstreamUrl);
-  if (problem) return errorResponse(400, problem);
 
-  // Not an open proxy: the URL must be registered on a movie.
-  const allowed = await ctx.runQuery(internal.videoProxy.registeredVideoUrls, {});
-  if (!allowed.includes(upstreamUrl)) {
-    return errorResponse(
-      403,
-      "This video URL is not registered in the catalog",
+  /* MovieBox references (mbres://<subjectId>/<quality>) are stable but the
+     provider's file URLs are signed and short-lived. Resolve one fresh on
+     every playback request, then stream it like any other upstream. */
+  const mbMatch = /^mbres:\/\/([A-Za-z0-9_-]+)\/(\d+p?)$/.exec(upstreamUrl);
+  let effectiveUpstream = upstreamUrl;
+  if (mbMatch) {
+    try {
+      effectiveUpstream = await resolveMovieBoxSigned(
+        mbMatch[1],
+        mbMatch[2],
+      );
+    } catch (err) {
+      return errorResponse(
+        502,
+        "MovieBox stream could not be resolved",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  } else {
+    const problem = blockReason(upstreamUrl);
+    if (problem) return errorResponse(400, problem);
+
+    // Not an open proxy: the URL must be registered on a movie.
+    const allowed = await ctx.runQuery(
+      internal.videoProxy.registeredVideoUrls,
+      {},
     );
+    if (!allowed.includes(upstreamUrl)) {
+      return errorResponse(
+        403,
+        "This video URL is not registered in the catalog",
+      );
+    }
   }
 
   const range = request.headers.get("range") ?? undefined;
 
   let upstream: Response;
   try {
-    upstream = await fetch(upstreamUrl, {
+    upstream = await fetch(effectiveUpstream, {
       headers: {
         // Many file servers (nginx dirs, Google sample buckets, some FTP
         // HTTP gateways) reject requests without a browser-like UA.

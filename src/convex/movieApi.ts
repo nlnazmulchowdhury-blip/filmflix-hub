@@ -135,6 +135,9 @@ export const getSettings = query({
     return {
       base: process.env.MOVIE_API_BASE ?? "",
       hasKey: !!process.env.MOVIE_API_KEY,
+      // MovieBox full-movie resolver proxy (see mbWeb.ts region note) —
+      // empty means "not configured" → imports fall back to trailers.
+      mbProxy: (process.env.MOVIEBOX_WEB_PROXY ?? "").trim(),
     };
   },
 });
