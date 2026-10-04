@@ -17,6 +17,11 @@ import { defineConfig, loadEnv } from "vite";
 // "Error: Provided address was not an absolute URL." (blank page).
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
+  // Last-resort source: the committed .env.production. A hosting build must
+  // still bake a Convex URL when nothing is exported in its shell (or when it
+  // builds with a mode that has no matching .env file), otherwise
+  // ConvexReactClient throws at module scope and the deployed page is blank.
+  const committedEnv = loadEnv("production", process.cwd(), "");
   // Treat empty strings as unset: hosting platforms often carry a stale
   // VITE_CONVEX_URL="" from the template's .env.example, and `??` would
   // happily return that empty value instead of falling through.
@@ -26,11 +31,13 @@ export default defineConfig(({ mode }) => {
     process.env.PUBLIC_CONVEX_URL,
     process.env.VITE_CONVEX_URL,
     env.VITE_CONVEX_URL,
+    committedEnv.VITE_CONVEX_URL,
   );
   const publicConvexSiteUrl = firstNonEmpty(
     process.env.PUBLIC_CONVEX_SITE_URL,
     process.env.VITE_CONVEX_SITE_URL,
     env.VITE_CONVEX_SITE_URL,
+    committedEnv.VITE_CONVEX_SITE_URL,
   );
   // Only override when a value actually exists — an empty-string define
   // clobbers whatever Vite would otherwise bake in from the build host's

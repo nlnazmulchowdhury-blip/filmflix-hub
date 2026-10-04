@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "convex dev --start \"vite\"",
-    "prebuild": "rm -f .env.production && echo 'Removed stray root .env.production before bun install'",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "format": "prettier --write .",
