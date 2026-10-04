@@ -3,6 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { MiniPlayerProvider } from "@/components/MiniPlayerProvider";
 import AnalyticsTracker from "@/components/AnalyticsTracker";
+import HelpCenterWidget from "@/components/HelpCenterWidget";
 import InstallPrompt from "@/components/InstallPrompt";
 import { ThemeProvider } from "next-themes";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
@@ -20,6 +21,7 @@ const MovieDetail = lazy(() => import("./pages/MovieDetail.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Checkout = lazy(() => import("./pages/Checkout.tsx"));
 const Admin = lazy(() => import("./pages/Admin.tsx"));
+const Tv = lazy(() => import("./pages/Tv.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 // Branded loading fallback for route transitions — mirrors the boot splash.
@@ -139,6 +141,14 @@ function RouteSyncer() {
   return null;
 }
 
+/** HelpCenterWidget on every public route — the admin panel has its own
+ *  conversations inbox, so the floating widget would just be noise there. */
+function HelpCenterRouteGate() {
+  const location = useLocation();
+  if (location.pathname.startsWith("/nazmul")) return null;
+  return <HelpCenterWidget />;
+}
+
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -155,6 +165,8 @@ createRoot(document.getElementById("root")!).render(
           <RouteSyncer />
           <AnalyticsTracker />
           <InstallPrompt />
+          {/* Floating help-center chat — hidden on the admin route */}
+          <HelpCenterRouteGate />
           <Suspense fallback={<RouteLoading />}>
             <PageFade>
             <Routes>
@@ -180,7 +192,15 @@ createRoot(document.getElementById("root")!).render(
                   </RequireAuth>
                 }
               />
-              <Route path="/nazmul" element={<Admin />} />
+              <Route path="/tv" element={<Tv />} />
+              <Route
+                path="/nazmul"
+                element={
+                  <RequireAuth>
+                    <Admin />
+                  </RequireAuth>
+                }
+              />
               <Route path="*" element={<NotFound />} />
             </Routes>
             </PageFade>

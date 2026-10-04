@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "filmflix-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "filmflix-hub",
+      "database_id": "7f734098-dc9a-4e75-9305-6483aad82b84"
+    }
+  ],
+  // R2: enable R2 in the dashboard, then restore this block (see README)
+  "triggers": {
+    "crons": ["0 */6 * * *"]
+  },
+  // Secrets (set via: npx wrangler secret put <NAME>):
+  //   ADMIN_ACCESS_CODE  - shared admin unlock code
+  //   ELEVENLABS_API_KEY - AI dubbing
+  //   RESEND_API_KEY     - OTP email delivery (creates a free account + key)
+  "vars": {
+    "OTP_FROM_NAME": "FilmFlix"
+  }
+}

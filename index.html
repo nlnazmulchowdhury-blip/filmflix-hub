@@ -45,7 +45,6 @@
       (function () {
         var loaded = false;
         var sources = [
-          "https://pl31399023.profitableratecpmnetwork.com/3f/d3/55/3fd355b91e775bdd2286af29cc295318.js",
           "https://pl31399024.profitableratecpmnetwork.com/58/9f/08/589f08c391e9982b3b86ceba9e5daa0c.js",
         ];
         function isAdminPath() {
@@ -79,7 +78,27 @@
           // Installed app: show ads right away, no tap needed.
           setTimeout(loadAds, 1500);
         } else {
-          document.addEventListener("click", loadAds, true);
+          // Ads load on the visitor's first click — but never count clicks
+          // inside the video player: a stray tap on the picture would fire
+          // the ad network right as playback starts, and those networks
+          // respond with popunders/redirects that yank the user off the
+          // movie page (the classic "video stops playing" complaint).
+          document.addEventListener(
+            "click",
+            function (e) {
+              if (
+                e.target &&
+                e.target.closest &&
+                e.target.closest(
+                  '[data-slot="persistent-video-wrap"], .group\\/player'
+                )
+              ) {
+                return; // ignore player clicks for ad-start purposes
+              }
+              loadAds();
+            },
+            true,
+          );
         }
       })();
     </script>

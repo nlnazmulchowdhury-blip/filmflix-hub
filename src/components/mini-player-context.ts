@@ -41,6 +41,9 @@ export interface PlayerControls {
   seekToRatio: (ratio: number) => void;
 }
 
+/** Seconds of the media file already downloaded and ready to play. */
+export type PlayerBuffered = { end: number };
+
 /** Clockwise rotation of the picture, for videos shot sideways. */
 export type PlayerRotation = 0 | 90 | 180 | 270;
 
@@ -57,6 +60,26 @@ export interface MiniPlayerContextValue {
   volume: number;
   currentTime: number;
   duration: number;
+  /** How far the file has buffered (seconds), for the seek-bar loader. */
+  bufferedEnd: number;
+  /**
+   * Whether the tap-toggled controls overlay (center play/pause, seek bar,
+   * bottom bar, mini-card controls) is shown. Tapping the video toggles it;
+   * it auto-hides while playing. Desktop hover also reveals it.
+   */
+  controlsOverlayVisible: boolean;
+  toggleControlsOverlay: () => void;
+  setControlsOverlayVisible: (v: boolean) => void;
+  /**
+   * While held true (open menus, active scrub) the overlay never auto-hides.
+   */
+  setControlsHold: (v: boolean) => void;
+  /** Any user activity — re-arms the auto-hide countdown. */
+  bumpControlsActivity: () => void;
+  /** Mouse entered the player surface: reveal controls, arm 5s idle hide. */
+  handleSurfaceMouseEnter: (e: { pointerType: string }) => void;
+  /** Mouse left the player surface: hide the controls immediately. */
+  handleSurfaceMouseLeave: (e: { pointerType: string }) => void;
   /** Currently playing audio version: null = original, else the dub label. */
   activeDub: string | null;
   /** Switch audio version without losing the playback position. */
@@ -102,6 +125,14 @@ export const MiniPlayerContext = createContext<MiniPlayerContextValue>({
   volume: 1,
   currentTime: 0,
   duration: 0,
+  bufferedEnd: 0,
+  controlsOverlayVisible: true,
+  toggleControlsOverlay: () => undefined,
+  setControlsOverlayVisible: () => undefined,
+  setControlsHold: () => undefined,
+  bumpControlsActivity: () => undefined,
+  handleSurfaceMouseEnter: () => undefined,
+  handleSurfaceMouseLeave: () => undefined,
   activeDub: null,
   setDub: () => undefined,
   nightMode: false,

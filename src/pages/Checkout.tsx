@@ -46,15 +46,20 @@ export default function Checkout() {
   const navigate = useNavigate();
   const orders = useQuery(api.orders.listMine);
   const createOrder = useMutation(api.orders.create);
-  const [selected, setSelected] = useState<string>("premiere");
   const [isCheckingOut, setIsCheckingOut] = useState<string | null>(null);
+
+  // Only paid orders count as an active plan.
+  const hasPaidPlan = (planId: string) =>
+    orders?.some((o) => o.plan === planId && o.status === "paid") ?? false;
 
   const handleCheckout = async (planId: string) => {
     setIsCheckingOut(planId);
     try {
       await createOrder({ plan: planId });
       const planName = PLANS.find((p) => p.id === planId)?.name ?? planId;
-      toast.success(`${planName} plan activated for the team 🎉`);
+      toast.info(
+        `${planName} order placed — pending payment. An admin confirms payment before the plan is active.`,
+      );
       navigate("/dashboard");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Checkout failed");
@@ -65,7 +70,7 @@ export default function Checkout() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="pointer-events-none fixed inset-0 -z-10">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
       </div>
 
@@ -80,7 +85,6 @@ export default function Checkout() {
             </Badge>
           </div>
           <div className="flex items-center gap-2">
-            <ThemeToggle />
             <Button asChild variant="ghost" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />
@@ -100,6 +104,7 @@ export default function Checkout() {
                 <span className="hidden sm:inline">Sign out</span>
               </Button>
             )}
+            <ThemeToggle />
           </div>
         </div>
       </header>
@@ -117,7 +122,7 @@ export default function Checkout() {
 
         <div className="mt-10 grid gap-5 sm:grid-cols-2">
           {PLANS.map((plan) => {
-            const active = orders?.some((o) => o.plan === plan.id);
+            const active = hasPaidPlan(plan.id);
             return (
               <Card
                 key={plan.id}
@@ -178,8 +183,8 @@ export default function Checkout() {
         )}
 
         <p className="mt-6 text-center text-xs text-muted-foreground/70">
-          Demo checkout: plans are recorded instantly for the team. Real card
-          payments can be connected later.
+          Orders are recorded as pending until payment is confirmed by an
+          admin. Card payments can be connected later.
         </p>
       </main>
     </div>

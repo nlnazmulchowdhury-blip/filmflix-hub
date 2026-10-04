@@ -17,6 +17,7 @@ import { useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
   CalendarPlus,
+  Download,
   Loader2,
   Play,
   Star,
@@ -25,6 +26,14 @@ import {
   Heart,
   ListVideo,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -147,6 +156,12 @@ export default function MovieDetail() {
       ]
     : [];
 
+  /* Download menu: admin-added per-quality links. Falls back to the main
+     video URL when no explicit download links exist. */
+  const downloadOptions = movie
+    ? (movie.downloads ?? []).filter((d) => d.url)
+    : [];
+
   const nowPlayingUrl = miniMovie?.videoUrl;
   const playItem = (item: (typeof playlist)[number]) => {
     if (!movie) return;
@@ -189,7 +204,7 @@ export default function MovieDetail() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="pointer-events-none fixed inset-0 -z-10">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
       </div>
 
@@ -199,7 +214,6 @@ export default function MovieDetail() {
             <Logo />
           </Link>
           <div className="flex items-center gap-1 sm:gap-2">
-            <ThemeToggle />
             <Button asChild variant="outline" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />
@@ -207,6 +221,7 @@ export default function MovieDetail() {
                 <span className="sm:hidden">Back</span>
               </Link>
             </Button>
+            <ThemeToggle />
           </div>
         </div>
       </header>
@@ -358,9 +373,39 @@ export default function MovieDetail() {
                   </div>
                 </div>
 
-                <h1 className="font-display mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
-                  {movie.title}
-                </h1>
+                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <h1 className="font-display text-3xl font-extrabold tracking-tight sm:text-4xl">
+                    {movie.title}
+                  </h1>
+                  {downloadOptions.length > 0 && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button className="gap-2" size="sm">
+                          <Download className="size-4" />
+                          Download
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-48">
+                        <DropdownMenuLabel>কোয়ালিটি বাছুন</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {downloadOptions.map((d) => (
+                          <DropdownMenuItem key={d.label + d.url} asChild>
+                            <a
+                              href={d.url}
+              target="_blank"
+                              rel="noopener noreferrer"
+                              download
+                              className="flex w-full cursor-pointer items-center justify-between"
+                            >
+                              <span>{d.label}</span>
+                              <Download className="size-3.5 opacity-60" />
+                            </a>
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
                 {movie.description ? (
                   <p className="mt-4 max-w-2xl leading-relaxed text-muted-foreground">
                     {movie.description}

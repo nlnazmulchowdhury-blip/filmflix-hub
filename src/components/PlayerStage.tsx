@@ -59,6 +59,11 @@ export default function PlayerStage({
     volume,
     currentTime,
     duration,
+    bufferedEnd,
+    controlsOverlayVisible,
+    setControlsOverlayVisible,
+    setControlsHold,
+    bumpControlsActivity,
     activeDub,
     setDub,
     nightMode,
@@ -82,11 +87,18 @@ export default function PlayerStage({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  const [controlsVisible, setControlsVisible] = useState(true);
   /** Cursor is over the control bar — keep the bar up while it is. */
   const [hoveringControls, setHoveringControls] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const scrubbingRef = useRef(false);
+  const scrubRef = useRef<HTMLDivElement | null>(null);
+
+  /* The overlay is visible when the provider says so (mouse hover inside
+     the surface or a recent tap), when the cursor rests on the control bar,
+     or whenever playback is not running (paused/never started). */
+  const controlsVisible =
+    controlsOverlayVisible || hoveringControls || !playing || !hasStarted;
   const [settingsView, setSettingsView] = useState<
     "main" | "subtitles" | "speed" | "quality"
   >("main");
@@ -121,26 +133,100 @@ export default function PlayerStage({
     };
   }, []);
 
-  /* Auto-hide controls while playing — but never while the cursor rests on
-     the control bar itself. */
+  /* Auto-hide lives in the provider (shared with the mini card). Here we
+     only hold it open while a menu is open. */
   useEffect(() => {
-    if (!playing || !isHost) {
-      setControlsVisible(true);
-      return;
-    }
-    if (!controlsVisible) return;
-    const t = setTimeout(() => {
-      if (!hoveringControls) setControlsVisible(false);
-    }, 2600);
-    return () => clearTimeout(t);
-  }, [playing, isHost, controlsVisible, hoveringControls]);
+    setControlsHold(langOpen || settingsOpen);
+  }, [langOpen, settingsOpen, setControlsHold]);
+
+  /* Native pointerleave on the whole player box (video + control bar):
+     when the mouse leaves the player, hide the controls immediately.
+     (React synthetic pointer events proved unreliable here.) */
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof PointerEvent === "undefined") return;
+    const onLeave = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse") return;
+      setHoveringControls(false);
+      if (!playing) return; /* paused/never started: always show */
+      setControlsOverlayVisible(false);
+    };
+    el.addEventListener("pointerleave", onLeave);
+    return () => el.removeEventListener("pointerleave", onLeave);
+  }, [isHost, playing, setControlsOverlayVisible]);
+
+  /* Keyboard shortcuts: space = play/pause, ←/→ = ±10s, ↑/↓ = volume,
+     M = mute, F = fullscreen. */
+  useEffect(() => {
+    if (!isHost) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      switch (e.key) {
+        case " ":
+        case "k":
+        case "K":
+          e.preventDefault();
+          controls.togglePlay();
+          bumpControlsActivity();
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          controls.seekBy(-10);
+          bumpControlsActivity();
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          controls.seekBy(10);
+          bumpControlsActivity();
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          controls.setVolume(Math.min(1, volume + 0.1));
+          bumpControlsActivity();
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          controls.setVolume(Math.max(0, volume - 0.1));
+          bumpControlsActivity();
+          break;
+        case "m":
+        case "M":
+          controls.toggleMute();
+          bumpControlsActivity();
+          break;
+        case "f":
+        case "F":
+          toggleFullscreen();
+          bumpControlsActivity();
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHost, controls, volume, bumpControlsActivity]);
+
+  /* While a movie is actually playing, leaving the page (closing the tab,
+     reloading, an ad-script redirect) kills the show. Ask first — the
+     browser shows its native "Leave site?" confirm. SPA navigation to the
+     mini player is unaffected; this only guards full page unloads. */
+  useEffect(() => {
+    if (!playing || !isHost) return;
+    const guard = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [playing, isHost]);
 
   const seekBy = useCallback(
     (delta: number) => {
       controls.seekBy(delta);
-      setControlsVisible(true);
+      bumpControlsActivity();
     },
-    [controls],
+    [controls, bumpControlsActivity],
   );
 
   /* Share from the player: native sheet on phones, clipboard elsewhere. */
@@ -299,10 +385,12 @@ export default function PlayerStage({
           ? "fixed inset-0 z-[80] rounded-none border-0"
           : "aspect-video w-full rounded-xl border border-border/60"
       }`}
-      onMouseMove={() => setControlsVisible(true)}
-      onMouseLeave={() => playing && setHoveringControls(false)}
+      onPointerMove={(e) => {
+        if (e.pointerType !== "mouse") return;
+        bumpControlsActivity();
+      }}
       onClickCapture={(e) => {
-        setControlsVisible(true);
+        bumpControlsActivity();
         // Clicking anywhere outside an open player menu closes it.
         if (!(e.target as HTMLElement).closest("[data-player-menu]")) {
           setLangOpen(false);
@@ -349,20 +437,62 @@ export default function PlayerStage({
             : "pointer-events-none translate-y-3 opacity-0"
         }`}
       >
-        {/* Progress / seek bar */}
+        {/* Progress / seek bar — click to jump, drag to scrub. */}
         <div
-          className="mb-2 flex h-4 cursor-pointer items-center"
-          onClick={(e) => {
+          ref={scrubRef}
+          data-player-scrubber
+          className="group/scrub mb-2 flex h-6 cursor-pointer touch-none items-center"
+          onPointerDown={(e) => {
+            if (duration <= 0) return;
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              /* capture is best-effort */
+            }
+            scrubbingRef.current = true;
+            setControlsHold(true);
             const rect = e.currentTarget.getBoundingClientRect();
             controls.seekToRatio((e.clientX - rect.left) / rect.width);
           }}
+          onPointerMove={(e) => {
+            if (!scrubbingRef.current) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            controls.seekToRatio((e.clientX - rect.left) / rect.width);
+          }}
+          onPointerUp={(e) => {
+            if (!scrubbingRef.current) return;
+            scrubbingRef.current = false;
+            setControlsHold(false);
+            try {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            } catch {
+              /* best-effort */
+            }
+          }}
+          onPointerCancel={() => {
+            scrubbingRef.current = false;
+            setControlsHold(false);
+          }}
+          role="slider"
+          aria-label="Seek"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(duration)}
+          aria-valuenow={Math.round(currentTime)}
         >
-          <div className="relative h-1 w-full rounded-full bg-white/25">
+          <div className="relative h-1.5 w-full rounded-full bg-white/25 transition-[height] group-hover/scrub:h-2.5">
+            {/* Downloaded (buffered) portion. */}
             <div
-              className="h-full rounded-full bg-primary"
-              style={{
-                width: `${duration ? (currentTime / duration) * 100 : 0}%`,
-              }}
+              className="absolute inset-y-0 left-0 rounded-full bg-white/30"
+              style={{ width: `${duration ? Math.min(100, (bufferedEnd / duration) * 100) : 0}%` }}
+            />
+            {/* Played portion + thumb. */}
+            <div
+              className="absolute inset-y-0 left-0 rounded-full bg-primary"
+              style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+            />
+            <div
+              className="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow transition-transform group-hover/scrub:scale-110"
+              style={{ left: `${duration ? Math.min(100, (currentTime / duration) * 100) : 0}%` }}
             />
           </div>
         </div>

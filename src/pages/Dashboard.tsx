@@ -44,11 +44,10 @@ export default function Dashboard() {
   const watchlist = useQuery(api.watchlist.listMine);
   const removeFromWatchlist = useMutation(api.watchlist.remove);
 
-  const activePlan = myOrders?.[0]
-    ? myOrders[0].plan === "premiere"
-      ? "Premiere"
-      : "Crew"
-    : null;
+  // A plan only counts as active once its order is actually paid.
+  const paidPlan = myOrders?.find((o) => o.status === "paid")?.plan ?? null;
+  const activePlan =
+    paidPlan === "premiere" ? "Premiere" : paidPlan === "crew" ? "Crew" : null;
 
   const now = Date.now();
   const sortedScreenings = screenings
@@ -68,7 +67,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="pointer-events-none fixed inset-0 -z-10">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
       </div>
 
@@ -83,7 +82,6 @@ export default function Dashboard() {
             </Badge>
           </div>
           <div className="flex items-center gap-2">
-            <ThemeToggle />
             <Button asChild variant="ghost" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />
@@ -101,6 +99,7 @@ export default function Dashboard() {
               <LogOut className="size-4" />
               <span className="hidden sm:inline">Sign out</span>
             </Button>
+            <ThemeToggle />
           </div>
         </div>
       </header>

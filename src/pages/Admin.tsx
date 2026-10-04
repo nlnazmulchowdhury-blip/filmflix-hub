@@ -1,3 +1,13 @@
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,8 +22,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import Logo from "@/components/Logo";
+import MovieApiPanel from "@/components/MovieApiPanel";
 import MovieFormDialog from "@/components/MovieFormDialog";
+import RelayUrlHelper from "@/components/RelayUrlHelper";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -26,9 +47,13 @@ import {
   ArrowLeft,
   BarChart3,
   CalendarClock,
+  ChevronDown,
+  ChevronUp,
+  ChevronsUp,
   Clapperboard,
   CreditCard,
   Film,
+  Headset,
   KeyRound,
   Loader2,
   LogOut,
@@ -36,6 +61,8 @@ import {
   Pencil,
   Plus,
   Search,
+  Send,
+  ShieldAlert,
   ShieldCheck,
   ShieldOff,
   Trash2,
@@ -43,8 +70,10 @@ import {
   X,
   Link2,
   Languages,
+  Check,
+  Tv,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router";
 import { toast } from "sonner";
 
@@ -65,8 +94,182 @@ function AdminContent() {
   const allScreenings = useQuery(api.screenings.listAll, isAdmin ? {} : "skip");
   const allComments = useQuery(api.comments.listAll, isAdmin ? {} : "skip");
   const allOrders = useQuery(api.orders.listAll, isAdmin ? {} : "skip");
+  const markOrderPaid = useMutation(api.orders.markPaid);
   const users = useQuery(api.admin.listUsers, isAdmin ? {} : "skip");
   const analytics = useQuery(api.analytics.summary, isAdmin ? {} : "skip");
+
+  /* Help-center chat: visitor conversations + admin replies */
+  const conversations = useQuery(
+    api.support.listConversations,
+    isAdmin ? {} : "skip",
+  );
+  const adminUnread = useQuery(api.support.unreadForAdmin, isAdmin ? {} : "skip");
+  const moveMovieTop = useMutation(api.movies.moveToTop);
+  const moveMovieOrder = useMutation(api.movies.moveInOrder);
+  const [busyOrder, setBusyOrder] = useState<string | null>(null);
+
+  const applyMovieMove = async (
+    id: string,
+    fn: () => Promise<unknown>,
+  ) => {
+    setBusyOrder(id);
+    try {
+      await fn();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Move failed");
+    } finally {
+      setBusyOrder(null);
+    }
+  };
+
+  const replySupport = useMutation(api.support.replyFromAdmin);
+  const editSupport = useMutation(api.support.editAsAdmin);
+  const deleteSupport = useMutation(api.support.deleteAsAdmin);
+  const markSupportSeen = useMutation(api.support.markSeenByAdmin);
+  const [activeThread, setActiveThread] = useState<string | null>(null);
+  const [supportDraft, setSupportDraft] = useState("");
+  const [isReplying, setIsReplying] = useState(false);
+  // Editing/deleting any message in the thread (admin can touch both sides).
+  const [editMsg, setEditMsg] = useState<{ id: string; text: string } | null>(null);
+  const [editMsgDraft, setEditMsgDraft] = useState("");
+  const [isEditSaving, setIsEditSaving] = useState(false);
+  const [deleteMsg, setDeleteMsg] = useState<{ id: string; text: string } | null>(null);
+  const [isDeleteSaving, setIsDeleteSaving] = useState(false);
+  const thread = useQuery(
+    api.support.listThread,
+    activeThread ? { userId: activeThread as Id<"users"> } : "skip",
+  );
+  const supportScroll = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = supportScroll.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [thread?.length, activeThread]);
+
+  useEffect(() => {
+    if (activeThread && (thread ?? []).some((m) => m.sender === "user")) {
+      markSupportSeen({ userId: activeThread as Id<"users"> });
+    }
+  }, [activeThread, thread, markSupportSeen]);
+
+  const sendSupportReply = async () => {
+    const text = supportDraft.trim();
+    if (!text || !activeThread || isReplying) return;
+    setIsReplying(true);
+    try {
+      await replySupport({ userId: activeThread as Id<"users">, text });
+      setSupportDraft("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send");
+    } finally {
+      setIsReplying(false);
+    }
+  };
+
+  const saveSupportEdit = async () => {
+    const text = editMsgDraft.trim();
+    if (!text || !editMsg || isEditSaving) return;
+    setIsEditSaving(true);
+    try {
+      await editSupport({ messageId: editMsg.id as Id<"supportMessages">, text });
+      setEditMsg(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setIsEditSaving(false);
+    }
+  };
+
+  const confirmSupportDelete = async () => {
+    if (!deleteMsg || isDeleteSaving) return;
+    setIsDeleteSaving(true);
+    try {
+      await deleteSupport({ messageId: deleteMsg.id as Id<"supportMessages"> });
+      setDeleteMsg(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete");
+    } finally {
+      setIsDeleteSaving(false);
+    }
+  };
+
+  /* Link health: broken movie/TV stream URLs → "Links" tab (checked every
+     6h by cron + manually). Toasts once when NEW failures appear. */
+  const linkHealth = useQuery(api.linkHealth.summary, isAdmin ? {} : "skip");
+  const checkLinks = useAction(api.linkHealth.checkAll);
+  const setLinkIgnored = useMutation(api.linkHealth.setIgnored);
+  const [isCheckingLinks, setIsCheckingLinks] = useState(false);
+  const notifiedBroken = useRef(false);
+
+  const brokenCount = linkHealth?.failures.length ?? 0;
+  const ignoredCount = linkHealth?.ignoredFailures.length ?? 0;
+
+  useEffect(() => {
+    if (!linkHealth) return;
+    const count = linkHealth.failures.length;
+    if (count > 0 && !notifiedBroken.current) {
+      notifiedBroken.current = true;
+      toast.warning(
+        `${count} stream link${count === 1 ? " is" : "s are"} broken — see the Links tab`,
+        { duration: 8000 },
+      );
+    }
+  }, [linkHealth]);
+
+  const toggleLinkIgnored = async (url: string, ignored: boolean) => {
+    try {
+      await setLinkIgnored({ url, ignored });
+      toast.success(ignored ? "Link hidden from the alert" : "Link restored to the alert");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    }
+  };
+
+  /* Ad networks (whose script may have loaded on public pages earlier in the
+     session) keep injecting stray anchors (e.g. <a id="lkiir">), hidden
+     iframes and popunder handlers straight into <body> — those must never
+     touch the admin panel. While this route is open, strip the ad script and
+     any artifacts it appends. */
+  useEffect(() => {
+    const AD_SRC = /profitableratecpm/i;
+    const isAdAnchor = (a: HTMLAnchorElement) =>
+      a.parentElement === document.body &&
+      (!a.getAttribute("href") || AD_SRC.test(a.href)) &&
+      !(a.textContent ?? "").includes("Freebuff");
+    const prune = () => {
+      document.querySelectorAll("script[src]").forEach((s) => {
+        if (AD_SRC.test((s as HTMLScriptElement).src)) s.remove();
+      });
+      document.querySelectorAll("body > a").forEach((a) => {
+        if (isAdAnchor(a as HTMLAnchorElement)) a.remove();
+      });
+      document.querySelectorAll("body > iframe").forEach((f) => {
+        if (AD_SRC.test((f as HTMLIFrameElement).src || "")) f.remove();
+      });
+    };
+    prune();
+    const observer = new MutationObserver(prune);
+    observer.observe(document.body, { childList: true });
+    return () => observer.disconnect();
+  }, []);
+
+  const handleCheckLinks = async () => {
+    setIsCheckingLinks(true);
+    try {
+      const res = await checkLinks({});
+      if (res.failed === 0) {
+        toast.success(`All ${res.checked} stream links are working`);
+      } else {
+        toast.error(
+          `${res.failed} of ${res.checked} stream links failed — see the alert below`,
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Link check failed");
+    } finally {
+      setIsCheckingLinks(false);
+    }
+  };
 
   const removeMovie = useMutation(api.movies.remove);
   const removeCategory = useMutation(api.categories.remove);
@@ -104,6 +307,84 @@ function AdminContent() {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [isAddingCategory, setIsAddingCategory] = useState(false);
 
+  /* Live TV channels — add/remove logo + stream URL, shown on /tv */
+  const tvCategoryRows = useQuery(api.tvCategories.listAll);
+  const createTvCategory = useMutation(api.tvCategories.create);
+  const renameTvCategory = useMutation(api.tvCategories.rename);
+  const removeTvCategory = useMutation(api.tvCategories.remove);
+  const [newTvCategory, setNewTvCategory] = useState("");
+  const [isAddingTvCategory, setIsAddingTvCategory] = useState(false);
+  const [renamingTvCategory, setRenamingTvCategory] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [renameTvDraft, setRenameTvDraft] = useState("");
+  const [isRenamingTvCategory, setIsRenamingTvCategory] = useState(false);
+
+  const handleAddTvCategory = async () => {
+    const name = newTvCategory.trim();
+    if (!name) return;
+    setIsAddingTvCategory(true);
+    try {
+      await createTvCategory({ name });
+      toast.success(`TV category "${name}" created`);
+      setNewTvCategory("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create category");
+    } finally {
+      setIsAddingTvCategory(false);
+    }
+  };
+
+  const handleRenameTvCategory = async () => {
+    if (!renamingTvCategory) return;
+    const name = renameTvDraft.trim();
+    if (!name || name === renamingTvCategory.name) {
+      setRenamingTvCategory(null);
+      return;
+    }
+    setIsRenamingTvCategory(true);
+    try {
+      await renameTvCategory({ id: renamingTvCategory.id as Id<"tvCategories">, name });
+      toast.success(`TV category renamed to "${name}"`);
+      setRenamingTvCategory(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to rename category");
+    } finally {
+      setIsRenamingTvCategory(false);
+    }
+  };
+
+  const handleDeleteTvCategory = async (id: string, name: string) => {
+    try {
+      await removeTvCategory({ id: id as Id<"tvCategories"> });
+      toast.success(`TV category "${name}" deleted`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete category");
+    }
+  };
+
+  const tvChannels = useQuery(api.tvChannels.list);
+  const addTvChannel = useMutation(api.tvChannels.add);
+  const updateTvChannel = useMutation(api.tvChannels.update);
+  const removeTvChannel = useMutation(api.tvChannels.remove);
+  const [tvName, setTvName] = useState("");
+  const [tvLogo, setTvLogo] = useState("");
+  const [tvUrl, setTvUrl] = useState("");
+  const [tvCategories, setTvCategories] = useState("");
+  const [tvBackups, setTvBackups] = useState("");
+  const [isAddingTv, setIsAddingTv] = useState(false);
+
+  /* Edit-TV-channel dialog state (form is pre-filled from the channel). */
+  const [editingTv, setEditingTv] = useState<Doc<"tvChannels"> | null>(null);
+  const [isSavingTv, setIsSavingTv] = useState(false);
+  const [editTvName, setEditTvName] = useState("");
+  const [editTvLogo, setEditTvLogo] = useState("");
+  const [editTvUrl, setEditTvUrl] = useState("");
+  const [editTvCategories, setEditTvCategories] = useState("");
+  const [editTvBackups, setEditTvBackups] = useState("");
+  const [editTvOrder, setEditTvOrder] = useState("");
+
   /* Admin catalog search: matches title, description, categories, year, kind —
      every word must appear somewhere, forgiving of order and punctuation. */
   const allCategories = useQuery(api.categories.listAll);
@@ -131,6 +412,46 @@ function AdminContent() {
       toast.error(err instanceof Error ? err.message : "Failed to create category");
     } finally {
       setIsAddingCategory(false);
+    }
+  };
+
+  const openEditTv = (c: Doc<"tvChannels">) => {
+    setEditingTv(c);
+    setEditTvName(c.name);
+    setEditTvLogo(c.logoUrl ?? "");
+    setEditTvUrl(c.streamUrl);
+    setEditTvCategories((c.categories ?? []).join(", "));
+    setEditTvBackups((c.backupUrls ?? []).join(String.fromCharCode(10)));
+    setEditTvOrder(c.order != null ? String(c.order) : "");
+  };
+
+  const handleSaveTv = async () => {
+    if (!editingTv) return;
+    setIsSavingTv(true);
+    try {
+      await updateTvChannel({
+        id: editingTv._id,
+        name: editTvName.trim(),
+        logoUrl: editTvLogo.trim() || undefined,
+        streamUrl: editTvUrl.trim(),
+        backupUrls: editTvBackups
+          .split(/[\r\n]/)
+          .map((t) => t.trim())
+          .filter(Boolean),
+        categories: editTvCategories
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+        order: editTvOrder.trim() === "" ? undefined : Number(editTvOrder.trim()),
+      });
+      toast.success(`Channel "${editTvName.trim()}" updated`);
+      setEditingTv(null);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to update channel",
+      );
+    } finally {
+      setIsSavingTv(false);
     }
   };
 
@@ -235,7 +556,7 @@ function AdminContent() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="pointer-events-none fixed inset-0 -z-10">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/8 blur-[130px]" />
       </div>
 
@@ -250,7 +571,6 @@ function AdminContent() {
             </Badge>
           </div>
           <div className="flex items-center gap-2">
-            <ThemeToggle />
             <Button asChild variant="ghost" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />
@@ -268,6 +588,7 @@ function AdminContent() {
               <LogOut className="size-4" />
               <span className="hidden sm:inline">Sign out</span>
             </Button>
+            <ThemeToggle />
           </div>
         </div>
       </header>
@@ -329,16 +650,18 @@ function AdminContent() {
                   Manage the catalog, screenings, discussions, members, and plans.
                 </p>
               </div>
-              <Button
-                className="glow-accent gap-2"
-                onClick={() => {
-                  setEditing(null);
-                  setDialogOpen(true);
-                }}
-              >
-                <Plus className="size-4" />
-                Add movie
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  className="glow-accent gap-2"
+                  onClick={() => {
+                    setEditing(null);
+                    setDialogOpen(true);
+                  }}
+                >
+                  <Plus className="size-4" />
+                  Add movie
+                </Button>
+              </div>
             </div>
 
             {/* Stats row */}
@@ -401,7 +724,7 @@ function AdminContent() {
             <Tabs defaultValue="movies" className="mt-6 sm:mt-8">
               {/* Horizontally scrollable on phones — all five tabs stay reachable. */}
               <div className="-mx-3 overflow-x-auto px-3 pb-1 sm:mx-0 sm:overflow-visible sm:px-0">
-              <TabsList className="flex w-max min-w-full gap-1 bg-card/60 sm:w-auto">
+              <TabsList className="flex w-max min-w-full gap-1 bg-card/60 sm:w-auto sm:flex-wrap">
                 <TabsTrigger value="movies" className="gap-1.5">
                   <Film className="size-3.5" /> Movies
                 </TabsTrigger>
@@ -419,6 +742,28 @@ function AdminContent() {
                 </TabsTrigger>
                 <TabsTrigger value="analytics" className="gap-1.5">
                   <BarChart3 className="size-3.5" /> Analytics
+                </TabsTrigger>
+                <TabsTrigger value="tv" className="gap-1.5">
+                  <Tv className="size-3.5" /> TV
+                </TabsTrigger>
+                <TabsTrigger value="support" className="gap-1.5">
+                  <Headset className="size-3.5" /> Support
+                  {(adminUnread ?? 0) > 0 && (
+                    <span className="ml-1 inline-flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold leading-4 text-destructive-foreground">
+                      {adminUnread}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="api" className="gap-1.5">
+                  <Clapperboard className="size-3.5" /> API
+                </TabsTrigger>
+                <TabsTrigger value="links" className="gap-1.5">
+                  <ShieldAlert className="size-3.5" /> Links
+                  {brokenCount > 0 && (
+                    <span className="ml-1 inline-flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold leading-4 text-destructive-foreground">
+                      {brokenCount}
+                    </span>
+                  )}
                 </TabsTrigger>
               </TabsList>
               </div>
@@ -588,6 +933,7 @@ function AdminContent() {
                         <TableRow className="hover:bg-transparent">
                           <TableHead className="w-16">Poster</TableHead>
                           <TableHead>Title</TableHead>
+                          <TableHead className="w-28">Order</TableHead>
                           <TableHead className="hidden md:table-cell">Category</TableHead>
                           <TableHead className="hidden lg:table-cell">Year</TableHead>
                           <TableHead className="hidden md:table-cell">Rating</TableHead>
@@ -613,6 +959,49 @@ function AdminContent() {
                               <p className="truncate text-xs text-muted-foreground">
                                 {m.videoUrl ? "Video ready" : "No video"}
                               </p>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-0.5">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-6"
+                                  aria-label={`Move ${m.title} to top`}
+                                  title="Move to top — show first on the site"
+                                  disabled={busyOrder === m._id}
+                                  onClick={() =>
+                                    applyMovieMove(m._id, () => moveMovieTop({ id: m._id }))
+                                  }
+                                >
+                                  <ChevronsUp className="size-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-6"
+                                  aria-label={`Move ${m.title} up`}
+                                  title="Move up one slot"
+                                  disabled={busyOrder === m._id}
+                                  onClick={() =>
+                                    applyMovieMove(m._id, () => moveMovieOrder({ id: m._id, dir: "up" }))
+                                  }
+                                >
+                                  <ChevronUp className="size-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-6"
+                                  aria-label={`Move ${m.title} down`}
+                                  title="Move down one slot"
+                                  disabled={busyOrder === m._id}
+                                  onClick={() =>
+                                    applyMovieMove(m._id, () => moveMovieOrder({ id: m._id, dir: "down" }))
+                                  }
+                                >
+                                  <ChevronDown className="size-3.5" />
+                                </Button>
+                              </div>
                             </TableCell>
                             <TableCell className="hidden md:table-cell">
                               {(() => {
@@ -1073,6 +1462,7 @@ function AdminContent() {
                           <TableHead>Plan</TableHead>
                           <TableHead>Amount</TableHead>
                           <TableHead className="hidden sm:table-cell">Status</TableHead>
+                          <TableHead>Action</TableHead>
                           <TableHead className="hidden md:table-cell">Date</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -1091,10 +1481,38 @@ function AdminContent() {
                             <TableCell className="hidden sm:table-cell">
                               <Badge
                                 variant="outline"
-                                className="border-emerald-500/40 bg-emerald-500/10 text-emerald-400 capitalize"
+                                className={
+                                  o.status === "paid"
+                                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 capitalize"
+                                    : "border-amber-500/40 bg-amber-500/10 text-amber-400 capitalize"
+                                }
                               >
                                 {o.status}
                               </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {o.status === "paid" ? (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="gap-1.5"
+                                  onClick={async () => {
+                                    try {
+                                      await markOrderPaid({ orderId: o._id });
+                                      toast.success("Order marked as paid");
+                                    } catch (err) {
+                                      toast.error(
+                                        err instanceof Error ? err.message : "Failed",
+                                      );
+                                    }
+                                  }}
+                                >
+                                  <Check className="size-3.5" />
+                                  Mark paid
+                                </Button>
+                              )}
                             </TableCell>
                             <TableCell className="hidden md:table-cell whitespace-nowrap">
                               {fmtDateTime(o.createdAt)}
@@ -1256,10 +1674,956 @@ function AdminContent() {
                   </div>
                 )}
               </TabsContent>
+
+              {/* Live TV channels */}
+              <TabsContent value="tv">
+                <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
+                  {/* TV category manager */}
+                  <Card className="h-fit border-border/60 bg-card/60">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="font-display text-base">
+                        TV categories ({tvCategoryRows?.length ?? 0})
+                      </CardTitle>
+                      <CardDescription>
+                        Chips shown on the /tv page. Renaming updates every
+                        channel that uses it; deleting only removes the chip.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="flex gap-2">
+                        <Input
+                          value={newTvCategory}
+                          onChange={(e) => setNewTvCategory(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void handleAddTvCategory();
+                            }
+                          }}
+                          placeholder="New category name"
+                          maxLength={60}
+                          aria-label="New TV category name"
+                        />
+                        <Button
+                          type="button"
+                          disabled={isAddingTvCategory || !newTvCategory.trim()}
+                          onClick={() => void handleAddTvCategory()}
+                        >
+                          {isAddingTvCategory ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Plus className="size-4" />
+                          )}
+                          Add
+                        </Button>
+                      </div>
+                      {!tvCategoryRows ? (
+                        <div className="space-y-2">
+                          <Skeleton className="h-9 w-full" />
+                          <Skeleton className="h-9 w-full" />
+                        </div>
+                      ) : tvCategoryRows.length === 0 ? (
+                        <p className="py-4 text-center text-sm text-muted-foreground">
+                          No TV categories yet — add the first one above.
+                        </p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {tvCategoryRows.map((cat) =>
+                            renamingTvCategory?.id === cat._id ? (
+                              <div
+                                key={cat._id}
+                                className="flex items-center gap-1 rounded-full border border-primary/50 bg-background py-1 pl-3 pr-1"
+                              >
+                                <Input
+                                  autoFocus
+                                  value={renameTvDraft}
+                                  onChange={(e) => setRenameTvDraft(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      void handleRenameTvCategory();
+                                    }
+                                    if (e.key === "Escape") setRenamingTvCategory(null);
+                                  }}
+                                  className="h-7 w-32 border-0 px-0 text-sm shadow-none focus-visible:ring-0"
+                                  maxLength={60}
+                                />
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  className="size-6 rounded-full"
+                                  disabled={isRenamingTvCategory || !renameTvDraft.trim()}
+                                  onClick={() => void handleRenameTvCategory()}
+                                  aria-label="Save TV category name"
+                                >
+                                  {isRenamingTvCategory ? (
+                                    <Loader2 className="size-3 animate-spin" />
+                                  ) : (
+                                    <Check className="size-3.5" />
+                                  )}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  className="size-6 rounded-full text-muted-foreground"
+                                  onClick={() => setRenamingTvCategory(null)}
+                                  aria-label="Cancel TV category rename"
+                                >
+                                  <X className="size-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <span
+                                key={cat._id}
+                                className="group inline-flex items-center gap-1 rounded-full border border-border/60 bg-secondary/40 py-1 pl-3 pr-1 text-xs font-semibold"
+                              >
+                                {cat.name}
+                                <button
+                                  type="button"
+                                  aria-label={`Edit TV category ${cat.name}`}
+                                  title="Rename"
+                                  onClick={() => {
+                                    setRenamingTvCategory({ id: cat._id, name: cat.name });
+                                    setRenameTvDraft(cat.name);
+                                  }}
+                                  className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                                >
+                                  <Pencil className="size-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label={`Delete TV category ${cat.name}`}
+                                  title="Delete — channels keep playing, they just lose this chip"
+                                  onClick={() => void handleDeleteTvCategory(cat._id, cat.name)}
+                                  className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                                >
+                                  <Trash2 className="size-3" />
+                                </button>
+                              </span>
+                            ),
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                  {/* Add form */}
+                  <Card className="h-fit border-border/60 bg-card/60">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="font-display flex items-center gap-2 text-base">
+                        <Plus className="size-4 text-primary" /> Add TV channel
+                      </CardTitle>
+                      <CardDescription>
+                        Shown on the public /tv page. HLS (.m3u8) and MP4 links
+                        play in the built-in player; other links open in a new
+                        tab.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="space-y-1.5">
+                        <label htmlFor="tv-name" className="text-xs font-medium text-muted-foreground">
+                          Channel name
+                        </label>
+                        <Input
+                          id="tv-name"
+                          value={tvName}
+                          onChange={(e) => setTvName(e.target.value)}
+                          placeholder="e.g. Sony Entertainment TV"
+                          maxLength={80}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label htmlFor="tv-logo" className="text-xs font-medium text-muted-foreground">
+                          Logo URL (optional)
+                        </label>
+                        <Input
+                          id="tv-logo"
+                          value={tvLogo}
+                          onChange={(e) => setTvLogo(e.target.value)}
+                          placeholder="https://…/logo.png"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label htmlFor="tv-url" className="text-xs font-medium text-muted-foreground">
+                          Stream URL
+                        </label>
+                        <Input
+                          id="tv-url"
+                          value={tvUrl}
+                          onChange={(e) => setTvUrl(e.target.value)}
+                          placeholder="https://…/stream.m3u8"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label htmlFor="tv-backups" className="text-xs font-medium text-muted-foreground">
+                          Backup URLs (one per line) — used when the primary stream is down
+                        </label>
+                        <textarea
+                          id="tv-backups"
+                          value={tvBackups}
+                          onChange={(e) => setTvBackups(e.target.value)}
+                          placeholder={"https://…/backup-1.m3u8 | https://…/backup-2.m3u8"}
+                          rows={2}
+                          className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        />
+                      </div>
+                      <RelayUrlHelper
+                        channelName={tvName}
+                        suggestLocalUrl={tvUrl}
+                        onUsePublic={setTvUrl}
+                        onAddBackup={(u) =>
+                          setTvBackups((b) => (b.trim() ? `${b.trimEnd()}\n${u}` : u))
+                        }
+                      />
+                      <div className="space-y-1.5">
+                        <label htmlFor="tv-categories" className="text-xs font-medium text-muted-foreground">
+                          Categories
+                        </label>
+                        {(() => {
+                          const selectedTvCats = tvCategories
+                            .split(",")
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          const chips = [
+                            ...(tvCategoryRows ?? []).map((c) => c.name),
+                            ...selectedTvCats.filter(
+                              (s) => !(tvCategoryRows ?? []).some((c) => c.name === s),
+                            ),
+                          ];
+                          return chips.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5">
+                              {chips.map((name) => {
+                                const active = selectedTvCats.includes(name);
+                                return (
+                                  <button
+                                    key={name}
+                                    type="button"
+                                    aria-pressed={active}
+                                    onClick={() =>
+                                      setTvCategories(
+                                        active
+                                          ? selectedTvCats.filter((s) => s !== name).join(", ")
+                                          : [...selectedTvCats, name].join(", "),
+                                      )
+                                    }
+                                    className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                                      active
+                                        ? "bg-primary text-primary-foreground"
+                                        : "border border-border/60 bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                    }`}
+                                  >
+                                    {name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <Input
+                              id="tv-categories"
+                              value={tvCategories}
+                              onChange={(e) => setTvCategories(e.target.value)}
+                              placeholder="Sports, Bangla, News"
+                            />
+                          );
+                        })()}
+                      </div>
+                      <Button
+                        type="button"
+                        className="w-full"
+                        disabled={isAddingTv || !tvName.trim() || !tvUrl.trim()}
+                        onClick={async () => {
+                          setIsAddingTv(true);
+                          try {
+                            await addTvChannel({
+                              name: tvName.trim(),
+                              logoUrl: tvLogo.trim() || undefined,
+                              streamUrl: tvUrl.trim(),
+                              backupUrls: tvBackups
+                                .split(/[\r\n]/)
+                                .map((t) => t.trim())
+                                .filter(Boolean),
+                              categories: tvCategories
+                                .split(",")
+                                .map((s) => s.trim())
+                                .filter(Boolean),
+                            });
+                            toast.success(`Channel “${tvName.trim()}” added`);
+                            setTvName("");
+                            setTvLogo("");
+                            setTvUrl("");
+                            setTvBackups("");
+                            setTvCategories("");
+                          } catch (err) {
+                            toast.error(
+                              err instanceof Error ? err.message : "Failed to add channel",
+                            );
+                          } finally {
+                            setIsAddingTv(false);
+                          }
+                        }}
+                      >
+                        {isAddingTv && <Loader2 className="size-4 animate-spin" />}
+                        Add channel
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  {/* Channel list */}
+                  <Card className="min-w-0 overflow-hidden border-border/60 bg-card/60">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="font-display text-base">
+                        Channels ({tvChannels?.length ?? 0})
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {!tvChannels ? (
+                        <div className="space-y-2">
+                          {Array.from({ length: 4 }).map((_, i) => (
+                            <Skeleton key={i} className="h-14 w-full rounded-lg" />
+                          ))}
+                        </div>
+                      ) : tvChannels.length === 0 ? (
+                        <p className="py-8 text-center text-sm text-muted-foreground">
+                          No channels yet — add the first one with the form.
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {tvChannels.map((c) => (
+                            <div
+                              key={c._id}
+                              className="flex flex-col gap-3 rounded-lg border border-border/50 bg-background/40 p-2.5 sm:flex-row sm:items-center"
+                            >
+                              <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted">
+                                {c.logoUrl ? (
+                                  <img
+                                    src={c.logoUrl}
+                                    alt=""
+                                    loading="lazy"
+                                    className="max-h-full max-w-full object-contain"
+                                  />
+                                ) : (
+                                  <Tv className="size-4 text-muted-foreground" />
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-semibold">{c.name}</p>
+                                <p className="truncate text-xs text-muted-foreground">
+                                  {c.streamUrl}
+                                </p>
+                              </div>
+                              <div className="flex w-full gap-1.5 sm:w-auto sm:shrink-0">
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  className="size-8 flex-1 shrink-0 sm:flex-none"
+                                  onClick={() => openEditTv(c)}
+                                  aria-label={`Edit ${c.name}`}
+                                  title="Edit channel"
+                                >
+                                  <Pencil className="size-3.5" />
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  className="size-8 flex-1 shrink-0 sm:flex-none"
+                                  onClick={() => window.open(c.streamUrl, "_blank", "noopener,noreferrer")}
+                                  aria-label={`Test ${c.name} stream`}
+                                  title="Test stream"
+                                >
+                                  <Link2 className="size-3.5" />
+                                </Button>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="size-8 flex-1 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive sm:flex-none"
+                                onClick={() => {
+                                  if (window.confirm(`Delete channel “${c.name}”?`)) {
+                                    removeTvChannel({ id: c._id });
+                                  }
+                                }}
+                                aria-label={`Delete ${c.name}`}
+                              >
+                                <Trash2 className="size-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              </TabsContent>
+
+              {/* API — external movie API search & import */}
+              <TabsContent value="api">
+                <MovieApiPanel />
+              </TabsContent>
+
+              {/* Links — stream URL health management */}
+              <TabsContent value="links">
+                <Card className="overflow-hidden p-0">
+                  <CardHeader className="border-b border-border/50 py-4">
+                    <CardTitle className="font-display flex flex-wrap items-center gap-2 text-lg">
+                      Stream link health
+                      {brokenCount > 0 && (
+                        <Badge variant="outline" className="border-destructive/50 bg-destructive/10 text-destructive">
+                          {brokenCount} broken
+                        </Badge>
+                      )}
+                      {ignoredCount > 0 && (
+                        <Badge variant="outline" className="border-border/60 text-muted-foreground">
+                          {ignoredCount} ignored
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    <CardDescription>
+                      Every movie & TV stream URL is probed automatically every 6 hours.
+                      Broken links show here — fix, ignore, or re-check them.
+                      {linkHealth?.lastCheckedAt && (
+                        <span className="block">Last checked {fmtDateTime(linkHealth.lastCheckedAt)}.</span>
+                      )}
+                    </CardDescription>
+                  </CardHeader>
+                  <div className="flex flex-wrap items-center gap-2 border-b border-border/50 px-4 py-3">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5"
+                      disabled={isCheckingLinks}
+                      onClick={handleCheckLinks}
+                    >
+                      {isCheckingLinks ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Link2 className="size-3.5" />
+                      )}
+                      Check all links now
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      Ignored links stay tracked but never raise the alert.
+                    </p>
+                  </div>
+
+                  {!linkHealth ? (
+                    <div className="space-y-3 p-6">
+                      <Skeleton className="h-10 w-full" />
+                      <Skeleton className="h-10 w-full" />
+                    </div>
+                  ) : brokenCount === 0 && ignoredCount === 0 ? (
+                    <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
+                      <span className="flex size-12 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-500">
+                        <ShieldCheck className="size-6" />
+                      </span>
+                      <p className="font-display text-lg font-semibold">All stream links are healthy</p>
+                      <p className="max-w-sm text-sm text-muted-foreground">
+                        {linkHealth.trackedCount} link{linkHealth.trackedCount === 1 ? "" : "s"} tracked.
+                        Run a manual check any time to re-probe everything now.
+                      </p>
+                    </CardContent>
+                  ) : (
+                    <div className="divide-y divide-border/50">
+                      {[...linkHealth.failures, ...linkHealth.ignoredFailures].map((f) => (
+                        <div key={f.url} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              {f.targets.map((t, i) => (
+                                <span key={`${t.kind}-${t.name}-${i}`} className="text-sm font-medium">
+                                  {t.kind === "movie" && t.movieId ? (
+                                    <Link
+                                      to={`/movie/${t.movieId}`}
+                                      className="text-primary underline-offset-2 hover:underline"
+                                    >
+                                      {t.name}
+                                    </Link>
+                                  ) : (
+                                    <span>{t.name}</span>
+                                  )}
+                                  {i < f.targets.length - 1 ? "," : ""}
+                                </span>
+                              ))}
+                              <Badge
+                                variant="outline"
+                                className={
+                                  f.ignored
+                                    ? "border-border/60 text-muted-foreground"
+                                    : "border-destructive/50 bg-destructive/10 text-destructive"
+                                }
+                              >
+                                {f.ignored ? "ignored" : (f.error ?? "failed")}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                {fmtDateTime(f.checkedAt)}
+                              </span>
+                            </div>
+                            <p className="mt-1 break-all font-mono text-xs text-muted-foreground" title={f.url}>
+                              {f.url}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-1.5">
+                            {f.targets.map((t) =>
+                              t.kind === "movie" && t.movieId ? (
+                                <Button
+                                  key={`edit-${t.movieId}`}
+                                  size="sm"
+                                  variant="outline"
+                                  className="gap-1.5"
+                                  onClick={() => {
+                                    const movie = (movies ?? []).find((m) => m._id === t.movieId);
+                                    if (movie) {
+                                      setEditing(movie);
+                                      setDialogOpen(true);
+                                    } else {
+                                      toast.error("Movie not found in the catalog");
+                                    }
+                                  }}
+                                >
+                                  <Pencil className="size-3.5" />
+                                  Edit
+                                </Button>
+                              ) : t.kind === "tv" && t.channelId ? (
+                                <Button
+                                  key={`edit-${t.channelId}`}
+                                  size="sm"
+                                  variant="outline"
+                                  className="gap-1.5"
+                                  onClick={() => {
+                                    const ch = (tvChannels ?? []).find((c) => c._id === t.channelId);
+                                    if (ch) {
+                                      openEditTv(ch);
+                                    } else {
+                                      toast.error("Channel not found");
+                                    }
+                                  }}
+                                >
+                                  <Pencil className="size-3.5" />
+                                  Edit
+                                </Button>
+                              ) : null,
+                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1.5"
+                              onClick={() => window.open(f.url, "_blank", "noopener,noreferrer")}
+                            >
+                              <Link2 className="size-3.5" />
+                              Open
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={f.ignored ? "secondary" : "ghost"}
+                              className="gap-1.5"
+                              onClick={() => toggleLinkIgnored(f.url, !f.ignored)}
+                            >
+                              {f.ignored ? (
+                                <>
+                                  <ShieldCheck className="size-3.5" />
+                                  Un-ignore
+                                </>
+                              ) : (
+                                <>
+                                  <X className="size-3.5" />
+                                  Ignore
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </TabsContent>
+
+              {/* Support — help-center chat inbox */}
+              <TabsContent value="support">
+                <Card className="overflow-hidden p-0">
+                  <CardHeader className="border-b border-border/50 py-4">
+                    <CardTitle className="font-display flex flex-wrap items-center gap-2 text-lg">
+                      Help center inbox
+                      {(adminUnread ?? 0) > 0 && (
+                        <Badge variant="outline" className="border-destructive/50 bg-destructive/10 text-destructive">
+                          {adminUnread} unread
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    <CardDescription>
+                      Messages from the floating help-center widget on the site.
+                      Pick a conversation to reply — the user sees it live.
+                    </CardDescription>
+                  </CardHeader>
+
+                  {!conversations ? (
+                    <div className="space-y-3 p-6">
+                      <Skeleton className="h-10 w-full" />
+                      <Skeleton className="h-10 w-full" />
+                    </div>
+                  ) : conversations.length === 0 ? (
+                    <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
+                      <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                        <Headset className="size-6" />
+                      </span>
+                      <p className="font-display text-lg font-semibold">No conversations yet</p>
+                      <p className="max-w-sm text-sm text-muted-foreground">
+                        When visitors use the help-center widget (bottom-right
+                        of the site), their messages appear here.
+                      </p>
+                    </CardContent>
+                  ) : (
+                    <div className="divide-y divide-border/50">
+                      {conversations.map((c) => (
+                        <div key={c.userId} className="px-4 py-3">
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-3 text-left"
+                            onClick={() =>
+                              setActiveThread(activeThread === c.userId ? null : c.userId)
+                            }
+                          >
+                            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-bold text-primary">
+                              {(c.userName ?? "G").slice(0, 1).toUpperCase()}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-2">
+                                <span className="truncate text-sm font-semibold">{c.userName}</span>
+                                {c.isAnonymous && (
+                                  <Badge variant="secondary" className="text-[10px]">guest</Badge>
+                                )}
+                                {c.unread > 0 && (
+                                  <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold leading-5 text-destructive-foreground">
+                                    {c.unread}
+                                  </span>
+                                )}
+                              </span>
+                              <span className="block truncate text-xs text-muted-foreground">
+                                {c.lastSender === "admin" ? "You: " : ""}
+                                {c.lastText}
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {fmtDateTime(c.lastAt)}
+                            </span>
+                          </button>
+
+                          {activeThread === c.userId && (
+                            <div className="mt-3 rounded-lg border border-border/60 bg-background/60 p-3">
+                              <div
+                                ref={supportScroll}
+                                className="max-h-72 space-y-2 overflow-y-auto"
+                              >
+                                {(thread ?? []).map((m) => (
+                                  <div
+                                    key={m._id}
+                                    className={`group flex items-center gap-1 ${m.sender === "admin" ? "justify-end" : "justify-start"}`}
+                                  >
+                                    {m.sender !== "admin" && (
+                                      <span className="flex shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+                                        <button
+                                          type="button"
+                                          aria-label="Edit message"
+                                          title="Edit"
+                                          onClick={() => {
+                                            setEditMsg({ id: m._id, text: m.text });
+                                            setEditMsgDraft(m.text);
+                                          }}
+                                          className="rounded-full p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                        >
+                                          <Pencil className="size-3" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label="Delete message"
+                                          title="Delete"
+                                          onClick={() => setDeleteMsg({ id: m._id, text: m.text })}
+                                          className="rounded-full p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                        >
+                                          <Trash2 className="size-3" />
+                                        </button>
+                                      </span>
+                                    )}
+                                    <div
+                                      className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-1.5 text-sm ${
+                                        m.sender === "admin"
+                                          ? "rounded-br-md bg-primary text-primary-foreground"
+                                          : "rounded-bl-md bg-muted text-foreground"
+                                      }`}
+                                    >
+                                      {m.text}
+                                    </div>
+                                    {m.sender === "admin" && (
+                                      <span className="flex shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+                                        <button
+                                          type="button"
+                                          aria-label="Edit message"
+                                          title="Edit"
+                                          onClick={() => {
+                                            setEditMsg({ id: m._id, text: m.text });
+                                            setEditMsgDraft(m.text);
+                                          }}
+                                          className="rounded-full p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                        >
+                                          <Pencil className="size-3" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label="Delete message"
+                                          title="Delete"
+                                          onClick={() => setDeleteMsg({ id: m._id, text: m.text })}
+                                          className="rounded-full p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                        >
+                                          <Trash2 className="size-3" />
+                                        </button>
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                              <form
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  sendSupportReply();
+                                }}
+                                className="mt-3 flex items-center gap-2"
+                              >
+                                <Input
+                                  value={supportDraft}
+                                  onChange={(e) => setSupportDraft(e.target.value)}
+                                  placeholder="Reply as admin…"
+                                  maxLength={1000}
+                                />
+                                <Button
+                                  type="submit"
+                                  size="icon"
+                                  className="size-10 shrink-0"
+                                  disabled={isReplying || !supportDraft.trim()}
+                                >
+                                  {isReplying ? (
+                                    <Loader2 className="size-4 animate-spin" />
+                                  ) : (
+                                    <Send className="size-4" />
+                                  )}
+                                </Button>
+                              </form>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+
+                {/* Edit message dialog (admin can edit any message) */}
+                <Dialog open={!!editMsg} onOpenChange={(o) => !o && setEditMsg(null)}>
+                  <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Edit message</DialogTitle>
+                      <DialogDescription>
+                        Your change is visible to the user immediately.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <Textarea
+                      value={editMsgDraft}
+                      onChange={(e) => setEditMsgDraft(e.target.value)}
+                      maxLength={1000}
+                      rows={4}
+                    />
+                    <DialogFooter className="gap-2 sm:gap-0">
+                      <Button variant="outline" onClick={() => setEditMsg(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={saveSupportEdit}
+                        disabled={isEditSaving || !editMsgDraft.trim()}
+                      >
+                        {isEditSaving ? <Loader2 className="size-4 animate-spin" /> : null}
+                        Save
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                {/* Delete message confirm (admin can delete any message) */}
+                <AlertDialog
+                  open={!!deleteMsg}
+                  onOpenChange={(o) => !o && setDeleteMsg(null)}
+                >
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete this message?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        {`"${deleteMsg?.text.slice(0, 160) ?? ""}"`}
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void confirmSupportDelete();
+                        }}
+                        className="bg-destructive text-white hover:bg-destructive/90"
+                      >
+                        Delete
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </TabsContent>
             </Tabs>
           </>
         )}
       </main>
+
+      {/* Edit TV channel dialog */}
+      <Dialog
+        open={editingTv !== null}
+        onOpenChange={(o) => {
+          if (!o) setEditingTv(null);
+        }}
+      >
+        <DialogContent className="max-h-[92dvh] w-[calc(100%-1.5rem)] max-w-md overflow-y-auto rounded-xl sm:w-full">
+          <DialogHeader>
+            <DialogTitle className="font-display">Edit channel</DialogTitle>
+            <DialogDescription>
+              Update the name, logo, stream URL, categories, or display order.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-name" className="text-xs font-medium text-muted-foreground">
+                Channel name
+              </label>
+              <Input
+                id="tv-edit-name"
+                value={editTvName}
+                onChange={(e) => setEditTvName(e.target.value)}
+                maxLength={80}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-logo" className="text-xs font-medium text-muted-foreground">
+                Logo URL (optional)
+              </label>
+              <Input
+                id="tv-edit-logo"
+                value={editTvLogo}
+                onChange={(e) => setEditTvLogo(e.target.value)}
+                placeholder="https://…/logo.png"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-url" className="text-xs font-medium text-muted-foreground">
+                Stream URL
+              </label>
+              <Input
+                id="tv-edit-url"
+                value={editTvUrl}
+                onChange={(e) => setEditTvUrl(e.target.value)}
+                placeholder="https://…/stream.m3u8"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-backups" className="text-xs font-medium text-muted-foreground">
+                Backup URLs (one per line) — used when the primary stream is down
+              </label>
+              <textarea
+                id="tv-edit-backups"
+                value={editTvBackups}
+                onChange={(e) => setEditTvBackups(e.target.value)}
+                placeholder={"https://…/backup-1.m3u8 | https://…/backup-2.m3u8"}
+                rows={2}
+                className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </div>
+            <RelayUrlHelper
+              channelName={editTvName}
+              suggestLocalUrl={editTvUrl}
+              onUsePublic={setEditTvUrl}
+              onAddBackup={(u) =>
+                setEditTvBackups((b) => (b.trim() ? `${b.trimEnd()}\n${u}` : u))
+              }
+            />
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-categories" className="text-xs font-medium text-muted-foreground">
+                Categories
+              </label>
+              {(() => {
+                const selectedTvCats = editTvCategories
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+                const chips = [
+                  ...(tvCategoryRows ?? []).map((c) => c.name),
+                  ...selectedTvCats.filter(
+                    (s) => !(tvCategoryRows ?? []).some((c) => c.name === s),
+                  ),
+                ];
+                return chips.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {chips.map((name) => {
+                      const active = selectedTvCats.includes(name);
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() =>
+                            setEditTvCategories(
+                              active
+                                ? selectedTvCats.filter((s) => s !== name).join(", ")
+                                : [...selectedTvCats, name].join(", "),
+                            )
+                          }
+                          className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                            active
+                              ? "bg-primary text-primary-foreground"
+                              : "border border-border/60 bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                          }`}
+                        >
+                          {name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <Input
+                    id="tv-edit-categories"
+                    value={editTvCategories}
+                    onChange={(e) => setEditTvCategories(e.target.value)}
+                    placeholder="Sports, Bangla, News"
+                  />
+                );
+              })()}
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="tv-edit-order" className="text-xs font-medium text-muted-foreground">
+                Display order (optional, lower numbers first)
+              </label>
+              <Input
+                id="tv-edit-order"
+                type="number"
+                value={editTvOrder}
+                onChange={(e) => setEditTvOrder(e.target.value)}
+                placeholder="e.g. 1"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => setEditingTv(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isSavingTv || !editTvName.trim() || !editTvUrl.trim()}
+              onClick={handleSaveTv}
+            >
+              {isSavingTv && <Loader2 className="size-4 animate-spin" />}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <MovieFormDialog
         open={dialogOpen}

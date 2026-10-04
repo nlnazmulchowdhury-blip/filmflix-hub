@@ -216,7 +216,7 @@ export const submitDub = action({
  */
 export const pollDub = action({
   args: { jobId: v.id("dubJobs") },
-  handler: async (ctx, { jobId }) => {
+  handler: async (ctx, { jobId }): Promise<{ status: "dubbed" | "dubbing" | "failed"; url?: string }> => {
     const job = await ctx.runQuery(internal.dubbing.jobById, { jobId });
     if (!job) throw new Error("Dubbing job not found");
     if (!job.dubbingId) {
@@ -255,25 +255,42 @@ export const pollDub = action({
       return { status: "failed" as const };
     }
 
-    // status === "dubbed": download the dubbed file and store it in Convex.
-    const audioRes = await elevenLabsFetch(
-      `/v1/dubbing/${job.dubbingId}/audio/${job.targetLang}`,
-    );
-    if (!audioRes.ok || !audioRes.body) {
-      await ctx.runMutation(internal.dubbing.saveJob, {
-        jobId,
-        status: "failed",
-        error: `Could not download the dub (${audioRes.status})`,
+    // status === "dubbed": download the dubbed file. Prefer Supabase
+    // Storage (permanent direct playback URL); fall back to Convex file
+    // storage when Supabase is not configured.
+    let publicUrl: string | null = null;
+    try {
+      publicUrl = await ctx.runAction(internal.supabaseStorage.uploadDubAudio, {
+        dubbingId: job.dubbingId,
+        targetLang: job.targetLang,
       });
-      return { status: "failed" as const };
+    } catch (err) {
+      console.warn(
+        "Supabase dub storage failed, falling back to Convex storage:",
+        err instanceof Error ? err.message : err,
+      );
     }
 
-    const blob = await audioRes.blob();
-    const storageId = await ctx.storage.store(
-      new Blob([blob], { type: blob.type || "video/mp4" }),
-    );
-    const storedUrl = await ctx.storage.getUrl(storageId);
-    if (!storedUrl) {
+    if (!publicUrl) {
+      const audioRes = await elevenLabsFetch(
+        `/v1/dubbing/${job.dubbingId}/audio/${job.targetLang}`,
+      );
+      if (!audioRes.ok || !audioRes.body) {
+        await ctx.runMutation(internal.dubbing.saveJob, {
+          jobId,
+          status: "failed",
+          error: `Could not download the dub (${audioRes.status})`,
+        });
+        return { status: "failed" as const };
+      }
+
+      const blob = await audioRes.blob();
+      const storageId = await ctx.storage.store(
+        new Blob([blob], { type: blob.type || "video/mp4" }),
+      );
+      publicUrl = await ctx.storage.getUrl(storageId);
+    }
+    if (!publicUrl) {
       await ctx.runMutation(internal.dubbing.saveJob, {
         jobId,
         status: "failed",
@@ -281,7 +298,6 @@ export const pollDub = action({
       });
       return { status: "failed" as const };
     }
-    const publicUrl: string = storedUrl;
 
     const label = DUB_LANGUAGES.find((l) => l.code === job.targetLang)?.label ?? job.targetLang;
     await ctx.runMutation(internal.dubbing.attachDubToMovie, {

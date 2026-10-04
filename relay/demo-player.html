@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Relay Demo — HLS through FilmFlix relay</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        background: #0d0d17;
+        color: #eee;
+        font-family: system-ui, sans-serif;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+      }
+      .wrap {
+        width: min(92vw, 880px);
+      }
+      video {
+        width: 100%;
+        background: #000;
+        border-radius: 12px;
+        display: block;
+      }
+      #status {
+        margin: 14px 4px 0;
+        font-size: 14px;
+        color: #9ca3af;
+        white-space: pre-line;
+      }
+      h1 {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0 4px 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>FilmFlix Relay Demo — রিলে হয়ে HLS স্ট্রিম</h1>
+      <video id="v" controls autoplay muted playsinline></video>
+      <div id="status">loading…</div>
+    </div>
+    <script>
+      const status = document.getElementById("status");
+      const log = (m) => (status.textContent += "\n" + m);
+      const video = document.getElementById("v");
+      const url = "http://127.0.0.1:8077/c/demo";
+      log("source: " + url);
+      if (window.Hls && Hls.isSupported()) {
+        const hls = new Hls({ enableWorker: true });
+        hls.on(Hls.Events.MANIFEST_PARSED, () => log("MANIFEST_PARSED ✓"));
+        hls.on(Hls.Events.LEVEL_SWITCHED, (e, d) =>
+          log("level " + d.level + " playing"),
+        );
+        hls.on(Hls.Events.ERROR, (e, d) => {
+          if (d.fatal) log("FATAL ERROR: " + d.type + " / " + d.details);
+        });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = url; // Safari / native HLS
+        video.addEventListener("loadedmetadata", () => log("native HLS ✓"));
+      } else {
+        log("HLS is not supported in this browser");
+      }
+    </script>
+  </body>
+</html>
