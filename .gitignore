@@ -1,4 +1,14 @@
 .env.local
+.env.production
 node_modules
 dist
-src/convex/_generated
+
+# relay runtime secrets / logs
+relay/.env
+relay/relay.env
+relay/relay.log
+
+# data migration artifacts (contain exported user data)
+scripts/export/
+scripts/data-export.zip
+scripts/d1-import.sql
