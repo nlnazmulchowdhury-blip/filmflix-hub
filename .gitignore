@@ -12,3 +12,4 @@ relay/relay.log
 scripts/export/
 scripts/data-export.zip
 scripts/d1-import.sql
+dev.log
