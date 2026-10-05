@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { api } from "@/convex/_generated/api";
 import type { ApiSearchHit } from "@/convex/movieApi";
+import type { ElaachSearchHit } from "@/convex/elaach";
 import type { MbSearchHit } from "@/convex/movieBox";
 import { useAction, useMutation, useQuery } from "convex/react";
 import {
@@ -38,6 +39,8 @@ export default function MovieApiPanel() {
   const importMovie = useMutation(api.movieApi.importMovie);
   const mbSearch = useAction(api.movieBox.searchAction);
   const mbImport = useAction(api.movieBox.importMovie);
+  const eaSearch = useAction(api.elaach.searchAction);
+  const eaImport = useAction(api.elaach.importMovie);
 
   const [testBase, setTestBase] = useState("");
   const [probing, setProbing] = useState(false);
@@ -185,6 +188,65 @@ export default function MovieApiPanel() {
       toast.error(err instanceof Error ? err.message : "Import failed");
     } finally {
       setMbImporting(null);
+    }
+  };
+
+  const [eaQ, setEaQ] = useState("");
+  const [eaSearching, setEaSearching] = useState(false);
+  const [eaHits, setEaHits] = useState<ElaachSearchHit[]>([]);
+  const [eaImporting, setEaImporting] = useState<string | null>(null);
+  const [eaImported, setEaImported] = useState<Set<string>>(new Set());
+  const [eaImportedInfo, setEaImportedInfo] = useState<
+    Record<string, { videoKind: "movie" | "none"; quality?: string }>
+  >({});
+
+  const runEaSearch = async () => {
+    const query = eaQ.trim();
+    if (!query) return;
+    setEaSearching(true);
+    try {
+      const hits = await eaSearch({ q: query });
+      setEaHits(hits);
+      if (hits.length === 0) toast.info("Elaach-এ কিছু পাওয়া যায়নি");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Elaach search failed");
+    } finally {
+      setEaSearching(false);
+    }
+  };
+
+  const doEaImport = async (hit: ElaachSearchHit) => {
+    setEaImporting(hit.imdbId);
+    try {
+      const res = await eaImport({
+        imdbId: hit.imdbId,
+        section: hit.section,
+        fallback: {
+          title: hit.title,
+          posterUrl: hit.posterUrl,
+          rating: hit.rating,
+          genre: hit.genre,
+          kind: hit.kind,
+        },
+      });
+      setEaImported((prev) => new Set(prev).add(hit.imdbId));
+      setEaImportedInfo((prev) => ({
+        ...prev,
+        [hit.imdbId]: { videoKind: res.videoKind, quality: res.quality },
+      }));
+      if (res.videoKind === "movie") {
+        toast.success(
+          `"${res.title}" ইমপোর্ট হয়েছে — সরাসরি mp4 প্লেয়ারে চলবে${res.quality ? ` (${res.quality})` : ""}`,
+        );
+      } else {
+        toast.warning(
+          `"${res.title}" ক্যাটালগে গেছে, কিন্তু কোনো ভিডিও লিংক পাওয়া যায়নি`,
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Import failed");
+    } finally {
+      setEaImporting(null);
     }
   };
 
@@ -388,6 +450,113 @@ export default function MovieApiPanel() {
                           : ""
                       }`
                     : mbImporting === hit.subjectId ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Download className="size-3.5" />
+                    )}
+                    ইমপোর্ট
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Elaach (elaach.com) — server-rendered HTML: search + direct mp4 */}
+        <div className="space-y-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">Elaach (elaach.com)</span>
+            <Badge
+              variant="outline"
+              className="border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-400"
+            >
+              <ShieldCheck className="size-3" /> কী ছাড়া চলে
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            সার্চ করে ইমপোর্ট করলে পোস্টার, বর্ষ, রেটিং, জনরা, বর্ণনা আর
+            <span className="font-medium"> সরাসরি mp4 লিংক</span> একসাথে ক্যাটালগে ঢুকে
+            যাবে — প্লেয়ার ও ডাউনলোড মেনুতে ব্যবহার হবে।
+          </p>
+          <form
+            className="flex flex-col gap-2 sm:flex-row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              runEaSearch();
+            }}
+          >
+            <Input
+              value={eaQ}
+              onChange={(e) => setEaQ(e.target.value)}
+              placeholder="Elaach-এ মুভি সার্চ করুন…"
+              aria-label="Elaach search"
+              className="flex-1"
+            />
+            <Button
+              type="submit"
+              className="gap-2 sm:w-auto"
+              disabled={eaSearching || !eaQ.trim()}
+            >
+              {eaSearching ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Search className="size-4" />
+              )}
+              Elaach-এ সার্চ
+            </Button>
+          </form>
+
+          {eaHits.length > 0 && (
+            <div className="divide-y divide-border/50 overflow-hidden rounded-lg border border-border/50 bg-background">
+              {eaHits.map((hit) => (
+                <div key={`${hit.section}/${hit.imdbId}`} className="flex items-center gap-3 p-2.5">
+                  {hit.posterUrl ? (
+                    <img
+                      src={hit.posterUrl}
+                      alt=""
+                      className="h-16 w-11 flex-none rounded object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <span className="flex h-16 w-11 flex-none items-center justify-center rounded bg-muted text-muted-foreground">
+                      <Clapperboard className="size-4" />
+                    </span>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{hit.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {hit.kind === "series" ? "সিরিজ" : "মুভি"}
+                      {hit.rating ? ` • ★ ${hit.rating.toFixed(1)}` : ""}
+                      {hit.genre ? ` • ${hit.genre}` : ""}
+                    </p>
+                    {eaImported.has(hit.imdbId) && eaImportedInfo[hit.imdbId] && (
+                      <p
+                        className={`mt-1 text-xs ${
+                          eaImportedInfo[hit.imdbId].videoKind === "movie"
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-amber-600 dark:text-amber-400"
+                        }`}
+                      >
+                        {eaImportedInfo[hit.imdbId].videoKind === "movie"
+                          ? `পুরো মুভি প্লেয়ারে চলবে${
+                              eaImportedInfo[hit.imdbId].quality
+                                ? ` (${eaImportedInfo[hit.imdbId].quality})`
+                                : ""
+                            }`
+                          : "ক্যাটালগে যোগ হয়েছে, কিন্তু ভিডিও লিংক পাওয়া যায়নি"}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5"
+                    disabled={eaImporting === hit.imdbId || eaImported.has(hit.imdbId)}
+                    onClick={() => doEaImport(hit)}
+                  >
+                    {eaImported.has(hit.imdbId) ? (
+                      "যোগ হয়েছে"
+                    ) : eaImporting === hit.imdbId ? (
                       <Loader2 className="size-3.5 animate-spin" />
                     ) : (
                       <Download className="size-3.5" />

@@ -16,6 +16,7 @@ import type * as categories from "../categories.js";
 import type * as comments from "../comments.js";
 import type * as crons from "../crons.js";
 import type * as dubbing from "../dubbing.js";
+import type * as elaach from "../elaach.js";
 import type * as http from "../http.js";
 import type * as linkHealth from "../linkHealth.js";
 import type * as mbWeb from "../mbWeb.js";
@@ -51,6 +52,7 @@ declare const fullApi: ApiFromModules<{
   comments: typeof comments;
   crons: typeof crons;
   dubbing: typeof dubbing;
+  elaach: typeof elaach;
   http: typeof http;
   linkHealth: typeof linkHealth;
   mbWeb: typeof mbWeb;
