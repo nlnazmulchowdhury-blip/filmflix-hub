@@ -403,13 +403,18 @@ export default function PlayerStage({
       {/* Portal target — the persistent video mounts here. */}
       <div data-slot="stage-slot" className="absolute inset-0" />
 
-      {/* Poster overlay until playback begins */}
-      {!hasStarted && (
+      {/* Poster overlay until playback begins. `playing` is also checked:
+          if the video is already running (any start path), the banner must
+          never keep covering it. */}
+      {!hasStarted && !playing && (
         <button
           type="button"
           aria-label={`Play ${movie.title}`}
           onClick={() => controls.play()}
-          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black"
+          /* z-[15]: above the video's tap-zone layer (z-10, later in DOM so
+             it wins ties — real clicks on this button were landing on the
+             tap zones and doing nothing) but below the control bar (z-20). */
+          className="absolute inset-0 z-[15] flex flex-col items-center justify-center gap-4 bg-black"
         >
           {movie.backdropUrl || movie.posterUrl ? (
             <img

@@ -644,7 +644,14 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
             visible={Boolean(inlineOnPage || miniActive)}
             posterUrl={movie.backdropUrl ?? movie.posterUrl ?? null}
             title={movie.title}
-            onPlay={() => setPlaying(true)}
+            onPlay={() => {
+              setPlaying(true);
+              /* Playback itself is the source of truth for "started": any
+                 play path (restore, media keys, programmatic play) must drop
+                 the poster overlay, otherwise the banner keeps covering a
+                 video that is already running. */
+              setHasStarted(true);
+            }}
             onPause={() => setPlaying(false)}
             onTime={(t, d, b) => {
               setCurrentTime(t);
