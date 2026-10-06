@@ -28,6 +28,36 @@ export function playableVideoUrl(
 }
 
 /**
+ * Builds a link that starts a file download the moment it is clicked.
+ *
+ * Direct links never download: the movie CDNs serve `video/mp4` with no
+ * `Content-Disposition`, and the browser ignores `download` on cross-origin
+ * URLs — so the click opens a new tab and *plays* the movie instead. Routing
+ * through the proxy with `&download=1` makes it answer `attachment`, which
+ * browsers honour on any origin: one click, save dialog / download starts,
+ * current page stays put (see videoProxy.ts).
+ *
+ * `filename` (movie title + quality) is optional — the proxy falls back to
+ * the upstream file name.
+ */
+export function downloadFileUrl(
+  raw: string | null | undefined,
+  siteUrl: string,
+  filename?: string,
+): string {
+  const url = (raw ?? "").trim();
+  if (!url) return "";
+  const base = siteUrl.replace(/\/+$/, "");
+  // Without a configured HTTP endpoint there is nothing to attach the
+  // download headers — hand back the raw link rather than a broken URL.
+  if (!base) return url;
+  const params = new URLSearchParams({ url });
+  params.set("download", "1");
+  if (filename?.trim()) params.set("filename", filename.trim());
+  return `${base}/video-proxy?${params.toString()}`;
+}
+
+/**
  * True if the URL is an HLS playlist (.m3u8, optionally signed with a
  * `?token=` query — tokenized playlists still contain ".m3u8"). HLS is
  * played in-browser by hls.js and must NOT be routed through the proxy:

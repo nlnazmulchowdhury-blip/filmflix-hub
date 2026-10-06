@@ -10,6 +10,7 @@ import { useMiniPlayer } from "@/components/mini-player-context";
 import AdBanner from "@/components/AdBanner";
 import AdSideRail from "@/components/AdSideRail";
 import { AD_BANNERS } from "@/lib/ad-banners";
+import { convexSiteUrl, downloadFileUrl } from "@/lib/video-url";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
@@ -34,7 +35,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -161,6 +162,38 @@ export default function MovieDetail() {
   const downloadOptions = movie
     ? (movie.downloads ?? []).filter((d) => d.url)
     : [];
+
+  /* Clicking a quality must start a file download, not open a tab that plays
+     the movie. Direct CDN links can't do that: they serve `video/mp4` with no
+     `Content-Disposition` and browsers ignore the `download` attribute on
+     cross-origin URLs. So the link points at the proxy with `&download=1`
+     (which answers `attachment`), and we probe a single byte first — if the
+     proxy can't reach that host, fall back to opening the direct link instead
+     of leaving an error page in this tab. */
+  const handleDownload = async (e: ReactMouseEvent<HTMLAnchorElement>, directUrl: string) => {
+    e.preventDefault();
+    const href = e.currentTarget.href;
+    if (!href || href === directUrl) {
+      window.open(directUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      const res = await fetch(href, {
+        headers: { Range: "bytes=0-1" },
+        signal: AbortSignal.timeout(8000),
+      });
+      void res.body?.cancel();
+      if (res.ok) {
+        // `attachment` makes the browser save the file and stay on this page.
+        window.location.assign(href);
+        return;
+      }
+    } catch {
+      // Proxy unreachable from the cloud for this host — fall through.
+    }
+    toast.error("ডাউনলোড শুরু করা গেল না — ভিডিও নতুন টেবে খুলছে");
+    window.open(directUrl, "_blank", "noopener,noreferrer");
+  };
 
   const nowPlayingUrl = miniMovie?.videoUrl;
   const playItem = (item: (typeof playlist)[number]) => {
@@ -391,10 +424,13 @@ export default function MovieDetail() {
                         {downloadOptions.map((d) => (
                           <DropdownMenuItem key={d.label + d.url} asChild>
                             <a
-                              href={d.url}
-              target="_blank"
-                              rel="noopener noreferrer"
+                              href={downloadFileUrl(
+                                d.url,
+                                convexSiteUrl(),
+                                `${movie.title} - ${d.label}`,
+                              )}
                               download
+                              onClick={(e) => void handleDownload(e, d.url)}
                               className="flex w-full cursor-pointer items-center justify-between"
                             >
                               <span>{d.label}</span>

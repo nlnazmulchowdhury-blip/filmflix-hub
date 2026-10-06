@@ -121,6 +121,87 @@ async function peekFirstChunk(
   return { first, rest };
 }
 
+/**
+ * `&download=1` turns the proxy into a file download.
+ *
+ * Why it exists: the CDNs behind these links (macdn.aoneroom.com,
+ * content.elaach.com, …) answer with `Content-Type: video/mp4` and **no**
+ * `Content-Disposition`, so a plain `<a href>` either opens a new tab and
+ * plays the movie (cross-origin `download` attributes are ignored) or does
+ * nothing at all. With `attachment` set, one click saves the file instead.
+ */
+const DOWNLOAD_TYPES: Record<string, string> = {
+  "video/mp4": ".mp4",
+  "video/webm": ".webm",
+  "video/quicktime": ".mov",
+  "video/x-matroska": ".mkv",
+  "video/mpeg": ".mpg",
+  "video/avi": ".avi",
+};
+
+/** Guesses a file extension the response body actually deserves. */
+function extensionFor(contentType: string, upstreamUrl: string): string {
+  const type = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (DOWNLOAD_TYPES[type]) return DOWNLOAD_TYPES[type];
+  try {
+    const path = new URL(upstreamUrl).pathname;
+    const dot = path.lastIndexOf(".");
+    if (dot > -1 && /^[A-Za-z0-9]{2,5}$/.test(path.slice(dot + 1))) {
+      return "." + path.slice(dot + 1).toLowerCase();
+    }
+  } catch {
+    // not an http(s) URL (mbres:// references) — fall through
+  }
+  return ".mp4";
+}
+
+/** Characters that must never appear in a saved file name. */
+const UNSAFE_FILENAME_CHARS = new Set(["/", "\\", '"', ":", "*", "?", "<", ">", "|"]);
+
+/**
+ * Builds the saved file name: the label the UI sent (movie title + quality),
+ * else the upstream file name, plus a matching extension. Control characters
+ * and path separators are stripped so a crafted label cannot escape the
+ * download folder or break the header.
+ */
+function buildDownloadFilename(
+  wanted: string | null,
+  upstreamUrl: string,
+  contentType: string,
+): string {
+  let name = "";
+  for (const ch of wanted ?? "") {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code >= 0x20 && code !== 0x7f && !UNSAFE_FILENAME_CHARS.has(ch)) {
+      name += ch;
+    }
+  }
+  name = name.trim();
+  if (!name) {
+    try {
+      const path = new URL(upstreamUrl).pathname;
+      name = decodeURIComponent(path.slice(path.lastIndexOf("/") + 1));
+    } catch {
+      name = "";
+    }
+  }
+  if (!name) name = "video";
+  if (!/\.[A-Za-z0-9]{2,5}$/.test(name)) {
+    name += extensionFor(contentType, upstreamUrl);
+  }
+  return name.slice(0, 150);
+}
+
+/** RFC 6266 value: ASCII fallback + UTF-8 `filename*` for Bengali titles. */
+function contentDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  const utf8 = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
+  );
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+}
+
 function errorResponse(status: number, error: string, detail?: string) {
   return new Response(JSON.stringify({ error, detail }), {
     status,
@@ -142,19 +223,28 @@ export const registeredVideoUrls = internalQuery({
       for (const e of m.episodes ?? []) if (e.videoUrl) urls.add(e.videoUrl);
       for (const d of m.dubs ?? []) if (d.videoUrl) urls.add(d.videoUrl);
       for (const q of m.qualities ?? []) if (q.videoUrl) urls.add(q.videoUrl);
+      // Download-menu links live in their own array — an admin may register a
+      // file there that is not the playable videoUrl, and the download button
+      // must not be rejected as "not registered in the catalog".
+      for (const d of m.downloads ?? []) if (d.url) urls.add(d.url);
     }
     return [...urls];
   },
 });
 
 export const handleVideoProxy = httpAction(async (ctx, request) => {
-  const upstreamUrl = new URL(request.url).searchParams.get("url");
+  const searchParams = new URL(request.url).searchParams;
+  const upstreamUrl = searchParams.get("url");
   if (!upstreamUrl) {
     return errorResponse(400, "Missing ?url= parameter");
   }
   if (upstreamUrl.length > 2048) {
     return errorResponse(400, "Video URL is too long");
   }
+  // `&download=1` = answer with `Content-Disposition: attachment` so the
+  // browser saves the file instead of opening a tab that plays it.
+  const wantDownload = /^(1|true|yes)$/i.test(searchParams.get("download") ?? "");
+  const wantedFilename = searchParams.get("filename");
 
   /* MovieBox references (mbres://<subjectId>/<quality>) are stable but the
      provider's file URLs are signed and short-lived. Resolve one fresh on
@@ -256,6 +346,18 @@ export const handleVideoProxy = httpAction(async (ctx, request) => {
   }
   if (!headers.has("accept-ranges")) {
     headers.set("accept-ranges", "bytes");
+  }
+  if (wantDownload) {
+    headers.set(
+      "Content-Disposition",
+      contentDisposition(
+        buildDownloadFilename(
+          wantedFilename,
+          effectiveUpstream,
+          headers.get("content-type") ?? "",
+        ),
+      ),
+    );
   }
   headers.set("Access-Control-Allow-Origin", "*");
   // HLS playlists regenerate per viewer (signed, short-lived URLs) — a cached
