@@ -36,11 +36,52 @@ You must follow these conventions when using authentication.
 
 ## Auth is already set up.
 
-All convex authentication functions are already set up. The auth currently uses email OTP and anonymous users, but can support more.
+All convex authentication functions are already set up. The auth currently uses email OTP, email + password, Google, Facebook, Apple, GitHub and anonymous (guest) users.
 
 The email OTP configuration is defined in `src/convex/auth/emailOtp.ts`. DO NOT MODIFY THIS FILE.
 
-Also, DO NOT MODIFY THESE AUTH FILES: `src/convex/auth.config.ts` and `src/convex/auth.ts`.
+Also, DO NOT MODIFY `src/convex/auth.config.ts`.
+
+## Sign-in methods
+
+`src/convex/auth.ts` registers the enabled providers: Google, Facebook, Apple,
+GitHub, email + password, email OTP and anonymous (guest). Add or remove a
+method there only per the Convex Auth documentation for that provider.
+
+Email + password is a `Password` provider wired to two extra `Email` providers,
+so the same transactional mailer used for sign-in codes also delivers the
+account-verification and password-reset codes (six digits, provider-scoped, so a
+reset code can never be replayed as a sign-in code). New accounts must confirm
+the emailed code before the password works; existing accounts with the same
+address are linked instead of duplicated. The auth UI lives on `/auth`:
+password sign-in/sign-up, Google, Apple, GitHub, Facebook, "email me a sign-in
+code", forgot password, and guest.
+
+### Deployment environment variables for the new methods
+
+Set these on the Convex deployment (dashboard → Settings → Environment
+Variables) before the matching button can work; without them the provider
+refuses to start a flow:
+
+- `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` — Google OAuth client
+- `AUTH_FACEBOOK_ID`, `AUTH_FACEBOOK_SECRET` — Facebook app
+- `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` — GitHub OAuth app
+- `AUTH_APPLE_ID`, `AUTH_APPLE_SECRET` — Apple Services ID + client secret
+
+Register these callback URLs with each provider:
+
+- Google: `<CONVEX_SITE_URL>/api/auth/callback/google`
+- Facebook: `<CONVEX_SITE_URL>/api/auth/callback/facebook`
+- GitHub: `<CONVEX_SITE_URL>/api/auth/callback/github`
+- Apple: `<CONVEX_SITE_URL>/api/auth/callback/apple` (Apple needs the
+  deployment's real HTTPS site URL; it rejects `localhost`)
+
+Apple is the odd one out: `AUTH_APPLE_SECRET` is not a plain string but the
+ES256 JWT generated from the Apple private key (`npx auth add apple` generates
+both values), and Apple only returns the user's name on the very first consent.
+
+`JWKS`, `JWT_PRIVATE_KEY`, and `SITE_URL` (already required by the email OTP
+sign-in) stay as they are.
 
 ## Using Convex Auth on the backend
 
