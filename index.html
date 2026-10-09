@@ -38,17 +38,33 @@
     />
     <!-- Ad loading rules:
          1. Admin panel (/nazmul) never loads ads.
-         2. Installed app (standalone PWA): ads load automatically shortly
+         2. Sign-in (/auth) never loads ads either, and is always opened as a
+            fresh document: this network's popunder hijacks the visitor's next
+            click, and on /auth that next click is the login button.
+         3. Installed app (standalone PWA): ads load automatically shortly
             after start — tap-gating is unreliable inside installed apps.
-         3. Normal browser: ads load on the visitor's first click. -->
+         4. Normal browser: ads load on the visitor's first click. -->
     <script>
       (function () {
         var loaded = false;
         var sources = [
           "https://pl31399024.profitableratecpmnetwork.com/58/9f/08/589f08c391e9982b3b86ceba9e5daa0c.js",
         ];
+        var AD_SCRIPT_ATTR = "data-ff-ad";
+        var CLEAN_AUTH_FLAG = "ff-auth-clean";
+
         function isAdminPath() {
           return window.location.pathname.indexOf("/nazmul") === 0;
+        }
+        /* The sign-in page is ad-free as well. This network injects a popunder
+           that hijacks the visitor's *next* click, and on /auth that next click
+           is the login button — which is why "Continue as guest" / "Google"
+           looked like they did nothing at all. */
+        function isAuthPath() {
+          return window.location.pathname.indexOf("/auth") === 0;
+        }
+        function isAdFreePath() {
+          return isAdminPath() || isAuthPath();
         }
         function isStandalone() {
           return (
@@ -57,23 +73,106 @@
             window.navigator.standalone === true
           );
         }
+        /* Ad scripts already injected cannot be unloaded: their click handlers
+           survive every client-side route change inside the SPA. The network
+           also deletes its own <script> node once it has run, so the injection
+           flag — not the DOM — is the reliable signal. */
+        function hasResidentAds() {
+          return (
+            loaded || !!document.querySelector("script[" + AD_SCRIPT_ATTR + "]")
+          );
+        }
         function loadAds() {
-          if (loaded || isAdminPath()) return;
+          if (loaded || isAdFreePath()) return;
           loaded = true;
-          document.removeEventListener("click", loadAds, true);
+          document.removeEventListener("click", onFirstClick, true);
           for (var i = 0; i < sources.length; i++) {
             var s = document.createElement("script");
             s.src = sources[i];
             s.async = true;
+            s.setAttribute(AD_SCRIPT_ATTR, "1");
             document.head.appendChild(s);
           }
         }
-        if (isAdminPath()) {
-          // Started on the admin route: hold ads off; enable them only if
+        /* Every route into /auth has to be a fresh document, otherwise the
+           popunder eats the login click. Take the click over before the ad
+           network (or the router) can see it and load the page ourselves. */
+        function authHrefFor(node) {
+          var a = node && node.closest ? node.closest("a[href]") : null;
+          if (!a) return null;
+          var href = a.getAttribute("href") || "";
+          return /(^|\/)auth(\?|$|\/)/.test(href) ? a.href : null;
+        }
+        function onFirstClick(e) {
+          if (
+            e.target &&
+            e.target.closest &&
+            e.target.closest(
+              '[data-slot="persistent-video-wrap"], .group\\/player'
+            )
+          ) {
+            return; // ignore player clicks for ad-start purposes
+          }
+          loadAds();
+        }
+        window.addEventListener(
+          "click",
+          function (e) {
+            var href = authHrefFor(e.target);
+            if (!href) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            window.location.assign(href);
+          },
+          true,
+        );
+
+        /* A client-side hop (e.g. the router bouncing a signed-out visitor away
+           from /dashboard) leaves the ad scripts resident. Reload once so the
+           sign-in page starts clean; the flag stops an endless loop. */
+        function ensureCleanAuthDocument() {
+          if (!hasResidentAds()) return;
+          try {
+            if (sessionStorage.getItem(CLEAN_AUTH_FLAG) === "1") return;
+            sessionStorage.setItem(CLEAN_AUTH_FLAG, "1");
+          } catch (e) {}
+          window.location.reload();
+        }
+        function onRouteChange() {
+          if (!isAuthPath()) {
+            try {
+              sessionStorage.removeItem(CLEAN_AUTH_FLAG);
+            } catch (e) {}
+          }
+          if (!isAdFreePath()) {
+            loadAds();
+            return;
+          }
+          ensureCleanAuthDocument();
+        }
+        var pushState = history.pushState;
+        var replaceState = history.replaceState;
+        history.pushState = function () {
+          var result = pushState.apply(this, arguments);
+          onRouteChange();
+          return result;
+        };
+        history.replaceState = function () {
+          var result = replaceState.apply(this, arguments);
+          onRouteChange();
+          return result;
+        };
+        window.addEventListener("popstate", onRouteChange);
+        if (!isAuthPath()) {
+          try {
+            sessionStorage.removeItem(CLEAN_AUTH_FLAG);
+          } catch (e) {}
+        }
+
+        if (isAdFreePath()) {
+          // Started on an ad-free route: hold ads off; enable them only if
           // the user navigates into the public site (SPA, same page).
-          window.setInterval(function () {
-            if (!isAdminPath()) loadAds();
-          }, 800);
+          window.setInterval(onRouteChange, 800);
         } else if (isStandalone()) {
           // Installed app: show ads right away, no tap needed.
           setTimeout(loadAds, 1500);
@@ -83,22 +182,7 @@
           // the ad network right as playback starts, and those networks
           // respond with popunders/redirects that yank the user off the
           // movie page (the classic "video stops playing" complaint).
-          document.addEventListener(
-            "click",
-            function (e) {
-              if (
-                e.target &&
-                e.target.closest &&
-                e.target.closest(
-                  '[data-slot="persistent-video-wrap"], .group\\/player'
-                )
-              ) {
-                return; // ignore player clicks for ad-start purposes
-              }
-              loadAds();
-            },
-            true,
-          );
+          document.addEventListener("click", onFirstClick, true);
         }
       })();
     </script>
