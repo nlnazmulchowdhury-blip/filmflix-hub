@@ -1,4 +1,5 @@
 import { useMiniPlayer } from "@/components/mini-player-context";
+import { vidsrcEmbedUrl } from "@/lib/vidsrc";
 import {
   Captions,
   ChevronLeft,
@@ -14,6 +15,7 @@ import {
   Repeat,
   RotateCcw,
   RotateCw,
+  Server,
   Settings,
   Share2,
   Volume1,
@@ -42,12 +44,24 @@ export default function PlayerStage({
   title,
   posterUrl,
   backdropUrl,
+  imdbId,
+  tmdbId,
+  kind,
+  season,
+  episode,
 }: {
   movieId: string;
   videoUrl: string;
   title: string;
   posterUrl?: string | null;
   backdropUrl?: string | null;
+  /** External IDs used to build the VidSrc "Server 1" embed URL. */
+  imdbId?: string | null;
+  tmdbId?: string | null;
+  kind?: "movie" | "series" | null;
+  /** Season/episode for series embeds (defaults to 1/1). */
+  season?: number;
+  episode?: number;
 }) {
   const {
     movie,
@@ -108,6 +122,39 @@ export default function PlayerStage({
   const qualities = movie?.qualities ?? [];
   const subtitles = movie?.subtitles ?? [];
 
+  /* -------- Playback server: stored file vs VidSrc "Server 1" -------- */
+  const vidsrcUrl = vidsrcEmbedUrl({ imdbId, tmdbId, kind, season, episode });
+  const hasNativeSource =
+    Boolean(videoUrl) || dubs.length > 0 || qualities.length > 0;
+  /* Default to Server 1 only when there is no stored file to play — so the
+     API-backed embed auto-plays for catalog entries without a local source,
+     while existing files keep their native player (quality/dub/subtitles). */
+  const [server, setServer] = useState<"original" | "vidsrc">(
+    vidsrcUrl && !videoUrl ? "vidsrc" : "original",
+  );
+  const [serverOpen, setServerOpen] = useState(false);
+  const usingVidSrc = server === "vidsrc" && Boolean(vidsrcUrl);
+  const servers: { key: string; label: string; sub?: string }[] = [];
+  if (vidsrcUrl)
+    servers.push({ key: "vidsrc", label: "Server 1", sub: "VidSrc · vidsrc.to" });
+  if (hasNativeSource)
+    servers.push({
+      key: "original",
+      label: vidsrcUrl ? "Server 2" : "Original",
+      sub: "This site's file",
+    });
+  const selectServer = (key: string) => {
+    setServer(key === "vidsrc" ? "vidsrc" : "original");
+    bumpControlsActivity();
+  };
+
+  /* When Server 1 (iframe) takes over, pause the native file so the two
+     never output audio at once. */
+  useEffect(() => {
+    if (usingVidSrc && playing) controls.pause();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usingVidSrc, playing]);
+
   const isHost = isActive && mode === "inline";
 
   /* Register this stage as the portal slot whenever the host container
@@ -136,8 +183,8 @@ export default function PlayerStage({
   /* Auto-hide lives in the provider (shared with the mini card). Here we
      only hold it open while a menu is open. */
   useEffect(() => {
-    setControlsHold(langOpen || settingsOpen);
-  }, [langOpen, settingsOpen, setControlsHold]);
+    setControlsHold(langOpen || settingsOpen || serverOpen);
+  }, [langOpen, settingsOpen, serverOpen, setControlsHold]);
 
   /* Native pointerleave on the whole player box (video + control bar):
      when the mouse leaves the player, hide the controls immediately.
@@ -395,6 +442,7 @@ export default function PlayerStage({
         if (!(e.target as HTMLElement).closest("[data-player-menu]")) {
           setLangOpen(false);
           setSettingsOpen(false);
+          setServerOpen(false);
           setSettingsView("main");
         }
       }}
@@ -430,6 +478,43 @@ export default function PlayerStage({
             {movie.title}
           </span>
         </button>
+      )}
+
+      {/* VidSrc "Server 1" — full-cover iframe over the native stage. */}
+      {usingVidSrc && vidsrcUrl && (
+        <div className="absolute inset-0 z-[60] bg-black">
+          <iframe
+            src={vidsrcUrl}
+            title={`${title} — Server 1`}
+            className="absolute inset-0 size-full border-0"
+            allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
+            allowFullScreen
+            referrerPolicy="origin"
+          />
+          {/* Floating top strip — the iframe covers the native control bar,
+              so Server switch + fullscreen live here. */}
+          <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-1.5 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-2 pb-8 pt-2 sm:px-3">
+            <div className="ml-auto flex items-center gap-1.5">
+              <ServerSwitcher
+                servers={servers}
+                activeKey={server}
+                onSelect={selectServer}
+                open={serverOpen}
+                setOpen={setServerOpen}
+                align="right"
+              />
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+                aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+                title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+              >
+                {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Controls — float up from the bottom edge on hover/tap. */}
@@ -647,6 +732,18 @@ export default function PlayerStage({
             </div>
           )}
 
+          {/* Playback server — switch between this site's file and VidSrc Server 1. */}
+          {vidsrcUrl && (
+            <ServerSwitcher
+              servers={servers}
+              activeKey={server}
+              onSelect={selectServer}
+              open={serverOpen}
+              setOpen={setServerOpen}
+              align="right"
+            />
+          )}
+
           {/* Settings gear: night mode, loop, rotate, captions, speed, quality. */}
           <div className="relative ml-auto" data-player-menu>
             <button
@@ -822,6 +919,76 @@ export default function PlayerStage({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ------------------------- Server switcher ------------------------- */
+
+/** Dropdown that picks the playback server (VidSrc "Server 1" vs the site's
+ *  own file). Shared by the native control bar and the VidSrc overlay strip. */
+function ServerSwitcher({
+  servers,
+  activeKey,
+  onSelect,
+  open,
+  setOpen,
+  align = "right",
+}: {
+  servers: { key: string; label: string; sub?: string }[];
+  activeKey: string;
+  onSelect: (key: string) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  align?: "left" | "right";
+}) {
+  const active = servers.find((s) => s.key === activeKey);
+  return (
+    <div className="relative" data-player-menu>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15"
+        aria-label="Playback server"
+        title="Server"
+      >
+        <Server className="size-5" />
+        <span className="hidden text-xs font-semibold min-[420px]:inline">
+          {active?.label ?? "Server"}
+        </span>
+      </button>
+      {open && (
+        <div
+          className={`absolute bottom-full z-30 mb-2 min-w-[220px] overflow-hidden rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur ${
+            align === "right" ? "right-0" : "left-0"
+          }`}
+        >
+          <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
+            Playback server
+          </p>
+          {servers.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => {
+                onSelect(s.key);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10 ${
+                s.key === activeKey ? "bg-primary/25 font-semibold text-primary" : ""
+              }`}
+            >
+              <span className="flex flex-col">
+                <span>{s.label}</span>
+                {s.sub && (
+                  <span className="text-[10px] font-normal text-white/50">{s.sub}</span>
+                )}
+              </span>
+              {s.key === activeKey && <span className="text-xs">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

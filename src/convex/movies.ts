@@ -79,6 +79,9 @@ const movieFields = {
   year: v.optional(v.number()),
   rating: v.optional(v.number()),
   kind: v.optional(v.union(v.literal("movie"), v.literal("series"))),
+  /** External IDs for the VidSrc "Server 1" embed (vidsrc.to). */
+  imdbId: v.optional(v.string()),
+  tmdbId: v.optional(v.string()),
   episodes: v.optional(v.array(episodeInput)),
   dubs: v.optional(v.array(dubInput)),
   qualities: v.optional(v.array(qualityInput)),

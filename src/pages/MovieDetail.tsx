@@ -280,6 +280,9 @@ export default function MovieDetail() {
               title={movie.title}
               posterUrl={movie.posterUrl}
               backdropUrl={movie.backdropUrl}
+              imdbId={movie.imdbId}
+              tmdbId={movie.tmdbId}
+              kind={movie.kind}
             />
 
             {/* Episode / parts playlist */}

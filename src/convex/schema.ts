@@ -57,6 +57,11 @@ const schema = defineSchema(
       year: v.optional(v.number()),
       rating: v.optional(v.number()),
       kind: v.optional(v.union(v.literal("movie"), v.literal("series"))),
+      /** External catalog IDs used to build the VidSrc "Server 1" embed
+       *  (vidsrc.to/embed/{movie|tv}/{id}). Either may be set; IMDb is
+       *  preferred when both are present. */
+      imdbId: v.optional(v.string()),
+      tmdbId: v.optional(v.string()),
       /** Extra quality renditions (480p / 720p / 1080p files). Viewers pick
        *  one in the player; playback position is kept when switching. */
       qualities: v.optional(

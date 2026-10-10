@@ -45,6 +45,8 @@ const movieSchema = z.object({
   videoUrl: z.string().optional(),
   year: z.string().optional(),
   rating: z.string().optional(),
+  imdbId: z.string().optional(),
+  tmdbId: z.string().optional(),
   episodes: z.array(episodeSchema),
   dubs: z.array(
     z.object({
@@ -116,6 +118,8 @@ export default function MovieFormDialog({
     videoUrl: "",
     year: "",
     rating: "",
+    imdbId: "",
+    tmdbId: "",
     episodes: [],
     dubs: [],
     qualities: [],
@@ -133,6 +137,8 @@ export default function MovieFormDialog({
           videoUrl: m.videoUrl ?? "",
           year: m.year?.toString() ?? "",
           rating: m.rating?.toString() ?? "",
+          imdbId: m.imdbId ?? "",
+          tmdbId: m.tmdbId ?? "",
           episodes: (m.episodes ?? []).map((e) => ({
             title: e.title,
             videoUrl: e.videoUrl,
@@ -259,6 +265,8 @@ export default function MovieFormDialog({
       categories: selectedCategories,
       year: values.year ? Number(values.year) : undefined,
       rating: values.rating ? Number(values.rating) : undefined,
+      imdbId: clean(values.imdbId ?? ""),
+      tmdbId: clean(values.tmdbId ?? ""),
       kind: values.episodes.length > 0 ? ("series" as const) : ("movie" as const),
       episodes:
         values.episodes.length > 0
@@ -366,6 +374,17 @@ export default function MovieFormDialog({
               <div className="space-y-2">
                 <Label htmlFor="rating">Rating (0–10)</Label>
                 <Input id="rating" inputMode="decimal" placeholder="8.5" {...register("rating")} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="imdbId">IMDb ID (for VidSrc Server 1)</Label>
+                <Input id="imdbId" placeholder="tt1375666" {...register("imdbId")} />
+                <p className="text-xs text-muted-foreground">
+                  Optional. Lets viewers play this title via Server 1 on the player.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tmdbId">TMDB ID (fallback)</Label>
+                <Input id="tmdbId" inputMode="numeric" placeholder="27205" {...register("tmdbId")} />
               </div>
             </div>
           </section>
