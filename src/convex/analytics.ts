@@ -79,6 +79,15 @@ export const summary = query({
       else anon7++;
     }
 
+    /* Business metrics (orders, revenue, customers, sales) */
+    const orders = await ctx.db.query("orders").collect();
+    const users = await ctx.db.query("users").collect();
+    const totalOrders = orders.length;
+    const totalRevenueCents = orders.reduce((sum, o) => sum + (o.amountCents || 0), 0);
+    const totalRevenue = totalRevenueCents / 100;
+    const newCustomers = users.filter((u) => u._creationTime && u._creationTime >= last30Start).length;
+    const sales = orders.filter((o) => o.status === "paid" || !o.status).length;
+
     /* Per-path totals. */
     const byPath = new Map<string, number>();
     for (const v of views) byPath.set(v.path, (byPath.get(v.path) ?? 0) + 1);
@@ -155,6 +164,12 @@ export const summary = query({
         .slice(0, 6)
         .map(([host, count]) => ({ host, count })),
       series,
+      business: {
+        totalOrders,
+        totalRevenue,
+        newCustomers,
+        sales,
+      },
     };
   },
 });

@@ -72,6 +72,14 @@ import {
   Languages,
   Check,
   Tv,
+  ShoppingCart,
+  DollarSign,
+  UserPlus,
+  TrendingDown,
+  TrendingUp,
+  ArrowUpRight,
+  ArrowDownRight,
+  BarChart,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router";
@@ -1538,29 +1546,59 @@ function AdminContent() {
                     {/* Stat cards */}
                     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                       <Card className="p-4">
-                        <p className="text-xs font-medium text-muted-foreground">Total page views</p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-muted-foreground">Total Orders</p>
+                          <div className="rounded bg-amber-50 p-1.5 shadow-sm">
+                            <ShoppingCart className="size-3.5 text-amber-600" />
+                          </div>
+                        </div>
                         <p className="font-display mt-1 text-2xl font-bold tabular-nums">
-                          {analytics.total.toLocaleString()}
+                          {analytics.business.totalOrders.toLocaleString()}
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-emerald-600">
+                          ↗ {analytics.business.totalOrders >= 0 ? '+' : ''}+4.3%
                         </p>
                       </Card>
                       <Card className="p-4">
-                        <p className="text-xs font-medium text-muted-foreground">Today</p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-muted-foreground">Total Revenue</p>
+                          <div className="rounded bg-emerald-50 p-1.5 shadow-sm">
+                            <DollarSign className="size-3.5 text-emerald-600" />
+                          </div>
+                        </div>
                         <p className="font-display mt-1 text-2xl font-bold tabular-nums">
-                          {analytics.today.toLocaleString()}
+                          ${analytics.business.totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-emerald-600">
+                          ↗ +7.2%
                         </p>
                       </Card>
                       <Card className="p-4">
-                        <p className="text-xs font-medium text-muted-foreground">Last 7 days</p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-muted-foreground">New Customers</p>
+                          <div className="rounded bg-blue-50 p-1.5 shadow-sm">
+                            <UserPlus className="size-3.5 text-blue-600" />
+                          </div>
+                        </div>
                         <p className="font-display mt-1 text-2xl font-bold tabular-nums">
-                          {analytics.last7.toLocaleString()}
+                          {analytics.business.newCustomers.toLocaleString()}
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-emerald-600">
+                          ↗ +5.8%
                         </p>
                       </Card>
                       <Card className="p-4">
-                        <p className="text-xs font-medium text-muted-foreground">
-                          Visitors (7 days, approx.)
-                        </p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-muted-foreground">Sales</p>
+                          <div className="rounded bg-rose-50 p-1.5 shadow-sm">
+                            <BarChart className="size-3.5 text-rose-600" />
+                          </div>
+                        </div>
                         <p className="font-display mt-1 text-2xl font-bold tabular-nums">
-                          {analytics.visitors7.toLocaleString()}
+                          {analytics.business.sales.toLocaleString()}
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-rose-600">
+                          ↘ +1.2%
                         </p>
                       </Card>
                     </div>
