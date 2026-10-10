@@ -23,6 +23,7 @@ const app = new Hono<Env>();
 app.use("*", cors({
   origin: [
     "https://film.freebuff.app",
+    "https://filmbd.pages.dev",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
   ],

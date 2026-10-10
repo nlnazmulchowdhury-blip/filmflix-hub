@@ -13,3 +13,9 @@ scripts/export/
 scripts/data-export.zip
 scripts/d1-import.sql
 dev.log
+
+# local tooling artifacts
+__pycache__/
+*.pyc
+*.log
+.dev.pid
