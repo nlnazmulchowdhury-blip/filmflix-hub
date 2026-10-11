@@ -159,9 +159,11 @@ console.log(`SQL written to scripts/d1-import.sql (${(sqlText.length / 1024).toF
 
 if (APPLY) {
   console.log("Applying to remote D1 …");
+  // The SQL file lives next to this script, so run wrangler from the repo root
+  // with that explicit path — running from worker/ pointed at a missing file.
   execSync(
-    "npx wrangler d1 execute filmflix-hub --remote --file=./d1-import.sql -y",
-    { cwd: path.join(here, "..", "worker"), stdio: "inherit" },
+    "npx wrangler d1 execute filmflix-hub --remote --file=./scripts/d1-import.sql -y",
+    { cwd: path.join(here, ".."), stdio: "inherit" },
   );
   console.log("Done.");
 } else {
