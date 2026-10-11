@@ -324,14 +324,14 @@ export default function MovieDetail() {
           <div className="space-y-10">
             {/* Persistent player stage */}
             <PlayerStage
-              movieId={movie._id}
-              videoUrl={movie.videoUrl ?? ""}
-              title={movie.title}
-              posterUrl={movie.posterUrl}
-              backdropUrl={movie.backdropUrl}
-              imdbId={(isVidSrc ? vidsrcImdbId : movie.imdbId) || undefined}
-              tmdbId={!isVidSrc ? movie.tmdbId : undefined}
-              kind={(isVidSrc ? (externalState.kind || "movie") : movie.kind) as any}
+              movieId={(externalMovie as any)._id}
+              videoUrl={(externalMovie as any).videoUrl ?? ""}
+              title={externalMovie.title}
+              posterUrl={externalMovie.posterUrl}
+              backdropUrl={externalMovie.backdropUrl}
+              imdbId={(isVidSrc ? vidsrcImdbId : (externalMovie as any).imdbId) || undefined}
+              tmdbId={!isVidSrc ? (externalMovie as any).tmdbId : undefined}
+              kind={(isVidSrc ? (externalState.kind || "movie") : (externalMovie as any).kind) as any}
             />
 
             {/* Episode / parts playlist */}
