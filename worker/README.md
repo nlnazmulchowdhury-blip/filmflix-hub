@@ -44,13 +44,37 @@ npx wrangler secret put ELEVENLABS_API_KEY    # AI ডাবিং (ঐচ্ছ
 
 ইমেইল OTP আগের মতোই ফ্রিবাফ সার্ভিস দিয়ে যায় — নতুন কিছু লাগে না।
 
-## ধাপ ৩ — ডিপ্লয়
+## ধাপ ৩ — ডিপ্লয় (অটো, Workers Builds) — ✅ সংযুক্ত
+
+`main`-এ push করলেই Cloudflare নিজে থেকে deploy করে। Dashboard:
+Workers & Pages → **filmflix-hub** → Settings → Builds
+
+| সেটিং | মান |
+| --- | --- |
+| Git repository | `nlnazmulchowdhury-blip/filmflix-hub` |
+| Production branch | `main` |
+| Build command | `npm ci` (worker `hono`/`hono/cors` import করে; root `package.json`-এ আছে) |
+| Deploy command | `npx wrangler@4 deploy` |
+| **Root directory** | **খালি (repo root)** — নিচের নোট দেখুন |
+| Build watch paths | `worker/**`, `wrangler.jsonc` |
+
+**Root directory কেন খালি:** root-এর `wrangler.jsonc` name `filmflix-hub` দেয় — ওটাই লাইভ সার্ভিস।
+`worker/` দিলে wrangler `worker/wrangler.jsonc` ব্যবহার করবে, যার name `filmflix-api` — অর্থাৎ
+ভিন্ন Worker-এ deploy হয়ে যাবে।
+
+হাতে দরকার হলে (repo root থেকেই, যেন root config পড়া হয়):
 
 ```bash
-cd worker
-npx wrangler deploy
-# → https://filmflix-api.<আপনার-সাবডোমেইন>.workers.dev
+npx wrangler deploy          # → https://filmflix-hub.<আপনার-সাবডোমেইন>.workers.dev
+npx wrangler deploy --dry-run --outdir /tmp/wf-dry   # build যাচাই, কিছু publish না করে
 ```
+
+Secrets (`ADMIN_ACCESS_CODE`, `ELEVENLABS_API_KEY`, `RESEND_API_KEY`), D1 binding আর
+cron triggers Cloudflare-এ থাকে — build সেগুলো স্পর্শ করে না।
+
+> তিনটি deploy আলাদা চলে: **frontend** = Pages project `filmbd` (Git-connected, push-এ অটো),
+> **এই Worker** = Workers Builds (push-এ অটো), **backend functions** = Convex
+> (`.github/workflows/deploy-convex.yml`, `CONVEX_DEPLOY_KEY` secret দিয়ে)।
 
 ## ধাপ ৪ — ফ্রন্টএন্ড সুইচ (ফিরে আসার পথ খোলা)
 
