@@ -68,14 +68,14 @@ export default function MovieDetail() {
   /* Watchlist: saved-for-later toggle. */
   const inWatchlist = useQuery(
     api.watchlist.hasMovie,
-    movie ? { movieId: movie._id } : "skip",
+    !isVidSrc && movie ? { movieId: movie._id } : "skip",
   );
   const addToWatchlist = useMutation(api.watchlist.add);
   const removeFromWatchlist = useMutation(api.watchlist.remove);
   const [isTogglingWatchlist, setIsTogglingWatchlist] = useState(false);
 
   const toggleWatchlist = async () => {
-    if (!movie) return;
+    if (!movie || isVidSrc) return;
     setIsTogglingWatchlist(true);
     try {
       if (inWatchlist) {
@@ -282,7 +282,7 @@ export default function MovieDetail() {
         imdbId: vidsrcImdbId,
         tmdbId: null,
       }
-    : movie;
+    : (movie as any);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
