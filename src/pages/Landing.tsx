@@ -420,9 +420,9 @@ export default function Landing() {
                 <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
               ))}
             </div>
-          ) : catalog.length === 0 && externalLoading ? (
-            /* Searching, nothing local yet, external hits still resolving —
-               keep the grid shape instead of flashing "no match". */
+          ) : catalog.length === 0 && trimmedQuery.length >= 2 && (externalLoading || !external || external.q !== trimmedQuery) ? (
+            /* Searching or waiting for external results for current query —
+               avoid flashing "nothing matched" during debounce/fetch. */
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
               {Array.from({ length: 8 }).map((_, i) => (
                 <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
