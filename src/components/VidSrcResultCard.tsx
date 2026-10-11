@@ -36,6 +36,12 @@ export default function VidSrcResultCard({
       <button
         type="button"
         onClick={() => onPlay(hit)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onPlay(hit);
+          }
+        }}
         className="group block w-full text-left focus-visible:outline-none"
         aria-label={`Play ${hit.title}`}
       >
