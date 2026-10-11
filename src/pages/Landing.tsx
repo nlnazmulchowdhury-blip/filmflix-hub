@@ -83,8 +83,9 @@ export default function Landing() {
       return;
     }
     let cancelled = false;
-    setExternalLoading(true);
     const t = setTimeout(() => {
+      if (cancelled) return;
+      setExternalLoading(true);
       searchExternal({ q: trimmedQuery })
         .then((hits) => {
           if (!cancelled) setExternal({ q: trimmedQuery, hits });
@@ -95,7 +96,7 @@ export default function Landing() {
         .finally(() => {
           if (!cancelled) setExternalLoading(false);
         });
-    }, 450);
+    }, 600);
     return () => {
       cancelled = true;
       clearTimeout(t);
