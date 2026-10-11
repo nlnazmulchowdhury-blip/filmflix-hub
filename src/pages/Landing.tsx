@@ -103,9 +103,15 @@ export default function Landing() {
   }, [trimmedQuery, searchExternal]);
 
   const playExternal = (hit: VidSrcHit) => {
-    const url = vidsrcEmbedUrl({ imdbId: hit.imdbId, kind: hit.kind });
-    if (!url) return;
-    window.open(url, "_blank", "noopener,noreferrer");
+    navigate(`/movie/vidsrc-${hit.imdbId}`, {
+      state: {
+        external: true,
+        imdbId: hit.imdbId,
+        kind: hit.kind,
+        title: hit.title,
+        posterUrl: hit.posterUrl,
+      },
+    });
   };
 
   /** Distinct display categories (Hollywood, Bengali, Anime, …): names
