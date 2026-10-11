@@ -7,8 +7,6 @@ import HelpCenterWidget from "@/components/HelpCenterWidget";
 import InstallPrompt from "@/components/InstallPrompt";
 import { ThemeProvider } from "next-themes";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
-import { ConvexAuthProvider } from "@convex-dev/auth/react";
-import { ConvexReactClient } from "convex/react";
 import React, { StrictMode, useEffect, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router";
@@ -114,32 +112,7 @@ class RootErrorBoundary extends React.Component<
   }
 }
 
-// VITE_CONVEX_URL is baked into the bundle at build time (.env.local in dev,
-// the committed .env.production on a hosting build). If it never makes it in,
-// constructing the client throws at module scope: React never mounts and the
-// page stays a blank dark rectangle. Paint the reason into #root first so a
-// misconfigured deploy is diagnosable instead of looking like a dead site.
-const convexUrl = import.meta.env.VITE_CONVEX_URL as string | undefined;
-if (!convexUrl || !/^https?:\/\//.test(convexUrl)) {
-  const root = document.getElementById("root");
-  if (root) {
-    root.innerHTML = [
-      '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;font-family:system-ui,sans-serif">',
-      '<div style="max-width:32rem;text-align:center">',
-      '<p style="font-weight:700;font-size:1rem;margin:0 0 8px">VITE_CONVEX_URL is missing from this build</p>',
-      '<p style="font-size:13px;line-height:1.6;opacity:.75;margin:0">The app was built without a Convex deployment URL, so it cannot start. Set <code>VITE_CONVEX_URL</code> in <code>.env.local</code> (local dev) or <code>.env.production</code> (hosting build), then rebuild.</p>',
-      '</div></div>',
-    ].join("");
-  }
-  throw new Error(
-    `VITE_CONVEX_URL is missing or invalid (got ${JSON.stringify(convexUrl)}). ` +
-      "Set it in .env.local for local dev or .env.production for hosting builds.",
-  );
-}
-const convex = new ConvexReactClient(convexUrl);
-
-
-
+// VITE_CONVEX_URL is retired — the backend is the Cloudflare Worker (D1).
 function RouteSyncer() {
   const location = useLocation();
   useEffect(() => {
@@ -178,21 +151,20 @@ createRoot(document.getElementById("root")!).render(
       <ToolbarErrorBoundary>
         <VlyToolbar />
       </ToolbarErrorBoundary>
-      <ConvexAuthProvider client={convex}>
-        {/* Light/dark theme state; attribute mode drives the .dark class on
-            <html>. The pre-paint script in index.html seeds it before React. */}
-        <ThemeProvider attribute="class" storageKey="ff-theme" defaultTheme="dark" enableSystem={false}>
-        <BrowserRouter>
-          <MiniPlayerProvider>
-          <RouteSyncer />
-          <AnalyticsTracker />
-          <InstallPrompt />
-          {/* Floating help-center chat — hidden on the admin route */}
-          <HelpCenterRouteGate />
-          <Suspense fallback={<RouteLoading />}>
-            <PageFade>
-            <Routes>
-              <Route path="/" element={<Landing />} />
+      {/* Light/dark theme state; attribute mode drives the .dark class on
+          <html>. The pre-paint script in index.html seeds it before React. */}
+      <ThemeProvider attribute="class" storageKey="ff-theme" defaultTheme="dark" enableSystem={false}>
+      <BrowserRouter>
+        <MiniPlayerProvider>
+        <RouteSyncer />
+        <AnalyticsTracker />
+        <InstallPrompt />
+        {/* Floating help-center chat — hidden on the admin route */}
+        <HelpCenterRouteGate />
+        <Suspense fallback={<RouteLoading />}>
+          <PageFade>
+          <Routes>
+            <Route path="/" element={<Landing />} />
               <Route
                 path="/auth"
                 element={<AuthPage redirectAfterAuth="/dashboard" />}
@@ -225,13 +197,12 @@ createRoot(document.getElementById("root")!).render(
               />
               <Route path="*" element={<NotFound />} />
             </Routes>
-            </PageFade>
+          </PageFade>
           </Suspense>
-          </MiniPlayerProvider>
+        </MiniPlayerProvider>
         </BrowserRouter>
         <Toaster />
-        </ThemeProvider>
-      </ConvexAuthProvider>
+      </ThemeProvider>
     </RootErrorBoundary>
   </StrictMode>,
 );

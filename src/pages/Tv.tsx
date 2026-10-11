@@ -155,7 +155,7 @@ export default function TvPage() {
   const filtered = useMemo(() => {
     if (!channels) return null;
     const q = search.trim().toLowerCase();
-    return channels.filter((c) => {
+    return channels.filter((c: any) => {
       if (category !== "All" && !(c.categories ?? []).includes(category))
         return false;
       if (!q) return true;
@@ -166,7 +166,7 @@ export default function TvPage() {
   // Auto-select the first channel so the big player is never empty.
   useEffect(() => {
     if (!selected && filtered && filtered.length > 0) {
-      const first = filtered.find((c) => isDirectStream(c.streamUrl));
+      const first = filtered.find((c: any) => isDirectStream(c.streamUrl));
       if (first) setSelected(first);
     }
   }, [filtered, selected]);
@@ -325,7 +325,7 @@ export default function TvPage() {
                   </p>
                 </div>
               ) : (
-                filtered.map((c) => {
+                filtered.map((c: any) => {
                   const active = selected?._id === c._id;
                   return (
                     <button

@@ -45,7 +45,7 @@ export default function Dashboard() {
   const removeFromWatchlist = useMutation(api.watchlist.remove);
 
   // A plan only counts as active once its order is actually paid.
-  const paidPlan = myOrders?.find((o) => o.status === "paid")?.plan ?? null;
+  const paidPlan = myOrders?.find((o: any) => o.status === "paid")?.plan ?? null;
   const activePlan =
     paidPlan === "premiere" ? "Premiere" : paidPlan === "crew" ? "Crew" : null;
 
@@ -325,7 +325,7 @@ export default function Dashboard() {
               <CardDescription>Movies you added to the catalog.</CardDescription>
             </CardHeader>
             <div className="flex flex-wrap gap-3 p-5">
-              {contributions.map((m) => (
+              {contributions.map((m: any) => (
                 <Link
                   key={m._id}
                   to={`/movie/${m._id}`}

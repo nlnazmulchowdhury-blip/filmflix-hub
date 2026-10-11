@@ -124,12 +124,12 @@ export default function Landing() {
     if (!movies) return null;
     let rows = movies;
     if (category)
-      rows = rows.filter((m) => movieCategoryNames(m).includes(category));
+      rows = rows.filter((m: any) => movieCategoryNames(m).includes(category));
     const raw = query.trim();
     if (raw) {
       const tokens = normalizeText(raw).split(" ").filter(Boolean);
       if (tokens.length > 0) {
-        rows = rows.filter((m) => {
+        rows = rows.filter((m: any) => {
           const hay = searchableText(m);
           // Every word in the query must match somewhere (order doesn't matter).
           return tokens.every((t) => hay.includes(t));
@@ -445,7 +445,7 @@ export default function Landing() {
             </Card>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-              {localResults.map((m, i) => (
+              {localResults.map((m: any, i: any) => (
                 <MovieCard key={m._id} movie={m} index={i} />
               ))}
               {/* External hits sit in the same grid, styled identically, so a

@@ -1,13 +1,10 @@
 import { Loader2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
-import { useMutation } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
 import { toast } from "sonner";
 
 /**
  * "Upload" button for the admin movie form: opens a file picker, streams the
- * chosen file straight into Convex file storage (admin-only, no size limit)
+ * chosen file into the Worker's R2-backed /uploads endpoints (admin-only)
  * and hands the permanent public URL to the form field.
  */
 export default function UploadFileButton({
@@ -21,8 +18,6 @@ export default function UploadFileButton({
   label?: string;
   ariaLabel?: string;
 }) {
-  const createUploadUrl = useMutation(api.videoUpload.createUploadUrl);
-  const finishUpload = useMutation(api.videoUpload.finishUpload);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -34,18 +29,25 @@ export default function UploadFileButton({
   const handleFile = async (file: File) => {
     setBusy(true);
     try {
-      const postUrl = await createUploadUrl();
-      const res = await fetch(postUrl, {
-        method: "POST",
+      const res1 = await fetch(`/uploads/url`, { method: "POST" });
+      const target = await res1.json();
+      if (!res1.ok) throw new Error(target?.error ?? `Upload setup failed (${res1.status})`);
+
+      const res2 = await fetch(`/uploads/object/${target.storageId}`, {
+        method: "PUT",
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file,
       });
-      if (!res.ok) {
-        throw new Error(`Upload failed (${res.status})`);
-      }
-      const { storageId } = (await res.json()) as { storageId: string };
-      const url = await finishUpload({ storageId: storageId as Id<"_storage"> });
-      onUploaded(url);
+      if (!res2.ok) throw new Error(`Upload failed (${res2.status})`);
+
+      const res3 = await fetch(`/uploads/finish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storageId: target.storageId }),
+      });
+      const finished = await res3.json();
+      if (!res3.ok) throw new Error(finished?.error ?? `Upload finalize failed (${res3.status})`);
+      onUploaded(finished.url);
       toast.success(`Uploaded ${file.name}`);
     } catch (err) {
       toast.error(

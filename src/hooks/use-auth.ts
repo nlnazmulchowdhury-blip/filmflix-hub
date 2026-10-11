@@ -1,20 +1,13 @@
-import { api } from "@/convex/_generated/api";
-import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth, useQuery } from "convex/react";
+"use client";
 
-export function useAuth() {
-  const { isLoading: isAuthLoading, isAuthenticated } = useConvexAuth();
-  const user = useQuery(api.users.currentUser);
-  const { signIn, signOut } = useAuthActions();
-
-  // Derive isLoading directly from the dependencies instead of managing separate state
-  const isLoading = isAuthLoading || user === undefined;
-
-  return {
-    isLoading,
-    isAuthenticated,
-    user,
-    signIn,
-    signOut,
-  };
-}
+/**
+ * useAuth — app-wide auth hook.
+ *
+ * Backend is the Worker now (@/hooks/use-auth-cf: email-OTP + guest), but
+ * this file keeps the exact same external contract so all pages stay
+ * untouched. The Convex-era signIn(provider, formData) signature is kept:
+ * Auth.tsx calls signIn("email-otp", formData) and OtpSentSignal-driven
+ * flow control is preserved by useAuthCf.
+ */
+export { useAuthCf as useAuth } from "@/hooks/use-auth-cf";
+export { OtpSentSignal } from "@/hooks/use-auth-cf";

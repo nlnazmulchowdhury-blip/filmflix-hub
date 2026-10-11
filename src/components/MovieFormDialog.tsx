@@ -139,24 +139,24 @@ export default function MovieFormDialog({
           rating: m.rating?.toString() ?? "",
           imdbId: m.imdbId ?? "",
           tmdbId: m.tmdbId ?? "",
-          episodes: (m.episodes ?? []).map((e) => ({
+          episodes: (m.episodes ?? []).map((e: any) => ({
             title: e.title,
             videoUrl: e.videoUrl,
             durationSec: e.durationSec?.toString() ?? "",
           })),
-          dubs: (m.dubs ?? []).map((d) => ({
+          dubs: (m.dubs ?? []).map((d: any) => ({
             label: d.label,
             videoUrl: d.videoUrl,
           })),
-          qualities: (m.qualities ?? []).map((q) => ({
+          qualities: (m.qualities ?? []).map((q: any) => ({
             label: q.label,
             videoUrl: q.videoUrl,
           })),
-          downloads: (m.downloads ?? []).map((d) => ({
+          downloads: (m.downloads ?? []).map((d: any) => ({
             label: d.label,
             url: d.url,
           })),
-          subtitles: (m.subtitles ?? []).map((s) => ({
+          subtitles: (m.subtitles ?? []).map((s: any) => ({
             label: s.label,
             url: s.url,
           })),

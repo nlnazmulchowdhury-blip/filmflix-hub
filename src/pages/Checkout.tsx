@@ -50,7 +50,7 @@ export default function Checkout() {
 
   // Only paid orders count as an active plan.
   const hasPaidPlan = (planId: string) =>
-    orders?.some((o) => o.plan === planId && o.status === "paid") ?? false;
+    orders?.some((o: any) => o.plan === planId && o.status === "paid") ?? false;
 
   const handleCheckout = async (planId: string) => {
     setIsCheckingOut(planId);

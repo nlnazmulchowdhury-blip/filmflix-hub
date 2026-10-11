@@ -148,7 +148,7 @@ export default function MovieDetail() {
               },
             ]
           : []),
-        ...(movie.episodes ?? []).map((e, i) => ({
+        ...(movie.episodes ?? []).map((e: any, i: any) => ({
           key: `ep-${i}`,
           title: e.title,
           videoUrl: e.videoUrl,
@@ -160,7 +160,7 @@ export default function MovieDetail() {
   /* Download menu: admin-added per-quality links. Falls back to the main
      video URL when no explicit download links exist. */
   const downloadOptions = movie
-    ? (movie.downloads ?? []).filter((d) => d.url)
+    ? (movie.downloads ?? []).filter((d: any) => d.url)
     : [];
 
   /* Clicking a quality must start a file download, not open a tab that plays
@@ -424,7 +424,7 @@ export default function MovieDetail() {
                       <DropdownMenuContent align="start" className="w-48">
                         <DropdownMenuLabel>কোয়ালিটি বাছুন</DropdownMenuLabel>
                         <DropdownMenuSeparator />
-                        {downloadOptions.map((d) => (
+                        {downloadOptions.map((d: any) => (
                           <DropdownMenuItem key={d.label + d.url} asChild>
                             <a
                               href={downloadFileUrl(

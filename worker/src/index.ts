@@ -6,14 +6,23 @@ import { probeUrl, collectMovieUrls, collectTvUrls } from "./linkcheck";
 import { resolveRedirect, isShortLink } from "./shortlinks";
 import { dubbingRoutes } from "./dubbing";
 import { sendOtpEmail } from "./email";
+import { vidsrcRoutes } from "./vidsrc";
+import { supportRoutes } from "./support";
+import { tvCategoryRoutes } from "./tvCategories";
+import { uploadRoutes } from "./uploads";
 
 export interface Bindings {
   DB: D1Database;
-  DUBS: R2Bucket;
+  /* R2: optional — until the bucket is enabled, the /uploads routes degrade. */
+  DUBS?: R2Bucket;
+  UPLOADS?: R2Bucket;
   ADMIN_ACCESS_CODE?: string;
   ELEVENLABS_API_KEY?: string;
   RESEND_API_KEY?: string;
   OTP_FROM_NAME?: string;
+  MOVIE_API_BASE?: string;
+  MOVIE_API_KEY?: string;
+  MOVIEBOX_WEB_PROXY?: string;
 }
 
 export type Env = { Bindings: Bindings } & { Variables: { userId?: string; role?: string | null } };
@@ -27,7 +36,7 @@ app.use("*", cors({
     "http://localhost:5173",
     "http://127.0.0.1:5173",
   ],
-  allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+  allowMethods: ["GET", "POST", "PATCH", "DELETE", "PUT", "OPTIONS"],
   allowHeaders: ["Content-Type", "Authorization"],
   credentials: true,
   maxAge: 86400,
@@ -912,6 +921,20 @@ async function runLinkCheck(db: D1Database) {
 /* ------------------------------------------------------------------ */
 
 app.route("/dubbing", dubbingRoutes);
+
+/* ------------------------------------------------------------------ */
+/* vidsrc (IMDb title search for the Landing "Server 1" flow)          */
+/* ------------------------------------------------------------------ */
+
+app.route("/vidsrc", vidsrcRoutes);
+
+/* ------------------------------------------------------------------ */
+/* help-center chat + tv category chips                                */
+/* ------------------------------------------------------------------ */
+
+app.route("/support", supportRoutes);
+app.route("/tv/categories", tvCategoryRoutes);
+app.route("/uploads", uploadRoutes);
 
 /* ------------------------------------------------------------------ */
 /* cron: link health every 6h                                          */

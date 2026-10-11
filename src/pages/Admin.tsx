@@ -155,7 +155,7 @@ function AdminContent() {
   }, [thread?.length, activeThread]);
 
   useEffect(() => {
-    if (activeThread && (thread ?? []).some((m) => m.sender === "user")) {
+    if (activeThread && (thread ?? []).some((m: any) => m.sender === "user")) {
       markSupportSeen({ userId: activeThread as Id<"users"> });
     }
   }, [activeThread, thread, markSupportSeen]);
@@ -499,7 +499,7 @@ function AdminContent() {
         .trim();
     const tokens = norm(raw).split(" ").filter(Boolean);
     if (tokens.length === 0) return movies;
-    return movies.filter((m) => {
+    return movies.filter((m: any) => {
       const hay = norm(
         [
           m.title,
@@ -545,7 +545,7 @@ function AdminContent() {
 
   const handleDeleteCategory = async () => {
     if (!deletingCategory) return;
-    const row = (allCategories ?? []).find((c) => c.name === deletingCategory.name);
+    const row = (allCategories ?? []).find((c: any) => c.name === deletingCategory.name);
     if (!row) {
       toast.error("Category not found");
       setDeletingCategory(null);
@@ -847,7 +847,7 @@ function AdminContent() {
                     <div className="flex flex-wrap gap-2">
                       {categories.map((c) => {
                         const count = (movies ?? []).filter(
-                          (m) => movieCategoryNames(m).includes(c),
+                          (m: any) => movieCategoryNames(m).includes(c),
                         ).length;
                         return (
                           <span
@@ -949,7 +949,7 @@ function AdminContent() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredMovies.map((m) => (
+                        {filteredMovies.map((m: any) => (
                           <TableRow key={m._id}>
                             <TableCell>
                               <div className="h-14 w-10 overflow-hidden rounded-md bg-muted">
@@ -1097,8 +1097,8 @@ function AdminContent() {
                     >
                       <option value="">Pick a movie…</option>
                       {(movies ?? [])
-                        .filter((m) => m.videoUrl)
-                        .map((m) => (
+                        .filter((m: any) => m.videoUrl)
+                        .map((m: any) => (
                           <option key={m._id} value={m._id}>
                             {m.title}
                           </option>
@@ -1129,7 +1129,7 @@ function AdminContent() {
 
                   {(dubJobs ?? []).length > 0 && (
                     <div className="mt-3 space-y-2">
-                      {dubJobs!.map((j) => (
+                      {dubJobs!.map((j: any) => (
                         <div
                           key={j._id}
                           className="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 bg-secondary/30 px-3 py-2 text-xs"
@@ -1296,7 +1296,7 @@ function AdminContent() {
                     </CardContent>
                   ) : (
                     <div className="divide-y divide-border/50">
-                      {allComments.map((c) => (
+                      {allComments.map((c: any) => (
                         <div key={c._id} className="flex items-start gap-3 p-4">
                           <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary">
                             {(c.authorName ?? "M").slice(0, 1).toUpperCase()}
@@ -1367,7 +1367,7 @@ function AdminContent() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {users.map((u) => (
+                        {users.map((u: any) => (
                           <TableRow key={u._id}>
                             <TableCell>
                               <p className="font-medium">
@@ -1475,7 +1475,7 @@ function AdminContent() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {allOrders.map((o) => (
+                        {allOrders.map((o: any) => (
                           <TableRow key={o._id}>
                             <TableCell className="max-w-[40vw] font-medium">
                               <span className="block truncate">{o.memberName}</span>
@@ -1607,8 +1607,8 @@ function AdminContent() {
                     <Card className="p-4">
                       <p className="font-display text-sm font-semibold">Views — last 14 days</p>
                       <div className="mt-4 flex h-36 items-end gap-1.5">
-                        {analytics.series.map((d) => {
-                          const max = Math.max(...analytics.series.map((x) => x.views), 1);
+                        {analytics.series.map((d: any) => {
+                          const max = Math.max(...analytics.series.map((x: any) => x.views), 1);
                           const pct = Math.max(2, Math.round((d.views / max) * 100));
                           return (
                             <div
@@ -1641,7 +1641,7 @@ function AdminContent() {
                           </p>
                         ) : (
                           <div className="mt-3 space-y-2">
-                            {analytics.topMovies.map((m) => {
+                            {analytics.topMovies.map((m: any) => {
                               const max = analytics.topMovies[0]?.count || 1;
                               return (
                                 <div key={m.title} className="flex items-center gap-3">
@@ -1669,7 +1669,7 @@ function AdminContent() {
                           <p className="mt-3 text-xs text-muted-foreground">No traffic yet.</p>
                         ) : (
                           <div className="mt-3 space-y-1.5">
-                            {analytics.topPaths.map((p) => (
+                            {analytics.topPaths.map((p: any) => (
                               <div key={p.path} className="flex items-center justify-between gap-3">
                                 <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
                                   {p.path}
@@ -1683,7 +1683,7 @@ function AdminContent() {
                           <div>
                             <p className="text-xs font-semibold text-muted-foreground">Devices</p>
                             <div className="mt-2 space-y-1">
-                              {analytics.devices.map((d) => (
+                              {analytics.devices.map((d: any) => (
                                 <div key={d.name} className="flex items-center justify-between gap-2 text-xs">
                                   <span className="capitalize">{d.name}</span>
                                   <span className="font-semibold tabular-nums">{d.count}</span>
@@ -1697,7 +1697,7 @@ function AdminContent() {
                               <p className="mt-2 text-xs text-muted-foreground">Direct visits only.</p>
                             ) : (
                               <div className="mt-2 space-y-1">
-                                {analytics.topReferrers.map((r) => (
+                                {analytics.topReferrers.map((r: any) => (
                                   <div key={r.host} className="flex items-center justify-between gap-2 text-xs">
                                     <span className="min-w-0 flex-1 truncate">{r.host}</span>
                                     <span className="font-semibold tabular-nums">{r.count}</span>
@@ -1766,7 +1766,7 @@ function AdminContent() {
                         </p>
                       ) : (
                         <div className="flex flex-wrap gap-2">
-                          {tvCategoryRows.map((cat) =>
+                          {tvCategoryRows.map((cat: any) =>
                             renamingTvCategory?.id === cat._id ? (
                               <div
                                 key={cat._id}
@@ -1923,9 +1923,9 @@ function AdminContent() {
                             .map((s) => s.trim())
                             .filter(Boolean);
                           const chips = [
-                            ...(tvCategoryRows ?? []).map((c) => c.name),
+                            ...(tvCategoryRows ?? []).map((c: any) => c.name),
                             ...selectedTvCats.filter(
-                              (s) => !(tvCategoryRows ?? []).some((c) => c.name === s),
+                              (s: any) => !(tvCategoryRows ?? []).some((c: any) => c.name === s),
                             ),
                           ];
                           return chips.length > 0 ? (
@@ -2026,7 +2026,7 @@ function AdminContent() {
                         </p>
                       ) : (
                         <div className="space-y-2">
-                          {tvChannels.map((c) => (
+                          {tvChannels.map((c: any) => (
                             <div
                               key={c._id}
                               className="flex flex-col gap-3 rounded-lg border border-border/50 bg-background/40 p-2.5 sm:flex-row sm:items-center"
@@ -2165,7 +2165,7 @@ function AdminContent() {
                         <div key={f.url} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start">
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                              {f.targets.map((t, i) => (
+                              {f.targets.map((t: any, i: any) => (
                                 <span key={`${t.kind}-${t.name}-${i}`} className="text-sm font-medium">
                                   {t.kind === "movie" && t.movieId ? (
                                     <Link
@@ -2199,7 +2199,7 @@ function AdminContent() {
                             </p>
                           </div>
                           <div className="flex shrink-0 flex-wrap gap-1.5">
-                            {f.targets.map((t) =>
+                            {f.targets.map((t: any) =>
                               t.kind === "movie" && t.movieId ? (
                                 <Button
                                   key={`edit-${t.movieId}`}
@@ -2207,7 +2207,7 @@ function AdminContent() {
                                   variant="outline"
                                   className="gap-1.5"
                                   onClick={() => {
-                                    const movie = (movies ?? []).find((m) => m._id === t.movieId);
+                                    const movie = (movies ?? []).find((m: any) => m._id === t.movieId);
                                     if (movie) {
                                       setEditing(movie);
                                       setDialogOpen(true);
@@ -2226,7 +2226,7 @@ function AdminContent() {
                                   variant="outline"
                                   className="gap-1.5"
                                   onClick={() => {
-                                    const ch = (tvChannels ?? []).find((c) => c._id === t.channelId);
+                                    const ch = (tvChannels ?? []).find((c: any) => c._id === t.channelId);
                                     if (ch) {
                                       openEditTv(ch);
                                     } else {
@@ -2310,7 +2310,7 @@ function AdminContent() {
                     </CardContent>
                   ) : (
                     <div className="divide-y divide-border/50">
-                      {conversations.map((c) => (
+                      {conversations.map((c: any) => (
                         <div key={c.userId} className="px-4 py-3">
                           <button
                             type="button"
@@ -2350,7 +2350,7 @@ function AdminContent() {
                                 ref={supportScroll}
                                 className="max-h-72 space-y-2 overflow-y-auto"
                               >
-                                {(thread ?? []).map((m) => (
+                                {(thread ?? []).map((m: any) => (
                                   <div
                                     key={m._id}
                                     className={`group flex items-center gap-1 ${m.sender === "admin" ? "justify-end" : "justify-start"}`}
@@ -2592,9 +2592,9 @@ function AdminContent() {
                   .map((s) => s.trim())
                   .filter(Boolean);
                 const chips = [
-                  ...(tvCategoryRows ?? []).map((c) => c.name),
+                  ...(tvCategoryRows ?? []).map((c: any) => c.name),
                   ...selectedTvCats.filter(
-                    (s) => !(tvCategoryRows ?? []).some((c) => c.name === s),
+                    (s: any) => !(tvCategoryRows ?? []).some((c: any) => c.name === s),
                   ),
                 ];
                 return chips.length > 0 ? (

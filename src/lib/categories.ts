@@ -1,17 +1,16 @@
 /**
  * All the section names a movie lives in: the `categories` array plus the
  * legacy single `category` field. Normalized: trimmed, de-duplicated.
- *
- * Lives outside src/convex so browser code can import it without pulling in
- * the Convex server runtime (which references `process` and breaks Vite).
  */
 export function movieCategoryNames(m: {
   categories?: string[];
   category?: string;
-}): string[] {
+} | Record<string, unknown>): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const raw of [...(m.categories ?? []), m.category ?? ""]) {
+  const cats = Array.isArray(m.categories) ? (m.categories as string[]) : [];
+  const legacy = typeof m.category === "string" ? m.category : "";
+  for (const raw of [...cats, legacy]) {
     const c = raw.trim();
     if (c && !seen.has(c)) {
       seen.add(c);

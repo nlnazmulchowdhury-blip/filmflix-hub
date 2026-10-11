@@ -59,6 +59,9 @@ export default defineConfig(({ mode }) => {
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      /* Convex is retired: “convex/react” now resolves to the local shim that
+         routes every useQuery/useMutation/useAction to the Worker REST API. */
+      "convex/react": path.resolve(__dirname, "./src/convex/shim/react.ts"),
     },
     // Force a single copy of React across all packages (including vlyPlugin).
     // Without this, @vly-ai/integrations can resolve its own React copy, which
