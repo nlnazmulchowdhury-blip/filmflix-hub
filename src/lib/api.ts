@@ -1,9 +1,14 @@
 /**
  * FilmFlix API client — talks to the Cloudflare Worker (D1) backend.
  * Session token lives in localStorage; the worker enforces roles.
+ *
+ * BASE: VITE_API_BASE wins, else YTDefault to the known Worker hostname.
+ * Falling back to "" (same-origin) serves the Pages SPA for every API
+ * call — the browser asked for /movies and got index.html (405/HTML).
  */
 
-const BASE = import.meta.env.VITE_API_BASE ?? "";
+const FALLBACK_API_BASE = "https://filmflix-hub.nlnazmulchowdhury.workers.dev";
+const BASE = import.meta.env.VITE_API_BASE?.trim() ? import.meta.env.VITE_API_BASE.trim() : FALLBACK_API_BASE;
 const TOKEN_KEY = "ff-session-token";
 
 export function getToken(): string | null {

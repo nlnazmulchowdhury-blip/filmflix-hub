@@ -22,9 +22,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api as restApi, getToken } from "./api";
+import { getToken } from "./api";
 
-const BASE = import.meta.env.VITE_API_BASE ?? "";
+/** Same rule as lib/api.ts: VITE_API_BASE wins, else the known Worker host. */
+const BASE = import.meta.env.VITE_API_BASE?.trim()
+  ? import.meta.env.VITE_API_BASE.trim()
+  : "https://filmflix-hub.nlnazmulchowdhury.workers.dev";
 const REFRESH_MS = 30_000;
 
 export class NotImplementedError extends Error {
@@ -190,8 +193,6 @@ export async function callWorker<T = any>(key: string, args?: any): Promise<T> {
   return data;
 }
 const call = callWorker;
-
-void restApi; // unused for now; kept for future direct fetches
 
 export function useQuery<T = any>(
   fn: { __key: string } | string,
