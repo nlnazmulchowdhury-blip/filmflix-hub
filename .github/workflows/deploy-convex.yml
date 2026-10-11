@@ -1,0 +1,53 @@
+name: Deploy Convex functions
+
+# Pushing to GitHub only rebuilds the frontend (Cloudflare Pages builds the Vite
+# app). The Convex functions in src/convex/ live in this repo too, but nothing
+# deployed them — so a hosted frontend that calls a function production doesn't
+# have yet fails at runtime ("Could not find public function for 'vidsrc:search'").
+# This workflow pushes the functions to the production deployment on every push
+# to main, so the hosted site and its backend stay in step.
+#
+# One-time setup: create a *production* deploy key in the Convex dashboard
+# (Project → Settings → Deploy keys), then add it to this repo under
+# Settings → Secrets and variables → Actions as CONVEX_DEPLOY_KEY.
+# Until that secret exists the job exits successfully with a warning.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/convex/**"
+      - ".github/workflows/deploy-convex.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: convex-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy functions to production
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          if [ -z "${CONVEX_DEPLOY_KEY}" ]; then
+            echo "::warning title=Convex deploy skipped::CONVEX_DEPLOY_KEY is not set, so src/convex was not deployed."
+            echo "Create a production deploy key in the Convex dashboard"
+            echo "(Project -> Settings -> Deploy keys) and add it to this repository"
+            echo "under Settings -> Secrets and variables -> Actions."
+            exit 0
+          fi
+          npx convex deploy
