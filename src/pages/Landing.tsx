@@ -67,8 +67,7 @@ export default function Landing() {
      for a previous query never shows up under the current one. */
   const [external, setExternal] = useState<{ q: string; hits: VidSrcHit[] } | null>(null);
   const [externalLoading, setExternalLoading] = useState(false);
-  /* Active Server 1 embed overlay: { url, title } or null when closed. */
-  const [embed, setEmbed] = useState<{ url: string; title: string } | null>(null);
+
 
   const trimmedQuery = query.trim();
   /* Only surface external hits that match what's in the box right now. */
@@ -106,7 +105,7 @@ export default function Landing() {
   const playExternal = (hit: VidSrcHit) => {
     const url = vidsrcEmbedUrl({ imdbId: hit.imdbId, kind: hit.kind });
     if (!url) return;
-    setEmbed({ url, title: hit.title });
+    window.open(url, "_blank", "noopener,noreferrer");
   };
 
   /** Distinct display categories (Hollywood, Bengali, Anime, …): names
@@ -532,48 +531,7 @@ export default function Landing() {
         </p>
       </footer>
 
-      {/* VidSrc "Server 1" embed overlay — plays an external search result inline. */}
-      {embed && (
-        <div
-          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
-          onClick={() => setEmbed(null)}
-          role="dialog"
-          aria-modal="true"
-          aria-label={`${embed.title} player`}
-        >
-          <div
-            className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-black shadow-[0_24px_80px_-24px_rgba(0,0,0,0.9)]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-card/60 px-4 py-2.5">
-              <p className="font-display truncate text-sm font-semibold">{embed.title}</p>
-              <div className="flex shrink-0 items-center gap-2">
-                <span className="rounded-md bg-primary/90 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-primary-foreground">
-                  Server 1
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setEmbed(null)}
-                  aria-label="Close player"
-                  className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                >
-                  <X className="size-5" />
-                </button>
-              </div>
-            </div>
-            <div className="relative aspect-video w-full bg-black">
-              <iframe
-                src={embed.url}
-                title={`${embed.title} — Server 1`}
-                className="absolute inset-0 size-full border-0"
-                allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
-                allowFullScreen
-                referrerPolicy="origin"
-              />
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }
