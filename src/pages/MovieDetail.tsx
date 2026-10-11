@@ -36,7 +36,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
 function toLocalInputValue(ms: number) {
@@ -49,10 +49,15 @@ export default function MovieDetail() {
   const { id } = useParams<{ id: string }>();
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const { movie: miniMovie, isActive: miniActive, start } = useMiniPlayer();
-  const movie = useQuery(api.movies.get, {
-    id: id as Id<"movies">,
-  });
+  const isVidSrc = id?.startsWith("vidsrc-") ?? false;
+  const vidsrcImdbId = isVidSrc ? id?.replace("vidsrc-", "") : null;
+  const externalState = (location.state as any) || {};
+  const movie = useQuery(
+    api.movies.get,
+    isVidSrc ? "skip" : { id: id as Id<"movies"> },
+  );
 
 
   const scheduleScreening = useMutation(api.screenings.schedule);
@@ -91,6 +96,25 @@ export default function MovieDetail() {
      - fresh visit → poster overlay (no autoplay)
      - returning from miniplayer → playback continues seamlessly */
   useEffect(() => {
+    if (isVidSrc && vidsrcImdbId) {
+      const titleExt = externalState.title || `tt${vidsrcImdbId}`;
+      start(
+        {
+          movieId: `vidsrc:${vidsrcImdbId}`,
+          title: titleExt,
+          videoUrl: "",
+          posterUrl: externalState.posterUrl,
+          backdropUrl: undefined,
+          dubs: [],
+          qualities: [],
+          subtitles: [],
+          imdbId: vidsrcImdbId,
+          kind: externalState.kind || "movie",
+        } as any,
+        false,
+      );
+      return;
+    }
     if (!movie) return;
     if (miniActive && miniMovie?.movieId === movie._id) return; // already playing
     start(
@@ -103,11 +127,14 @@ export default function MovieDetail() {
         dubs: movie.dubs ?? [],
         qualities: movie.qualities ?? [],
         subtitles: movie.subtitles ?? [],
-      },
+        imdbId: movie.imdbId,
+        tmdbId: movie.tmdbId,
+        kind: movie.kind,
+      } as any,
       false,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [movie?._id]);
+  }, [movie?._id, isVidSrc, vidsrcImdbId]);
 
   const handleSchedule = async () => {
     if (!movie) return;
@@ -235,6 +262,28 @@ export default function MovieDetail() {
     }
   };
 
+  const externalMovie = isVidSrc
+    ? {
+        _id: `vidsrc:${vidsrcImdbId}` as any,
+        title: externalState.title || vidsrcImdbId || "External",
+        posterUrl: externalState.posterUrl || null,
+        backdropUrl: null,
+        year: null,
+        description: "This title is from external search (Server 1 — VidSrc).",
+        kind: (externalState.kind as any) || "movie",
+        category: "External",
+        genres: [],
+        videoUrl: "",
+        dubs: [],
+        qualities: [],
+        subtitles: [],
+        episodes: [],
+        downloads: [],
+        imdbId: vidsrcImdbId,
+        tmdbId: null,
+      }
+    : movie;
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
@@ -265,7 +314,7 @@ export default function MovieDetail() {
       <AdSideRail side="right" />
 
       <main className="mx-auto w-full max-w-6xl px-3 pb-24 pt-4 sm:px-6 sm:pt-8">
-        {!movie ? (
+        {!externalMovie ? (
           <div className="space-y-6">
             <Skeleton className="aspect-video w-full rounded-xl" />
             <Skeleton className="h-8 w-64" />
@@ -280,9 +329,9 @@ export default function MovieDetail() {
               title={movie.title}
               posterUrl={movie.posterUrl}
               backdropUrl={movie.backdropUrl}
-              imdbId={movie.imdbId}
-              tmdbId={movie.tmdbId}
-              kind={movie.kind}
+              imdbId={(isVidSrc ? vidsrcImdbId : movie.imdbId) || undefined}
+              tmdbId={!isVidSrc ? movie.tmdbId : undefined}
+              kind={(isVidSrc ? (externalState.kind || "movie") : movie.kind) as any}
             />
 
             {/* Episode / parts playlist */}
