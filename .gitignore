@@ -12,6 +12,10 @@ relay/relay.log
 scripts/export/
 scripts/data-export.zip
 scripts/d1-import.sql
+
+# Convex production deploy key — keep it local, never commit it
+.convex-deploy-key
+.convex-deploy-key.*
 dev.log
 
 # local tooling artifacts
