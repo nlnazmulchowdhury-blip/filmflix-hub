@@ -35,6 +35,7 @@ import type * as users from "../users.js";
 import type * as usersHelpers from "../usersHelpers.js";
 import type * as videoProxy from "../videoProxy.js";
 import type * as videoUpload from "../videoUpload.js";
+import type * as vidsrc from "../vidsrc.js";
 import type * as watchlist from "../watchlist.js";
 
 import type {
@@ -71,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   usersHelpers: typeof usersHelpers;
   videoProxy: typeof videoProxy;
   videoUpload: typeof videoUpload;
+  vidsrc: typeof vidsrc;
   watchlist: typeof watchlist;
 }>;
 

@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
+import VidSrcResultCard, { type VidSrcHit } from "@/components/VidSrcResultCard";
+import { vidsrcEmbedUrl } from "@/lib/vidsrc";
 import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
 import AdSideRail from "@/components/AdSideRail";
@@ -12,10 +14,10 @@ import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
-import { useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { Dices, Film, LogOut, Menu, Play, Search, ShieldCheck, Tv, X } from "lucide-react";
 import { motion } from "framer-motion";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   Sheet,
@@ -59,6 +61,53 @@ export default function Landing() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string | null>(null);
 
+  /* -------- External VidSrc search (titles beyond the local catalog) ---- */
+  const searchExternal = useAction(api.vidsrc.search);
+  /* Hits are stored with the query they were resolved for, so a slow response
+     for a previous query never shows up under the current one. */
+  const [external, setExternal] = useState<{ q: string; hits: VidSrcHit[] } | null>(null);
+  const [externalLoading, setExternalLoading] = useState(false);
+  /* Active Server 1 embed overlay: { url, title } or null when closed. */
+  const [embed, setEmbed] = useState<{ url: string; title: string } | null>(null);
+
+  const trimmedQuery = query.trim();
+  /* Only surface external hits that match what's in the box right now. */
+  const externalHits = external && external.q === trimmedQuery ? external.hits : null;
+
+  /* Debounced: resolve the typed title against IMDb (server-side, keyless)
+     so results that aren't in the catalog still play via Server 1. */
+  useEffect(() => {
+    if (trimmedQuery.length < 2) {
+      setExternal(null);
+      setExternalLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setExternalLoading(true);
+    const t = setTimeout(() => {
+      searchExternal({ q: trimmedQuery })
+        .then((hits) => {
+          if (!cancelled) setExternal({ q: trimmedQuery, hits });
+        })
+        .catch(() => {
+          if (!cancelled) setExternal({ q: trimmedQuery, hits: [] });
+        })
+        .finally(() => {
+          if (!cancelled) setExternalLoading(false);
+        });
+    }, 450);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [trimmedQuery, searchExternal]);
+
+  const playExternal = (hit: VidSrcHit) => {
+    const url = vidsrcEmbedUrl({ imdbId: hit.imdbId, kind: hit.kind });
+    if (!url) return;
+    setEmbed({ url, title: hit.title });
+  };
+
   /** Distinct display categories (Hollywood, Bengali, Anime, …): names
       created directly in the admin panel plus every section a movie belongs
       to. */
@@ -101,7 +150,12 @@ export default function Landing() {
     return rows;
   }, [movies, category, query]);
 
-  const catalog = filtered ?? [];
+  const localResults = filtered ?? [];
+  /* While searching, external VidSrc hits are merged into the same grid as
+     ordinary results so a title that isn't in our library still shows up (and
+     plays) exactly like a catalog entry — the viewer can't tell the difference. */
+  const externalResults = trimmedQuery.length >= 2 ? externalHits ?? [] : [];
+  const catalog = [...localResults, ...externalResults];
 
   const surprise = () => {
     if (!movies || movies.length === 0) return;
@@ -365,6 +419,14 @@ export default function Landing() {
                 <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
               ))}
             </div>
+          ) : catalog.length === 0 && externalLoading ? (
+            /* Searching, nothing local yet, external hits still resolving —
+               keep the grid shape instead of flashing "no match". */
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
+              ))}
+            </div>
           ) : catalog.length === 0 ? (
             <Card className="border-dashed border-border/70 bg-card/50">
               <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
@@ -383,8 +445,18 @@ export default function Landing() {
             </Card>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-              {catalog.map((m, i) => (
+              {localResults.map((m, i) => (
                 <MovieCard key={m._id} movie={m} index={i} />
+              ))}
+              {/* External hits sit in the same grid, styled identically, so a
+                  title that isn't in our library still looks like a normal result. */}
+              {externalResults.map((h, i) => (
+                <VidSrcResultCard
+                  key={h.imdbId}
+                  hit={h}
+                  index={localResults.length + i}
+                  onPlay={playExternal}
+                />
               ))}
             </div>
           )}
@@ -458,6 +530,49 @@ export default function Landing() {
           our internal team.
         </p>
       </footer>
+
+      {/* VidSrc "Server 1" embed overlay — plays an external search result inline. */}
+      {embed && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+          onClick={() => setEmbed(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${embed.title} player`}
+        >
+          <div
+            className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-black shadow-[0_24px_80px_-24px_rgba(0,0,0,0.9)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-card/60 px-4 py-2.5">
+              <p className="font-display truncate text-sm font-semibold">{embed.title}</p>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="rounded-md bg-primary/90 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-primary-foreground">
+                  Server 1
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setEmbed(null)}
+                  aria-label="Close player"
+                  className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+            </div>
+            <div className="relative aspect-video w-full bg-black">
+              <iframe
+                src={embed.url}
+                title={`${embed.title} — Server 1`}
+                className="absolute inset-0 size-full border-0"
+                allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
+                allowFullScreen
+                referrerPolicy="origin"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
