@@ -5,6 +5,7 @@ import {
   InputOTPGroup,
   InputOTPSlot,
 } from "@/components/ui/input-otp";
+import { KeyRound } from "lucide-react";
 
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -30,6 +31,7 @@ import {
   Tv,
   UserX,
 } from "lucide-react";
+/* KeyRound imported above for the forgot-password badge. */
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
@@ -46,8 +48,12 @@ type Mode = "signin" | "signup";
 type Step =
   /** Email (→ first visit mails a code) or email + password (returning). */
   | { kind: "form" }
-  /** 6-digit code entry. */
-  | { kind: "code"; email: string; purpose: "sign-in" | "verify" };
+  /** 6-digit code entry: OTP sign-in or email verification. */
+  | { kind: "code"; email: string; purpose: "sign-in" | "verify" }
+  /** Ask for the address that should receive a reset code. */
+  | { kind: "forgot" }
+  /** Emailed reset code + the new password. */
+  | { kind: "reset"; email: string };
 
 function resolveRedirectAfterAuth(
   returnTo: string | null,
@@ -188,6 +194,8 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  /** Sign-in tab toggle: password field visible or the plain emailed-code path. */
+  const [passwordOption, setPasswordOption] = useState(true);
   const [code, setCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -256,27 +264,71 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   ) => {
     event.preventDefault();
     const trimmedEmail = email.trim();
+
+    if ((mode === "signup" || password.length > 0) && password !== confirmPassword) {
+      setError("Those passwords don't match.");
+      return;
+    }
+    if (password.length > 0 && password.length < 8) {
+      setError("Use at least 8 characters for your password.");
+      return;
+    }
+
     if (mode === "signup") {
-      if (password !== confirmPassword) {
-        setError("Those passwords don't match.");
+      // Register first: either with a password (→ signed in) or the code flow.
+      const fd = new FormData();
+      fd.set("email", trimmedEmail);
+      fd.set("password", password);
+      fd.set("name", trimmedEmail.split("@")[0]);
+      try {
+        await signIn("register", fd);
+        navigate(redirect);
         return;
-      }
-      if (password.length < 8) {
-        setError("Use at least 8 characters for your password.");
+      } catch (err) {
+        // Email already taken? Fall through to the emailed-code sign-up flow.
+        if (!/already has an account/i.test(friendlyAuthError(err))) {
+          setError(friendlyAuthError(err));
+          return;
+        }
+        setError("That email already has an account — sign in instead.");
         return;
       }
     }
 
+    if (password.length > 0) {
+      // Password sign-in (returning user). Wrong password → clear message,
+      // or leave the field empty to use the emailed-code path instead.
+      const fd = new FormData();
+      fd.set("email", trimmedEmail);
+      fd.set("password", password);
+      try {
+        await signIn("password", fd);
+        navigate(redirect);
+        return;
+      } catch (err) {
+        const msg = friendlyAuthError(err);
+        setError(
+          msg === "Incorrect email or password."
+            ? "Incorrect email or password — or leave the password empty to receive a code instead."
+            : msg,
+        );
+        return;
+      }
+    }
+
+    // Plain email → mailed 6-digit code.
     const fd = new FormData();
     fd.set("email", trimmedEmail);
-    if (mode === "signup") fd.set("name", trimmedEmail.split("@")[0]);
-    if (mode === "signup" && password) fd.set("password", password);
-
-    const result = await run(() => signIn("email-otp", fd));
-    if (result === null) return;
-    // OtpSentSignal → the code screen; otherwise already signed in.
+    try {
+      await signIn("email-otp", fd);
+    } catch (err) {
+      if (!(err instanceof OtpSentSignal)) {
+        setError(friendlyAuthError(err));
+        return;
+      }
+    }
     setCode("");
-    setStep({ kind: "code", email: trimmedEmail, purpose: mode === "signup" ? "verify" : "sign-in" });
+    setStep({ kind: "code", email: trimmedEmail, purpose: "sign-in" });
     setResendIn(RESEND_COOLDOWN_SECONDS);
   };
 
@@ -553,8 +605,8 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                       </h2>
                       <p className="mt-1.5 text-sm leading-relaxed text-foreground/80">
                         {mode === "signin"
-                          ? "We'll email you a 6-digit code — no password needed."
-                          : "Pick an email and an optional password, then confirm the 6-digit code we'll email."}
+                          ? "Sign in with your password — or just your email for a 6-digit code."
+                          : "Pick an email and an optional password to create the account."}
                       </p>
 
                       <div className="mt-5">
@@ -582,7 +634,9 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                             />
                           </div>
 
-                          {mode === "signup" && passwordField}
+                          {/* Password works on both tabs: on sign-in it logs in
+                              directly, on signup it's part of the account. */}
+                          {(mode === "signup" || passwordOption) && passwordField}
 
                           {mode === "signup" && (
                             <>
@@ -606,10 +660,6 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                                   disabled={busy}
                                 />
                               </div>
-                              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                                We'll email a 6-digit code to confirm your
-                                address either way.
-                              </p>
                             </>
                           )}
 
@@ -623,15 +673,55 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                             {isLoading ? (
                               <>
                                 <Loader2 className="size-4 animate-spin" />
-                                {mode === "signup" ? "Creating account…" : "Signing in…"}
+                                {mode === "signup"
+                                  ? "Creating account…"
+                                  : passwordOption
+                                    ? "Signing in…"
+                                    : "Sending code…"}
                               </>
                             ) : (
                               <>
-                                {mode === "signup" ? "Create account" : "Email me a sign-in code"}
+                                {mode === "signup"
+                                  ? "Create account"
+                                  : passwordOption
+                                    ? "Sign in"
+                                    : "Email me a sign-in code"}
                                 <ArrowRight className="size-4" />
                               </>
                             )}
                           </Button>
+
+                          <div className="mt-3 flex items-center justify-between gap-3 text-xs">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setError(null);
+                                setStep({ kind: "forgot" });
+                              }}
+                              className="font-medium text-muted-foreground transition-colors hover:text-foreground"
+                            >
+                              Forgot password?
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setError(null);
+                                setPasswordOption((s) => !s);
+                                setPassword("");
+                                setConfirmPassword("");
+                              }}
+                              disabled={mode === "signup"}
+                              className={cn(
+                                "font-medium transition-colors",
+                                passwordOption
+                                  ? "text-primary"
+                                  : "text-primary hover:underline",
+                                mode === "signup" && "hidden",
+                              )}
+                            >
+                              {passwordOption ? "Use a code instead" : "Use password instead"}
+                            </button>
+                          </div>
                         </form>
                       </div>
 
@@ -651,6 +741,209 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                           address.
                         </p>
                       </div>
+                    </>
+                  )}
+
+                  {step.kind === "forgot" && (
+                    <>
+                      <div className="flex flex-col items-center text-center">
+                        <StepBadge>
+                          <KeyRound className="size-5" />
+                        </StepBadge>
+                        <h2 className="font-display mt-4 text-2xl font-semibold tracking-tight">
+                          Reset your password
+                        </h2>
+                        <p className="mt-1.5 text-sm text-foreground/80">
+                          We'll email a 6-digit code to choose a new password.
+                        </p>
+                      </div>
+
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          const fd = new FormData();
+                          fd.set("email", email.trim());
+                          try {
+                            await signIn("forgot", fd);
+                          } catch (err) {
+                            if (!(err instanceof OtpSentSignal)) {
+                              setError(friendlyAuthError(err));
+                              return;
+                            }
+                          }
+                          setError(null);
+                          setCode("");
+                          setConfirmPassword("");
+                          setPassword("");
+                          setStep({ kind: "reset", email: email.trim() });
+                          setResendIn(RESEND_COOLDOWN_SECONDS);
+                        }}
+                        className="mt-7"
+                      >
+                        <label
+                          htmlFor="auth-forgot-email"
+                          className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+                        >
+                          Email address
+                        </label>
+                        <div className="relative mt-2">
+                          <Mail className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            id="auth-forgot-email"
+                            name="email"
+                            type="email"
+                            inputMode="email"
+                            autoComplete="email"
+                            placeholder="you@example.com"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="h-11 rounded-lg pl-10 text-sm"
+                            disabled={busy}
+                            required
+                          />
+                        </div>
+
+                        {error && <FormError message={error} />}
+
+                        <Button
+                          type="submit"
+                          className="glow-accent mt-4 h-11 w-full rounded-lg text-sm font-semibold"
+                          disabled={busy}
+                        >
+                          {isLoading ? (
+                            <>
+                              <Loader2 className="size-4 animate-spin" />
+                              Sending code…
+                            </>
+                          ) : (
+                            <>
+                              Send reset code
+                              <ArrowRight className="size-4" />
+                            </>
+                          )}
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => {
+                            setError(null);
+                            setStep({ kind: "form" });
+                          }}
+                          disabled={busy}
+                          className="mt-2 h-9 w-full rounded-lg text-sm text-muted-foreground hover:text-foreground"
+                        >
+                          <ArrowLeft className="size-4" />
+                          Back to sign in
+                        </Button>
+                      </form>
+                    </>
+                  )}
+
+                  {step.kind === "reset" && (
+                    <>
+                      <div className="flex flex-col items-center text-center">
+                        <StepBadge>
+                          <KeyRound className="size-5" />
+                        </StepBadge>
+                        <h2 className="font-display mt-4 text-2xl font-semibold tracking-tight">
+                          Choose a new password
+                        </h2>
+                        <p className="mt-1.5 text-sm text-foreground/80">
+                          Enter the reset code we emailed you, then pick a new
+                          password.
+                        </p>
+                        {emailPill(step.email)}
+                      </div>
+
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (password !== confirmPassword) {
+                            setError("Those passwords don't match.");
+                            return;
+                          }
+                          if (password.length < 8) {
+                            setError("Use at least 8 characters.");
+                            return;
+                          }
+                          const fd = new FormData();
+                          fd.set("email", step.email);
+                          fd.set("code", code);
+                          fd.set("password", password);
+                          try {
+                            await signIn("reset", fd);
+                          } catch (err) {
+                            setError(friendlyAuthError(err));
+                            setCode("");
+                            return;
+                          }
+                          navigate(redirect);
+                        }}
+                        className="mt-7"
+                      >
+                        {codeSlots}
+
+                        <div className="mt-5">{passwordField}</div>
+
+                        <label
+                          htmlFor="auth-new-password-confirm"
+                          className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+                        >
+                          Confirm new password
+                        </label>
+                        <div className="relative mt-2">
+                          <Lock className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            id="auth-new-password-confirm"
+                            name="confirm-password"
+                            type={showPassword ? "text" : "password"}
+                            autoComplete="new-password"
+                            placeholder="••••••••"
+                            value={confirmPassword}
+                            onChange={(e) => setConfirmPassword(e.target.value)}
+                            className="h-11 rounded-lg pl-10 text-sm"
+                            disabled={busy}
+                          />
+                        </div>
+
+                        {error && <FormError message={error} />}
+
+                        <Button
+                          type="submit"
+                          className="glow-accent mt-4 h-11 w-full rounded-lg text-sm font-semibold"
+                          disabled={busy || code.length !== 6}
+                        >
+                          {isLoading ? (
+                            <>
+                              <Loader2 className="size-4 animate-spin" />
+                              Saving…
+                            </>
+                          ) : (
+                            <>
+                              Set new password
+                              <ArrowRight className="size-4" />
+                            </>
+                          )}
+                        </Button>
+
+                        {resendRow}
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => {
+                            setError(null);
+                            setCode("");
+                            setStep({ kind: "form" });
+                          }}
+                          disabled={busy}
+                          className="mt-2 h-9 w-full rounded-lg text-sm text-muted-foreground hover:text-foreground"
+                        >
+                          <ArrowLeft className="size-4" />
+                          Back to sign in
+                        </Button>
+                      </form>
                     </>
                   )}
 

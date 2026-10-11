@@ -11,8 +11,12 @@ export interface AuthState {
 
 /**
  * Same external contract as the Convex use-auth hook:
- *  - signIn("email-otp", formData with email) → sends the OTP
+ *  - signIn("password", formData with email + password) → session (or error)
+ *  - signIn("register", formData with email + password + name) → session
+ *  - signIn("email-otp", formData with email) → sends the OTP (OtpSentSignal)
  *  - signIn("email-otp", formData with email + code) → verifies, stores token
+ *  - signIn("forgot", formData with email) → mails a reset code (OtpSentSignal)
+ *  - signIn("reset", formData with email + code + password) → session
  *  - signIn("anonymous", ...) → guest session
  */
 export function useAuthCf(): AuthState {
@@ -37,25 +41,58 @@ export function useAuthCf(): AuthState {
     return () => { alive = false; };
   }, []);
 
-  const signIn = useCallback(async (_provider: string, formData: FormData) => {
+  const acceptSession = useCallback(async (token: string) => {
+    setToken(token);
+    const me = await api.get<{ user: ApiUser | null }>("/auth/me");
+    setUser(me.user);
+  }, []);
+
+  const signIn = useCallback(async (provider: string, formData: FormData) => {
     const email = formData.get("email") as string | null;
     const code = formData.get("code") as string | null;
-    if (formData.get("guest") === "1" || (!email && !code)) {
+    const password = formData.get("password") as string | null;
+    const name = formData.get("name") as string | null;
+
+    if (formData.get("guest") === "1" || (!email && !code && !password)) {
       const res = await api.post<{ token: string }>("/auth/guest");
       setToken(res.token);
       const me = await api.get<{ user: ApiUser | null }>("/auth/me");
       setUser(me.user);
       return;
     }
-    if (!code) {
-      await api.post("/auth/request-otp", { email });
-      throw new OtpSentSignal();
+
+    switch (provider) {
+      case "password": {
+        const res = await api.post<{ token: string }>("/auth/login", { email, password });
+        await acceptSession(res.token);
+        return;
+      }
+      case "register": {
+        const res = await api.post<{ token: string }>("/auth/register", { email, password, name });
+        await acceptSession(res.token);
+        return;
+      }
+      case "forgot": {
+        await api.post("/auth/forgot", { email });
+        throw new OtpSentSignal();
+      }
+      case "reset": {
+        const res = await api.post<{ token: string }>("/auth/reset", { email, code, password });
+        await acceptSession(res.token);
+        return;
+      }
+      case "email-otp":
+      default: {
+        if (!code) {
+          await api.post("/auth/request-otp", { email });
+          throw new OtpSentSignal();
+        }
+        const res = await api.post<{ token: string }>("/auth/verify-otp", { email, code });
+        await acceptSession(res.token);
+        return;
+      }
     }
-    const res = await api.post<{ token: string }>("/auth/verify-otp", { email, code });
-    setToken(res.token);
-    const me = await api.get<{ user: ApiUser | null }>("/auth/me");
-    setUser(me.user);
-  }, []);
+  }, [acceptSession]);
 
   const signOut = useCallback(async () => {
     try { await api.post("/auth/sign-out"); } catch { /* ignore */ }

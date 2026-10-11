@@ -10,6 +10,7 @@ import { vidsrcRoutes } from "./vidsrc";
 import { supportRoutes } from "./support";
 import { tvCategoryRoutes } from "./tvCategories";
 import { uploadRoutes } from "./uploads";
+import { hashPassword, verifyPassword, newSalt, newToken, SESSION_TTL_SECONDS } from "./password";
 
 export interface Bindings {
   DB: D1Database;
@@ -46,6 +47,21 @@ const DAY_MS = 86_400_000;
 const SESSION_TTL_MS = 30 * DAY_MS;
 
 const id = () => crypto.randomUUID();
+
+/* ------------------------------------------------------------------ */
+/* shared session helper (used by OTP + password flows)                 */
+/* ------------------------------------------------------------------ */
+
+async function createSession(db: D1Database, userId: string) {
+  const raw = newToken();
+  await db
+    .prepare(
+      `INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
+    )
+    .bind(await sha256(raw), userId, Date.now() + SESSION_TTL_SECONDS * 1000)
+    .run();
+  return raw;
+}
 
 /* ------------------------------------------------------------------ */
 /* auth helpers                                                        */
@@ -216,6 +232,101 @@ app.post("/auth/sign-out", async (c) => {
 app.get("/auth/me", async (c) => {
   const user = await userForToken(c.env.DB, c.req.header("Authorization"));
   return c.json({ user });
+});
+
+/* ------------------------------------------------------------------ */
+/* password auth: register / login / forgot / reset (PBKDF2)            */
+/* ------------------------------------------------------------------ */
+
+const MIN_PASSWORD_LENGTH = 8;
+
+app.post("/auth/register", async (c) => {
+  const { email, password, name } = await c.req.json<{
+    email: string; password: string; name?: string;
+  }>();
+  const mail = (email ?? "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) {
+    throw new HttpError(400, "Enter a valid email address.");
+  }
+  if (!password || password.length < MIN_PASSWORD_LENGTH) {
+    throw new HttpError(400, `Use at least ${MIN_PASSWORD_LENGTH} characters for your password.`);
+  }
+  const existing = await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(mail).first();
+  if (existing) {
+    throw new HttpError(409, "That email already has an account — sign in instead.");
+  }
+  const uid = id();
+  const salt = newSalt();
+  const hash = await hashPassword(password, salt);
+  await c.env.DB.prepare(
+    `INSERT INTO users (id, email, name, role, is_anonymous, created_at, password_hash, password_salt)
+     VALUES (?, ?, ?, NULL, 0, ?, ?, ?)`,
+  ).bind(uid, mail, (name ?? "").trim() || mail.split("@")[0], Date.now(), hash, salt).run();
+  const raw = await createSession(c.env.DB, uid);
+  return c.json({ token: raw, userId: uid });
+});
+
+app.post("/auth/login", async (c) => {
+  const { email, password } = await c.req.json<{ email: string; password: string }>();
+  const mail = (email ?? "").trim().toLowerCase();
+  const row = await c.env.DB.prepare(
+    `SELECT id, password_hash, is_anonymous FROM users WHERE email = ?`,
+  ).bind(mail).first<{ id: string; password_hash: string | null; is_anonymous: number }>();
+  if (!row || !(await verifyPassword(password ?? "", row.password_hash))) {
+    throw new HttpError(401, "Incorrect email or password.");
+  }
+  // Retired guest accounts that set a password become real members.
+  if (row.is_anonymous) {
+    await c.env.DB.prepare(`UPDATE users SET is_anonymous = 0, email = ? WHERE id = ?`)
+      .bind(mail, row.id).run();
+  }
+  const raw = await createSession(c.env.DB, row.id);
+  return c.json({ token: raw, userId: row.id });
+});
+
+/** Forgotten password: mail a 6-digit reset code (same otp_codes table). */
+app.post("/auth/forgot", async (c) => {
+  const { email } = await c.req.json<{ email: string }>();
+  const mail = (email ?? "").trim().toLowerCase();
+  const row = await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(mail).first();
+  // Same response whether or not the account exists (no account enumeration).
+  if (row) {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expires = Date.now() + 15 * 60_000;
+    await c.env.DB.prepare(
+      `INSERT INTO otp_codes (email, code, expires_at, used) VALUES (?, ?, ?, 0)`,
+    ).bind(mail, code, expires).run();
+    await sendOtpEmail(c.env, mail, code);
+  }
+  return c.json({ sent: true });
+});
+
+/** Reset: verify the emailed code, then set the new password. */
+app.post("/auth/reset", async (c) => {
+  const { email, code, password } = await c.req.json<{
+    email: string; code: string; password: string;
+  }>();
+  const mail = (email ?? "").trim().toLowerCase();
+  if (!password || password.length < MIN_PASSWORD_LENGTH) {
+    throw new HttpError(400, `Use at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+  const row = await c.env.DB.prepare(
+    `SELECT rowid, code, expires_at, used FROM otp_codes
+     WHERE email = ? AND used = 0 ORDER BY rowid DESC LIMIT 1`,
+  ).bind(mail).first<any>();
+  if (!row || row.code !== (code ?? "").trim() || row.expires_at < Date.now()) {
+    throw new HttpError(400, "That code isn't right. Check the email and try again.");
+  }
+  await c.env.DB.prepare(`UPDATE otp_codes SET used = 1 WHERE rowid = ?`).bind(row.rowid).run();
+  const user = await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(mail).first<{ id: string }>();
+  if (!user) throw new HttpError(404, "We couldn't find an account with that email address.");
+  const salt = newSalt();
+  const hash = await hashPassword(password, salt);
+  await c.env.DB.prepare(
+    `UPDATE users SET password_hash = ?, password_salt = ?, is_anonymous = 0 WHERE id = ?`,
+  ).bind(hash, salt, user.id).run();
+  const raw = await createSession(c.env.DB, user.id);
+  return c.json({ token: raw, userId: user.id });
 });
 
 /* ------------------------------------------------------------------ */
