@@ -265,7 +265,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     event.preventDefault();
     const trimmedEmail = email.trim();
 
-    if ((mode === "signup" || password.length > 0) && password !== confirmPassword) {
+    if (mode === "signup" && password !== confirmPassword) {
       setError("Those passwords don't match.");
       return;
     }
