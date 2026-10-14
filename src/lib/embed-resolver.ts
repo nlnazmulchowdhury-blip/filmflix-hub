@@ -13,6 +13,7 @@ import { isHlsUrl } from "@/lib/video-url";
 
 /** Hosts that serve a player page (not a stream) — candidates for resolution. */
 const EMBED_HOST_SUFFIXES = [
+  "vidlink.pro",
   "vidapi.ru",
   "vaplayer.ru",
   "vidbox.wtf",

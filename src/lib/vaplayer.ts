@@ -1,10 +1,13 @@
-/** vaplayer.ru ("PlayBox") embed URLs.
+/** Catalog embed source URLs — vidlink.pro ("Server 2").
  *
- *  The endpoint accepts BOTH IMDb (tt…) and TMDB numeric ids, so a TMDB
- *  browse result can be played without an id mapping round-trip. Shared by
- *  the Worker (TMDB browse cards) and the frontend (synthetic play route). */
+ *  Formerly vaplayer.ru, which moved its player behind a Cloudflare Turnstile
+ *  challenge (nextgencloudfabric.com) that cannot pass inside a cross-origin
+ *  iframe — every embed showed a blank player. vidlink.pro is one of the
+ *  servers vidbox.wtf itself drives: plain iframe-embeddable, no frame
+ *  blocking, and its player resolves to a direct signed file.
+ *  The endpoint accepts TMDB numeric ids for both movies and TV. */
 
-const VAPLAYER_BASE = "https://vaplayer.ru";
+const EMBED_BASE = "https://vidlink.pro";
 
 export function vaplayerEmbedUrl({
   id,
@@ -25,6 +28,6 @@ export function vaplayerEmbedUrl({
   if (!target) return "";
   const isSeries = kind === "series";
   return isSeries
-    ? `${VAPLAYER_BASE}/embed/tv/${target}/${season}/${episode}`
-    : `${VAPLAYER_BASE}/embed/movie/${target}`;
+    ? `${EMBED_BASE}/tv/${target}/${season}/${episode}`
+    : `${EMBED_BASE}/movie/${target}`;
 }
