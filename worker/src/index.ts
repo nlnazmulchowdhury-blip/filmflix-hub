@@ -7,6 +7,8 @@ import { resolveRedirect, isShortLink } from "./shortlinks";
 import { dubbingRoutes } from "./dubbing";
 import { sendOtpEmail } from "./email";
 import { vidsrcRoutes } from "./vidsrc";
+import { tmdbRoutes } from "./tmdb";
+import { embedResolveRoutes } from "./embedresolve";
 import { supportRoutes } from "./support";
 import { tvCategoryRoutes } from "./tvCategories";
 import { uploadRoutes } from "./uploads";
@@ -24,6 +26,9 @@ export interface Bindings {
   MOVIE_API_BASE?: string;
   MOVIE_API_KEY?: string;
   MOVIEBOX_WEB_PROXY?: string;
+  /* TMDB v3 API key (read token or api_key) — powers the landing "All Movies"
+     browse grid. */
+  TMDB_API_KEY?: string;
 }
 
 export type Env = { Bindings: Bindings } & { Variables: { userId?: string; role?: string | null } };
@@ -1038,6 +1043,18 @@ app.route("/dubbing", dubbingRoutes);
 /* ------------------------------------------------------------------ */
 
 app.route("/vidsrc", vidsrcRoutes);
+
+/* ------------------------------------------------------------------ */
+/* tmdb browse (IMDB-wide catalog grid: "All Movies" + Load More)      */
+/* ------------------------------------------------------------------ */
+
+app.route("/tmdb", tmdbRoutes);
+
+/* ------------------------------------------------------------------ */
+/* embed → m3u8 resolver (Server 3: play provider streams ad-free)     */
+/* ------------------------------------------------------------------ */
+
+app.route("/embed", embedResolveRoutes);
 
 /* ------------------------------------------------------------------ */
 /* help-center chat + tv category chips                                */

@@ -7,6 +7,7 @@ import Logo from "@/components/Logo";
 import PlayerStage from "@/components/PlayerStage";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useMiniPlayer } from "@/components/mini-player-context";
+import { vaplayerEmbedUrl } from "@/lib/vaplayer";
 import AdBanner from "@/components/AdBanner";
 import AdSideRail from "@/components/AdSideRail";
 import { AD_BANNERS } from "@/lib/ad-banners";
@@ -53,10 +54,13 @@ export default function MovieDetail() {
   const { movie: miniMovie, isActive: miniActive, start } = useMiniPlayer();
   const isVidSrc = id?.startsWith("vidsrc-") ?? false;
   const vidsrcImdbId = isVidSrc ? id?.replace("vidsrc-", "") : null;
+  const isVaplayer = id?.startsWith("vaplayer-") ?? false;
+  const vaplayerId = isVaplayer ? id?.replace("vaplayer-", "") : null;
+  const isExternal = isVidSrc || isVaplayer;
   const externalState = (location.state as any) || {};
   const movie = useQuery(
     api.movies.get,
-    isVidSrc ? "skip" : { id: id as Id<"movies"> },
+    isExternal ? "skip" : { id: id as Id<"movies"> },
   );
 
 
@@ -115,6 +119,29 @@ export default function MovieDetail() {
       );
       return;
     }
+    if (isVaplayer && vaplayerId) {
+      const kind = externalState.kind === "series" ? "series" : "movie";
+      start(
+        {
+          movieId: `vaplayer:${vaplayerId}`,
+          title: externalState.title || "External",
+          /* videoUrl is the provider embed page → PlayerStage detects it via
+             isEmbedUrl() and routes through the ad-free embed server. */
+          videoUrl:
+            externalState.embedUrl ||
+            vaplayerEmbedUrl({ tmdbId: vaplayerId, kind }),
+          posterUrl: externalState.posterUrl,
+          backdropUrl: externalState.backdropUrl,
+          dubs: [],
+          qualities: [],
+          subtitles: [],
+          tmdbId: vaplayerId,
+          kind,
+        } as any,
+        false,
+      );
+      return;
+    }
     if (!movie) return;
     if (miniActive && miniMovie?.movieId === movie._id) return; // already playing
     start(
@@ -134,7 +161,7 @@ export default function MovieDetail() {
       false,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [movie?._id, isVidSrc, vidsrcImdbId]);
+  }, [movie?._id, isVidSrc, vidsrcImdbId, isVaplayer, vaplayerId]);
 
   const handleSchedule = async () => {
     if (!movie) return;
@@ -282,7 +309,33 @@ export default function MovieDetail() {
         imdbId: vidsrcImdbId,
         tmdbId: null,
       }
-    : (movie as any);
+    : isVaplayer
+      ? {
+          _id: `vaplayer:${vaplayerId}` as any,
+          title: externalState.title || "External",
+          posterUrl: externalState.posterUrl || null,
+          backdropUrl: externalState.backdropUrl || null,
+          year: null,
+          description:
+            externalState.overview ||
+            "This title is from the full IMDB/TMDB catalog (Server 2 — embed).",
+          kind: (externalState.kind as any) || "movie",
+          category: "External",
+          genres: [],
+          /* The provider embed page — PlayerStage resolves it to an ad-free
+             stream, falling back to the provider iframe. */
+          videoUrl:
+            externalState.embedUrl ||
+            vaplayerEmbedUrl({ tmdbId: vaplayerId, kind: externalState.kind }),
+          dubs: [],
+          qualities: [],
+          subtitles: [],
+          episodes: [],
+          downloads: [],
+          imdbId: null,
+          tmdbId: vaplayerId,
+        }
+      : (movie as any);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -394,7 +447,9 @@ export default function MovieDetail() {
               </section>
             )}
 
-            {/* Meta */}
+            {/* Meta — catalog entries only; external (vidsrc/vaplayer) titles
+                show just the player + playlist. */}
+            {movie && (
             <div className="grid gap-8 lg:grid-cols-[1fr_280px] lg:gap-10">
               <div>
                 <div className="flex flex-wrap items-center gap-2.5">
@@ -574,6 +629,7 @@ export default function MovieDetail() {
                 </div>
               </aside>
             </div>
+            )}
 
             {/* Banner ads */}
             <div className="flex justify-center">

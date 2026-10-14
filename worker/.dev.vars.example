@@ -1,0 +1,6 @@
+# Local worker secrets — copy to `.dev.vars` (gitignored) and fill in.
+# `wrangler dev` reads these automatically for local runs.
+
+# TMDB v3 key (https://www.themoviedb.org/settings/api → "API Key" or "Read
+# Access Token"). Powers the landing "All Movies" browse grid.
+TMDB_API_KEY=

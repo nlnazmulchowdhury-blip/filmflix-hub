@@ -7,6 +7,7 @@ import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
 import VidSrcResultCard, { type VidSrcHit } from "@/components/VidSrcResultCard";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
+import { browseTmdb, listProviders, type ProviderInfo, type TmdbItem } from "@/lib/tmdb";
 import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
 import AdSideRail from "@/components/AdSideRail";
@@ -15,10 +16,11 @@ import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
 import { useAction, useQuery } from "convex/react";
-import { Dices, Film, LogOut, Menu, Play, Search, ShieldCheck, Tv, X } from "lucide-react";
+import { Dices, Film, LogOut, Menu, Play, Search, ShieldCheck, Tv, X, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import { motion } from "framer-motion";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
+import { toast } from "sonner";
 import {
   Sheet,
   SheetContent,
@@ -67,6 +69,119 @@ export default function Landing() {
      for a previous query never shows up under the current one. */
   const [external, setExternal] = useState<{ q: string; hits: VidSrcHit[] } | null>(null);
   const [externalLoading, setExternalLoading] = useState(false);
+
+  /* -------- TMDB browse: the full IMDB-wide movie grid ------------------ */
+  /* Fetched 60 titles at a time from the Worker; "Load More" appends the next
+     batch. Cards play via the vaplayer embed server (Server 2). The grid is
+     channel-aware: picking a provider tile reloads it with that channel's
+     catalog (`provider` param on /tmdb/browse). */
+  const [tmdbItems, setTmdbItems] = useState<TmdbItem[]>([]);
+  const [tmdbBatch, setTmdbBatch] = useState(0);
+  const [tmdbLoading, setTmdbLoading] = useState(false);
+  const [tmdbMore, setTmdbMore] = useState(true);
+  const [tmdbError, setTmdbError] = useState("");
+
+  /* -------- Providers band (Netflix, Prime Video, …) -------------------- */
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderInfo | null>(null);
+  const [rowExpanded, setRowExpanded] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  const loadTmdb = useCallback(async (batch: number, providerId: string | null) => {
+    setTmdbLoading(true);
+    setTmdbError("");
+    try {
+      const r = await browseTmdb(batch, "all", providerId);
+      if (r.error) setTmdbError(r.error);
+      setTmdbItems((prev) => (batch <= 1 ? r.items : [...prev, ...r.items]));
+      setTmdbBatch(batch);
+      setTmdbMore(r.hasMore && r.items.length > 0);
+    } catch (err) {
+      setTmdbError(
+        err instanceof Error ? err.message : "Could not load movies right now",
+      );
+      setTmdbMore(false);
+    } finally {
+      setTmdbLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    listProviders()
+      .then(setProviders)
+      .catch(() => setProviders([]));
+  }, []);
+
+  /* Reload batch 1 whenever the selected channel changes (null = all). */
+  useEffect(() => {
+    void loadTmdb(1, selectedProvider?.id ?? null);
+  }, [loadTmdb, selectedProvider]);
+
+  /** Clicking a channel tile filters the grid to it; clicking again clears. */
+  const selectProvider = (p: ProviderInfo) => {
+    setQuery("");
+    setCategory(null);
+    setSelectedProvider((cur) => {
+      const next = cur?.id === p.id ? null : p;
+      setTmdbItems([]);
+      setTmdbMore(true);
+      return next;
+    });
+  };
+
+  const scrollRow = (dir: 1 | -1) => {
+    rowRef.current?.scrollBy({ left: dir * 340, behavior: "smooth" });
+  };
+
+  /* Open a browse card in the site player: the vaplayer- synthetic route feeds
+     its embed URL straight into PlayerStage's ad-free embed server. Cards that
+     carry no embed id (keyless pad entries) resolve their title to an IMDb id
+     first and play through Server 1 (VidSrc). */
+  const playTmdb = async (item: TmdbItem) => {
+    if (item.embedUrl) {
+      navigate(`/movie/vaplayer-${item.tmdbId}`, {
+        state: {
+          external: "vaplayer",
+          tmdbId: item.tmdbId,
+          kind: item.kind,
+          title: item.title,
+          posterUrl: item.posterUrl ?? undefined,
+          backdropUrl: item.backdropUrl ?? undefined,
+          overview: item.overview,
+          embedUrl: item.embedUrl,
+        },
+      });
+      return;
+    }
+    try {
+      const hits = await searchExternal({ q: item.title });
+      const hit = hits?.[0];
+      if (hit) {
+        navigate(`/movie/vidsrc-${hit.imdbId}`, {
+          state: {
+            external: true,
+            imdbId: hit.imdbId,
+            kind: hit.kind,
+            title: hit.title,
+            posterUrl: hit.posterUrl,
+          },
+        });
+      } else {
+        toast?.error?.(`No stream found for “${item.title}”`);
+      }
+    } catch {
+      /* keep the grid usable even if the resolve fails */
+    }
+  };
+
+  /** Display a TMDB card through the shared poster-card component. */
+  const tmdbToHit = (item: TmdbItem): VidSrcHit => ({
+    imdbId: `tmdb-${item.tmdbId}`,
+    title: item.title,
+    year: item.year,
+    kind: item.kind,
+    posterUrl: item.posterUrl ?? undefined,
+  });
 
 
   const trimmedQuery = query.trim();
@@ -162,6 +277,9 @@ export default function Landing() {
      plays) exactly like a catalog entry — the viewer can't tell the difference. */
   const externalResults = trimmedQuery.length >= 2 ? externalHits ?? [] : [];
   const catalog = [...localResults, ...externalResults];
+  /* While a search or category filter is active the grid shows those results;
+     otherwise it browses the selected provider channel (or the full catalog). */
+  const inResultsMode = trimmedQuery.length > 0 || category !== null;
 
   const surprise = () => {
     if (!movies || movies.length === 0) return;
@@ -197,7 +315,7 @@ export default function Landing() {
             <button type="button" onClick={surprise} className={navLinkClass}>
               Random
             </button>
-            <a href="#catalog" className={navLinkClass}>Categories</a>
+            <a href="#providers" className={navLinkClass}>Providers</a>
             <Link
               to={isAuthenticated ? "/dashboard" : `/auth?returnTo=%2Fdashboard`}
               className={navLinkClass}
@@ -228,7 +346,7 @@ export default function Landing() {
                 {[
                   { label: "Home", to: "/" },
                   { label: "Random", action: () => { setMenuOpen(false); surprise(); } },
-                  { label: "Categories", href: "#catalog" },
+                  { label: "Providers", href: "#providers" },
                   {
                     label: "Library",
                     to: isAuthenticated ? "/dashboard" : "/auth?returnTo=%2Fdashboard",
@@ -399,72 +517,202 @@ export default function Landing() {
           <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
         </div>
 
-        <section id="catalog" className="scroll-mt-24 pt-10">
-          <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        {/* Providers band — streaming channels; picking one loads its movies. */}
+        <section id="providers" className="scroll-mt-24 pt-10">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div className="flex items-baseline gap-3">
+              <h2 className="font-display text-2xl font-bold tracking-tight text-primary sm:text-3xl">
+                Providers
+              </h2>
+              <span aria-hidden className="text-muted-foreground/50">
+                |
+              </span>
+              <button
+                type="button"
+                onClick={() => setRowExpanded((v) => !v)}
+                className="text-sm font-semibold text-primary transition-colors hover:text-primary/80"
+              >
+                View All
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={() => scrollRow(-1)}
+                aria-label="Scroll providers left"
+              >
+                <ChevronLeft className="size-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={() => scrollRow(1)}
+                aria-label="Scroll providers right"
+              >
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
+          </div>
+
+          <div
+            ref={rowRef}
+            className={
+              rowExpanded
+                ? "flex flex-wrap gap-3"
+                : "flex gap-3 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            }
+          >
+            {providers.length === 0
+              ? Array.from({ length: 10 }).map((_, i) => (
+                  <Skeleton key={i} className="size-24 shrink-0 rounded-xl" />
+                ))
+              : providers.map((p) => {
+                  const active = selectedProvider?.id === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      title={p.name}
+                      aria-pressed={active}
+                      onClick={() => selectProvider(p)}
+                      className={`group relative size-24 shrink-0 overflow-hidden rounded-xl border transition-all ${
+                        active
+                          ? "border-primary ring-2 ring-primary/60"
+                          : "border-border/60 hover:border-foreground/40 hover:shadow-lg"
+                      }`}
+                    >
+                      {/* Blown-up logo as the tile backdrop, like the reference band. */}
+                      <img
+                        src={p.logoUrl}
+                        alt=""
+                        aria-hidden
+                        className="absolute inset-0 size-full scale-150 opacity-40 blur-xl"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-br from-black/20 via-transparent to-black/70" />
+                      <img
+                        src={p.logoUrl}
+                        alt={p.name}
+                        loading="lazy"
+                        className="relative size-full object-contain p-4 transition-transform group-hover:scale-110"
+                      />
+                    </button>
+                  );
+                })}
+          </div>
+
+          <div className="mb-6 mt-10 flex flex-wrap items-end justify-between gap-4">
             <div>
               <h2 className="font-display text-2xl font-bold tracking-tight sm:text-3xl">
-                {query.trim()
-                  ? "Search results"
-                  : category
-                    ? category
-                    : "New Releases"}
+                {inResultsMode
+                  ? trimmedQuery
+                    ? "Search results"
+                    : category
+                  : selectedProvider
+                    ? `${selectedProvider.name} Movies`
+                    : "All Movies"}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                {query.trim()
-                  ? `${catalog.length} ${catalog.length === 1 ? "movie" : "movies"} found for “${query.trim()}”`
-                  : category
-                    ? `Browsing the ${category} collection.`
-                    : "Watch new releases for free — pick a poster and press play."}
+                {inResultsMode
+                  ? trimmedQuery
+                    ? `${catalog.length} ${catalog.length === 1 ? "movie" : "movies"} found for “${trimmedQuery}”`
+                    : `Browsing the ${category} collection.`
+                  : selectedProvider
+                    ? `Streaming on ${selectedProvider.name} — pick a poster and press play.`
+                    : "Fresh from the full IMDB & TMDB catalog — updated weekly. Pick a poster and press play."}
               </p>
             </div>
           </div>
 
-          {!movies ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-              {Array.from({ length: 16 }).map((_, i) => (
-                <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
-              ))}
-            </div>
-          ) : catalog.length === 0 && trimmedQuery.length >= 2 && (externalLoading || !external || external.q !== trimmedQuery) ? (
-            /* Searching or waiting for external results for current query —
-               avoid flashing "nothing matched" during debounce/fetch. */
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
-              ))}
-            </div>
-          ) : catalog.length === 0 ? (
-            <Card className="border-dashed border-border/70 bg-card/50">
-              <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
-                <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                  <Film className="size-6" />
-                </span>
-                <p className="font-display text-lg font-semibold">
-                  {query.trim() ? "Nothing matched" : "No movies yet"}
-                </p>
-                <p className="max-w-sm text-sm text-muted-foreground">
-                  {query.trim() || category
-                    ? "Try fewer words, a different spelling, or clear the filters."
-                    : "The catalog is empty — check back soon."}
-                </p>
-              </CardContent>
-            </Card>
+          {inResultsMode ? (
+            !movies ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+                {Array.from({ length: 16 }).map((_, i) => (
+                  <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
+                ))}
+              </div>
+            ) : catalog.length === 0 && trimmedQuery.length >= 2 && (externalLoading || !external || external.q !== trimmedQuery) ? (
+              /* Searching or waiting for external results for current query —
+                 avoid flashing "nothing matched" during debounce/fetch. */
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
+                ))}
+              </div>
+            ) : catalog.length === 0 ? (
+              <Card className="border-dashed border-border/70 bg-card/50">
+                <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
+                  <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <Film className="size-6" />
+                  </span>
+                  <p className="font-display text-lg font-semibold">
+                    {trimmedQuery ? "Nothing matched" : "No movies yet"}
+                  </p>
+                  <p className="max-w-sm text-sm text-muted-foreground">
+                    {trimmedQuery || category
+                      ? "Try fewer words, a different spelling, or clear the filters."
+                      : "The catalog is empty — check back soon."}
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+                {localResults.map((m: any, i: any) => (
+                  <MovieCard key={m._id} movie={m} index={i} />
+                ))}
+                {/* External hits sit in the same grid, styled identically, so a
+                    title that isn't in our library still looks like a normal result. */}
+                {externalResults.map((h, i) => (
+                  <VidSrcResultCard
+                    key={h.imdbId}
+                    hit={h}
+                    index={localResults.length + i}
+                    onPlay={playExternal}
+                  />
+                ))}
+              </div>
+            )
           ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-              {localResults.map((m: any, i: any) => (
-                <MovieCard key={m._id} movie={m} index={i} />
-              ))}
-              {/* External hits sit in the same grid, styled identically, so a
-                  title that isn't in our library still looks like a normal result. */}
-              {externalResults.map((h, i) => (
-                <VidSrcResultCard
-                  key={h.imdbId}
-                  hit={h}
-                  index={localResults.length + i}
-                  onPlay={playExternal}
-                />
-              ))}
-            </div>
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+                {tmdbItems.map((item, i) => (
+                  <VidSrcResultCard
+                    key={`${item.kind}-${item.tmdbId}`}
+                    hit={tmdbToHit(item)}
+                    index={i % 10}
+                    onPlay={() => playTmdb(item)}
+                  />
+                ))}
+                {/* Skeletons for the first batch, or a light tail while loading more. */}
+                {tmdbLoading &&
+                  Array.from({ length: tmdbItems.length === 0 ? 12 : 6 }).map((_, i) => (
+                    <Skeleton key={`sk-${i}`} className="aspect-[2/3] rounded-xl" />
+                  ))}
+              </div>
+
+              {tmdbError && tmdbItems.length === 0 && (
+                <p className="mt-4 text-sm text-destructive">{tmdbError}</p>
+              )}
+
+              {tmdbMore && (
+                <div className="mt-8 flex justify-center">
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    className="gap-2"
+                    disabled={tmdbLoading}
+                    onClick={() => void loadTmdb(tmdbBatch + 1, selectedProvider?.id ?? null)}
+                  >
+                    {tmdbLoading ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Film className="size-4" />
+                    )}
+                    {tmdbLoading ? "Loading…" : "Load More"}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </section>
 

@@ -1,11 +1,18 @@
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
 import {
+  isEmbedUrl,
+  resolveEmbedStream,
+  type EmbedCandidate,
+} from "@/lib/embed-resolver";
+import {
   Captions,
   ChevronLeft,
   ChevronRight,
   Gauge,
   Languages,
+  Link2,
+  Loader2,
   Maximize,
   Minimize,
   Moon,
@@ -21,6 +28,7 @@ import {
   Volume1,
   Volume2,
   VolumeX,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Slider } from "@/components/ui/slider";
@@ -124,36 +132,120 @@ export default function PlayerStage({
 
   /* -------- Playback server: stored file vs VidSrc "Server 1" -------- */
   const vidsrcUrl = vidsrcEmbedUrl({ imdbId, tmdbId, kind, season, episode });
+  /* A stored URL that is actually a provider player page (vidapi.ru,
+     vidbox.wtf, …) — it goes through the embed resolver, never to <video>. */
+  const embedSource = isEmbedUrl(videoUrl) ? videoUrl : "";
   const hasNativeSource =
-    Boolean(videoUrl) || dubs.length > 0 || qualities.length > 0;
+    (Boolean(videoUrl) && !embedSource) || dubs.length > 0 || qualities.length > 0;
   /* Default to Server 1 only when there is no stored file to play — so the
      API-backed embed auto-plays for catalog entries without a local source,
      while existing files keep their native player (quality/dub/subtitles). */
-  const [server, setServer] = useState<"original" | "vidsrc">(
-    vidsrcUrl && !videoUrl ? "vidsrc" : "original",
+  const [server, setServer] = useState<"original" | "vidsrc" | "embed">(
+    embedSource ? "embed" : vidsrcUrl && !videoUrl ? "vidsrc" : "original",
   );
   const [serverOpen, setServerOpen] = useState(false);
   const usingVidSrc = server === "vidsrc" && Boolean(vidsrcUrl);
+  const usingEmbed = server === "embed";
   const servers: { key: string; label: string; sub?: string }[] = [];
   if (vidsrcUrl)
     servers.push({ key: "vidsrc", label: "Server 1", sub: "VidSrc · vidsrc.to" });
+  servers.push({
+    key: "embed",
+    label: embedSource ? "Server 2" : "Embed",
+    sub: "vidbox/vidapi · ad-free",
+  });
   if (hasNativeSource)
     servers.push({
       key: "original",
       label: vidsrcUrl ? "Server 2" : "Original",
       sub: "This site's file",
     });
+
+  /* -------- Embed resolver ("Server 2"): provider page → raw HLS stream ---- */
+  const [embedUrl, setEmbedUrl] = useState(embedSource);
+  const [embedStatus, setEmbedStatus] = useState<
+    "idle" | "resolving" | "ready" | "failed"
+  >("idle");
+  const [embedCandidates, setEmbedCandidates] = useState<EmbedCandidate[]>([]);
+  const [embedError, setEmbedError] = useState("");
+  const [embedIframe, setEmbedIframe] = useState(false);
+  const [embedStream, setEmbedStream] = useState<string | null>(null);
+  const [embedPanelOpen, setEmbedPanelOpen] = useState(false);
+
+  const playEmbedCandidate = useCallback(
+    (c: EmbedCandidate) => {
+      setEmbedStream(c.url);
+      setEmbedPanelOpen(false);
+      setEmbedIframe(false);
+      start({ movieId, title, videoUrl: c.url, posterUrl, backdropUrl }, true);
+    },
+    [start, movieId, title, posterUrl, backdropUrl],
+  );
+
+  const runEmbedResolve = useCallback(
+    async (url: string) => {
+      const target = url.trim();
+      if (!target) {
+        setEmbedStatus("failed");
+        setEmbedError("No embed URL yet — paste one above.");
+        return;
+      }
+      setEmbedStatus("resolving");
+      setEmbedError("");
+      setEmbedIframe(false);
+      try {
+        const r = await resolveEmbedStream(target);
+        setEmbedCandidates(r.candidates ?? []);
+        if (r.candidates?.length) {
+          setEmbedStatus("ready");
+          playEmbedCandidate(r.candidates[0]);
+        } else {
+          setEmbedStatus("failed");
+          setEmbedError(
+            r.error ||
+              "No stream found — this provider hides it behind a browser check. Falling back to the provider iframe.",
+          );
+          setEmbedIframe(true);
+        }
+      } catch {
+        setEmbedStatus("failed");
+        setEmbedError("Resolver request failed. Falling back to the provider iframe.");
+        setEmbedIframe(true);
+      }
+    },
+    [playEmbedCandidate],
+  );
+
+  /* Stored URL is an embed page: resolve it as soon as the stage mounts. */
+  useEffect(() => {
+    if (embedSource) void runEmbedResolve(embedSource);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedSource]);
+
   const selectServer = (key: string) => {
-    setServer(key === "vidsrc" ? "vidsrc" : "original");
+    const next =
+      key === "embed" ? "embed" : key === "vidsrc" ? "vidsrc" : "original";
+    if (next === "original" && embedStream) {
+      setEmbedStream(null);
+      start(
+        { movieId, title, videoUrl: embedSource ? "" : videoUrl, posterUrl, backdropUrl },
+        true,
+      );
+    }
+    setServer(next);
+    if (next === "embed") {
+      setEmbedPanelOpen(true);
+      if (embedStatus === "idle") void runEmbedResolve(embedUrl || embedSource);
+    }
     bumpControlsActivity();
   };
 
-  /* When Server 1 (iframe) takes over, pause the native file so the two
-     never output audio at once. */
+  /* When an iframe server (VidSrc / embed fallback) takes over, pause the
+     native file so the two never output audio at once. */
   useEffect(() => {
-    if (usingVidSrc && playing) controls.pause();
+    if ((usingVidSrc || (usingEmbed && embedIframe)) && playing) controls.pause();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usingVidSrc, playing]);
+  }, [usingVidSrc, usingEmbed, embedIframe, playing]);
 
   const isHost = isActive && mode === "inline";
 
@@ -373,7 +465,16 @@ export default function PlayerStage({
         <button
           type="button"
           onClick={() =>
-            start({ movieId, title, videoUrl, posterUrl, backdropUrl }, true)
+            start(
+              {
+                movieId,
+                title,
+                videoUrl: embedSource ? "" : videoUrl,
+                posterUrl,
+                backdropUrl,
+              },
+              true,
+            )
           }
           className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4"
         >
@@ -513,6 +614,147 @@ export default function PlayerStage({
                 {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Embed resolver fallback — provider iframe (with its ads) when no
+          raw stream could be extracted server-side. */}
+      {usingEmbed && embedIframe && (embedUrl || embedSource) && (
+        <div className="absolute inset-0 z-[60] bg-black">
+          <iframe
+            src={(embedUrl || embedSource) as string}
+            title={`${title} — Embed`}
+            className="absolute inset-0 size-full border-0"
+            allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
+            allowFullScreen
+            referrerPolicy="origin"
+          />
+          <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-1.5 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-2 pb-8 pt-2 sm:px-3">
+            <button
+              type="button"
+              onClick={() => {
+                setEmbedIframe(false);
+                setEmbedPanelOpen(true);
+              }}
+              className="rounded-lg bg-black/50 px-2.5 py-1.5 text-xs text-white backdrop-blur-sm transition-colors hover:bg-black/70"
+            >
+              Retry stream
+            </button>
+            <div className="ml-auto flex items-center gap-1.5">
+              <ServerSwitcher
+                servers={servers}
+                activeKey={server}
+                onSelect={selectServer}
+                open={serverOpen}
+                setOpen={setServerOpen}
+                align="right"
+              />
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+                aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+              >
+                {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Embed resolver panel — paste/resolve an embed URL and pick a stream. */}
+      {usingEmbed && embedPanelOpen && !embedIframe && (
+        <div className="absolute inset-0 z-[65] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl border border-border/60 bg-card/95 p-4 text-sm text-card-foreground shadow-2xl">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="font-display font-semibold">
+                Embed stream — ad-free
+              </span>
+              <button
+                type="button"
+                onClick={() => setEmbedPanelOpen(false)}
+                className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label="Close"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Paste a vidapi.ru / vidbox.wtf (or similar) embed link — the
+              Worker follows its iframe chain and plays the raw HLS stream
+              here, without the provider&apos;s player or ads.
+            </p>
+            <div className="flex gap-2">
+              <input
+                value={embedUrl}
+                onChange={(e) => setEmbedUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void runEmbedResolve(embedUrl);
+                }}
+                placeholder="https://vidbox.wtf/e/…"
+                className="min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-xs outline-none focus-visible:border-ring"
+              />
+              <button
+                type="button"
+                disabled={embedStatus === "resolving"}
+                onClick={() => void runEmbedResolve(embedUrl)}
+                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-opacity disabled:opacity-60"
+              >
+                {embedStatus === "resolving" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Link2 className="size-3.5" />
+                )}
+                Resolve
+              </button>
+            </div>
+            {embedError && (
+              <p className="mt-2 text-xs text-destructive">{embedError}</p>
+            )}
+            {embedCandidates.length > 0 && (
+              <div className="mt-3 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Found {embedCandidates.length} stream(s) — pick one:
+                </p>
+                {embedCandidates.map((c) => {
+                  let host = c.url;
+                  try {
+                    host = new URL(c.url).hostname;
+                  } catch {
+                    /* keep full url */
+                  }
+                  return (
+                    <button
+                      key={c.url}
+                      type="button"
+                      onClick={() => playEmbedCandidate(c)}
+                      title={c.url}
+                      className={`block w-full truncate rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-accent ${
+                        embedStream === c.url
+                          ? "border-primary/60 text-primary"
+                          : "border-border/60"
+                      }`}
+                    >
+                      {host}{" "}
+                      <span className="text-muted-foreground">({c.via})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {(embedUrl || embedSource) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEmbedIframe(true);
+                  setEmbedPanelOpen(false);
+                }}
+                className="mt-3 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              >
+                Show provider iframe instead (has ads)
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -732,8 +974,9 @@ export default function PlayerStage({
             </div>
           )}
 
-          {/* Playback server — switch between this site's file and VidSrc Server 1. */}
-          {vidsrcUrl && (
+          {/* Playback server — switch between this site's file, VidSrc, and the
+              embed resolver. Shown whenever more than one server is available. */}
+          {servers.length > 1 && (
             <ServerSwitcher
               servers={servers}
               activeKey={server}

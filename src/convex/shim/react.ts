@@ -20,6 +20,7 @@ export const Authenticated = (p: { children?: unknown }) => null;
 export const Unauthenticated = (p: { children?: unknown }) => null;
 export const AuthLoading = (p: { children?: unknown }) => null;
 export const ConvexAuthProvider = (p: { children?: unknown; client?: unknown }) => null;
+export const ConvexProviderWithAuth = (p: { children?: unknown }) => p.children ?? null;
 export function useConvex() {
   return null as unknown;
 }

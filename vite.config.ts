@@ -148,6 +148,18 @@ export default defineConfig(({ mode }) => {
     hmr: {
       overlay: false,
     },
+    // Dev-only: the hosted Worker only allows CORS from localhost:5173, so
+    // when running on another port, proxy /api to it server-side (paired with
+    // VITE_API_BASE=/api in .env.local).
+    proxy: {
+      "/api": {
+        target:
+          env.WORKER_PROXY_TARGET ||
+          "https://filmflix-hub.nlnazmulchowdhury.workers.dev",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api/, ""),
+      },
+    },
   },
   };
 });

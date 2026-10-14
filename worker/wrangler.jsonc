@@ -20,6 +20,7 @@
   //   ADMIN_ACCESS_CODE  - shared admin unlock code
   //   ELEVENLABS_API_KEY - AI dubbing
   //   RESEND_API_KEY     - OTP email delivery (creates a free account + key)
+  //   TMDB_API_KEY       - landing "All Movies" browse grid
   "vars": {
     "OTP_FROM_NAME": "FilmFlix"
   }
