@@ -150,15 +150,14 @@ export default function PlayerStage({
   const usingVidSrc = server === "vidsrc" && Boolean(vidsrcUrl);
   const usingEmbed = server === "embed";
 
-  /* -------- AutoEmbed episode servers: 3 = anime, 4 = drama -------- */
+  /* -------- Episode servers: 3 = Anime (VidNest), 4 = Drama (Videasy) -------- */
   const [aeEpisode, setAeEpisode] = useState(episode ?? 1);
-  const [dramaServer, setDramaServer] = useState(1);
   const usingAutoembed = server === "anime" || server === "drama";
   const autoembedUrl =
     server === "anime"
-      ? animeEmbedUrl(title, aeEpisode)
+      ? animeEmbedUrl({ tmdbId, kind, season, episode: aeEpisode })
       : server === "drama"
-        ? dramaEmbedUrl(title, aeEpisode, dramaServer)
+        ? dramaEmbedUrl({ tmdbId, kind, season, episode: aeEpisode })
         : "";
   /* The URL of whichever full-cover iframe server is active ("" = none). */
   const iframeServerUrl = (usingVidSrc ? vidsrcUrl : autoembedUrl) ?? "";
@@ -171,8 +170,12 @@ export default function PlayerStage({
     label: embedSource ? "Server 2" : "Embed",
     sub: "vidbox/vidapi · ad-free",
   });
-  servers.push({ key: "anime", label: "Server 3", sub: "Anime · autoembed" });
-  servers.push({ key: "drama", label: "Server 4", sub: "Drama · autoembed" });
+  /* Anime/Drama episode servers key off the TMDB id — only offer them when
+     the current title actually has one. */
+  if (tmdbId) {
+    servers.push({ key: "anime", label: "Server 3", sub: "Anime · VidNest" });
+    servers.push({ key: "drama", label: "Server 4", sub: "Drama · Videasy" });
+  }
   if (hasNativeSource)
     servers.push({
       key: "original",
@@ -631,7 +634,8 @@ export default function PlayerStage({
           <div className="absolute inset-x-0 top-0 z-10 flex flex-wrap items-center gap-1.5 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-2 pb-8 pt-2 sm:px-3">
             {usingAutoembed && (
               <>
-                {/* Episode stepper — autoembed URLs are per-episode. */}
+                {/* Episode stepper — the anime/drama providers are per-episode
+                    for series (VidNest / Videasy `tv/{id}/{season}/{ep}`). */}
                 <div className="flex items-center gap-0.5 rounded-lg bg-black/55 text-white backdrop-blur-sm">
                   <button
                     type="button"
@@ -653,29 +657,6 @@ export default function PlayerStage({
                     <ChevronRight className="size-4" />
                   </button>
                 </div>
-                {/* Drama backend picker — the ?server= query param. */}
-                {server === "drama" && (
-                  <div className="flex items-center gap-1 rounded-lg bg-black/55 px-2 py-1 backdrop-blur-sm">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-white/60">
-                      Src
-                    </span>
-                    {[1, 2, 3].map((n) => (
-                      <button
-                        key={n}
-                        type="button"
-                        onClick={() => setDramaServer(n)}
-                        aria-pressed={dramaServer === n}
-                        className={`rounded-md px-2 py-0.5 text-xs font-semibold transition-colors ${
-                          dramaServer === n
-                            ? "bg-primary text-primary-foreground"
-                            : "text-white/70 hover:bg-white/15"
-                        }`}
-                      >
-                        {n}
-                      </button>
-                    ))}
-                  </div>
-                )}
                 <a
                   href={iframeServerUrl}
                   target="_blank"

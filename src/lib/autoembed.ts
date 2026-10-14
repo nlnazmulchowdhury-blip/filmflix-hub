@@ -1,37 +1,48 @@
 /**
- * AutoEmbed episode players — "Server 3" (anime) and "Server 4" (drama).
+ * "Server 3" (Anime) and "Server 4" (Drama) episode players.
  *
- * URL formats (as specified):
- *   https://anime.autoembed.cc/embed/{title}-episode-{number}
- *   https://drama.autoembed.cc/embed/{title}-episode-{no}?server={no}
+ * These were originally the AutoEmbed title-slug endpoints
+ * (`anime.autoembed.cc/embed/{title}-episode-{n}` /
+ * `drama.autoembed.cc/embed/{title}-episode-{n}?server={n}`), but the whole
+ * `*.autoembed.cc` zone is now NXDOMAIN (checked via Google + Cloudflare DoH),
+ * so those embeds were always blank. Rewired to live TMDB-id providers that
+ * vidbox.wtf itself rotates through — both accept a TMDB id for a movie or a
+ * `tv/{id}/{season}/{episode}` path for a series, and neither sits behind a
+ * Cloudflare challenge, so they render inside our cross-origin iframe.
  *
- * The title is slugified into `{title}`. Note: `*.autoembed.cc` currently
- * returns NXDOMAIN (checked 2026-10-14 via Google + Cloudflare DoH); if the
- * service moved to a new domain, change the two host constants below and the
- * servers work again with no other edits.
+ *   Server 3 → VidNest   (markets anime + movie + TV)
+ *   Server 4 → Videasy   (movie + TV, 4K rotation)
  */
 
-export const AUTOEMBED_ANIME_HOST = "anime.autoembed.cc";
-export const AUTOEMBED_DRAMA_HOST = "drama.autoembed.cc";
-
-/** "Frieren: Beyond Journey's End" → "frieren-beyond-journey-s-end" */
-export function autoembedSlug(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || "untitled";
+export interface AutoEmbedTarget {
+  tmdbId: string | number | null | undefined;
+  kind?: "movie" | "series" | null;
+  season?: number;
+  episode?: number;
 }
 
-export function animeEmbedUrl(title: string, episode: number): string {
-  return `https://${AUTOEMBED_ANIME_HOST}/embed/${autoembedSlug(title)}-episode-${episode}`;
+/** Server 3 — VidNest. */
+export function animeEmbedUrl({
+  tmdbId,
+  kind,
+  season = 1,
+  episode = 1,
+}: AutoEmbedTarget): string {
+  if (!tmdbId) return "";
+  return kind === "series"
+    ? `https://vidnest.fun/tv/${tmdbId}/${season}/${episode}`
+    : `https://vidnest.fun/movie/${tmdbId}`;
 }
 
-export function dramaEmbedUrl(
-  title: string,
-  episode: number,
-  server = 1,
-): string {
-  return `https://${AUTOEMBED_DRAMA_HOST}/embed/${autoembedSlug(title)}-episode-${episode}?server=${server}`;
+/** Server 4 — Videasy. */
+export function dramaEmbedUrl({
+  tmdbId,
+  kind,
+  season = 1,
+  episode = 1,
+}: AutoEmbedTarget): string {
+  if (!tmdbId) return "";
+  return kind === "series"
+    ? `https://player.videasy.to/tv/${tmdbId}/${season}/${episode}`
+    : `https://player.videasy.to/movie/${tmdbId}`;
 }
