@@ -677,6 +677,7 @@ export default function PlayerStage({
                 open={serverOpen}
                 setOpen={setServerOpen}
                 align="right"
+                drop="down"
               />
               <button
                 type="button"
@@ -713,6 +714,7 @@ export default function PlayerStage({
                 open={serverOpen}
                 setOpen={setServerOpen}
                 align="right"
+                drop="down"
               />
               <button
                 type="button"
@@ -1241,6 +1243,7 @@ function ServerSwitcher({
   open,
   setOpen,
   align = "right",
+  drop = "up",
 }: {
   servers: { key: string; label: string; sub?: string }[];
   activeKey: string;
@@ -1248,6 +1251,10 @@ function ServerSwitcher({
   open: boolean;
   setOpen: (open: boolean) => void;
   align?: "left" | "right";
+  /** Which way the menu opens. The player box clips overflow, so the button
+   *  in the TOP overlay strip must drop downward; the bottom control bar
+   *  opens upward. */
+  drop?: "up" | "down";
 }) {
   const active = servers.find((s) => s.key === activeKey);
   return (
@@ -1259,7 +1266,7 @@ function ServerSwitcher({
     >
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={() => setOpen(true)}
         className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15"
         aria-label="Playback server"
         title="Server"
@@ -1271,9 +1278,9 @@ function ServerSwitcher({
       </button>
       {open && (
         <div
-          className={`absolute bottom-full z-30 mb-2 min-w-[220px] overflow-hidden rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur ${
-            align === "right" ? "right-0" : "left-0"
-          }`}
+          className={`absolute z-30 min-w-[220px] overflow-hidden rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur ${
+            drop === "down" ? "top-full mt-2" : "bottom-full mb-2"
+          } ${align === "right" ? "right-0" : "left-0"}`}
         >
           <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
             Playback server
