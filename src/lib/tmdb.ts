@@ -37,16 +37,25 @@ export interface ProviderInfo {
   logoUrl: string;
 }
 
+/** A movie category (genre) offered by the embed catalog, for the chip row. */
+export interface CategoryInfo {
+  id: number;
+  name: string;
+}
+
 /** Fetch one 60-item batch (page is a 1-based batch number, not a TMDB page).
-    `provider` filters the batch to one streaming channel's catalog. */
+    `provider` filters the batch to one streaming channel's catalog and
+    `genre` to one category (TMDB genre id). */
 export async function browseTmdb(
   page = 1,
   section = "all",
   provider?: string | null,
+  genre?: number | null,
 ): Promise<TmdbPage> {
   const q = provider ? `&provider=${encodeURIComponent(provider)}` : "";
+  const g = genre ? `&genre=${encodeURIComponent(genre)}` : "";
   return api.get<TmdbPage>(
-    `/tmdb/browse?page=${page}&section=${encodeURIComponent(section)}${q}`,
+    `/tmdb/browse?page=${page}&section=${encodeURIComponent(section)}${q}${g}`,
   );
 }
 
@@ -54,4 +63,11 @@ export async function browseTmdb(
 export async function listProviders(): Promise<ProviderInfo[]> {
   const r = await api.get<{ providers: ProviderInfo[] }>(`/tmdb/providers`);
   return r.providers ?? [];
+}
+
+/** The category chips on the landing page — auto-populated from the embed
+    catalog's own genre list so every chip has movies behind it. */
+export async function listCategories(): Promise<CategoryInfo[]> {
+  const r = await api.get<{ categories: CategoryInfo[] }>(`/tmdb/categories`);
+  return r.categories ?? [];
 }

@@ -7,7 +7,14 @@ import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
 import VidSrcResultCard, { type VidSrcHit } from "@/components/VidSrcResultCard";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
-import { browseTmdb, listProviders, type ProviderInfo, type TmdbItem } from "@/lib/tmdb";
+import {
+  browseTmdb,
+  listCategories,
+  listProviders,
+  type CategoryInfo,
+  type ProviderInfo,
+  type TmdbItem,
+} from "@/lib/tmdb";
 import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
 import AdSideRail from "@/components/AdSideRail";
@@ -57,11 +64,14 @@ function searchableText(m: {
 export default function Landing() {
   const { signOut, isAuthenticated } = useAuth();
   const movies = useQuery(api.movies.list);
-  // Categories created directly in the admin panel (even with zero movies).
-  const tableCategories = useQuery(api.categories.listAll);
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState<string | null>(null);
+
+  /* -------- Category chips (auto-populated from the embed catalog) ------ */
+  /* The embed source's own movie genres, so every chip has real movies
+     behind it; picking one reloads the browse grid filtered to that genre. */
+  const [embedCategories, setEmbedCategories] = useState<CategoryInfo[]>([]);
+  const [genre, setGenre] = useState<CategoryInfo | null>(null);
 
   /* -------- External VidSrc search (titles beyond the local catalog) ---- */
   const searchExternal = useAction(api.vidsrc.search);
@@ -87,46 +97,67 @@ export default function Landing() {
   const [rowExpanded, setRowExpanded] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
 
-  const loadTmdb = useCallback(async (batch: number, providerId: string | null) => {
-    setTmdbLoading(true);
-    setTmdbError("");
-    try {
-      const r = await browseTmdb(batch, "all", providerId);
-      if (r.error) setTmdbError(r.error);
-      setTmdbItems((prev) => (batch <= 1 ? r.items : [...prev, ...r.items]));
-      setTmdbBatch(batch);
-      setTmdbMore(r.hasMore && r.items.length > 0);
-    } catch (err) {
-      setTmdbError(
-        err instanceof Error ? err.message : "Could not load movies right now",
-      );
-      setTmdbMore(false);
-    } finally {
-      setTmdbLoading(false);
-    }
-  }, []);
+  const loadTmdb = useCallback(
+    async (batch: number, providerId: string | null, genreId: number | null) => {
+      setTmdbLoading(true);
+      setTmdbError("");
+      try {
+        const r = await browseTmdb(batch, "all", providerId, genreId);
+        if (r.error) setTmdbError(r.error);
+        setTmdbItems((prev) => (batch <= 1 ? r.items : [...prev, ...r.items]));
+        setTmdbBatch(batch);
+        setTmdbMore(r.hasMore && r.items.length > 0);
+      } catch (err) {
+        setTmdbError(
+          err instanceof Error ? err.message : "Could not load movies right now",
+        );
+        setTmdbMore(false);
+      } finally {
+        setTmdbLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     listProviders()
       .then(setProviders)
       .catch(() => setProviders([]));
+    listCategories()
+      .then(setEmbedCategories)
+      .catch(() => setEmbedCategories([]));
   }, []);
 
-  /* Reload batch 1 whenever the selected channel changes (null = all). */
+  /* Reload batch 1 whenever the selected channel or category changes
+     (null = all). */
   useEffect(() => {
-    void loadTmdb(1, selectedProvider?.id ?? null);
-  }, [loadTmdb, selectedProvider]);
+    void loadTmdb(1, selectedProvider?.id ?? null, genre?.id ?? null);
+  }, [loadTmdb, selectedProvider, genre]);
 
   /** Clicking a channel tile filters the grid to it; clicking again clears. */
   const selectProvider = (p: ProviderInfo) => {
     setQuery("");
-    setCategory(null);
     setSelectedProvider((cur) => {
       const next = cur?.id === p.id ? null : p;
       setTmdbItems([]);
       setTmdbMore(true);
       return next;
     });
+  };
+
+  /** Clicking a category chip filters the grid to that genre; again clears. */
+  const selectGenre = (cat: CategoryInfo) => {
+    setQuery("");
+    setTmdbItems([]);
+    setTmdbMore(true);
+    setGenre((cur) => (cur?.id === cat.id ? null : cat));
+  };
+
+  const clearGenre = () => {
+    setQuery("");
+    setTmdbItems([]);
+    setTmdbMore(true);
+    setGenre(null);
   };
 
   const scrollRow = (dir: 1 | -1) => {
@@ -229,23 +260,10 @@ export default function Landing() {
     });
   };
 
-  /** Distinct display categories (Hollywood, Bengali, Anime, …): names
-      created directly in the admin panel plus every section a movie belongs
-      to. */
-  const categories = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of tableCategories ?? []) set.add(c.name);
-    for (const m of movies ?? []) {
-      for (const c of movieCategoryNames(m)) set.add(c);
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [tableCategories, movies]);
-
+  /** Local catalog rows matching the typed query (title, description, …). */
   const filtered = useMemo(() => {
     if (!movies) return null;
     let rows = movies;
-    if (category)
-      rows = rows.filter((m: any) => movieCategoryNames(m).includes(category));
     const raw = query.trim();
     if (raw) {
       const tokens = normalizeText(raw).split(" ").filter(Boolean);
@@ -269,7 +287,7 @@ export default function Landing() {
       }
     }
     return rows;
-  }, [movies, category, query]);
+  }, [movies, query]);
 
   const localResults = filtered ?? [];
   /* While searching, external VidSrc hits are merged into the same grid as
@@ -277,9 +295,9 @@ export default function Landing() {
      plays) exactly like a catalog entry — the viewer can't tell the difference. */
   const externalResults = trimmedQuery.length >= 2 ? externalHits ?? [] : [];
   const catalog = [...localResults, ...externalResults];
-  /* While a search or category filter is active the grid shows those results;
-     otherwise it browses the selected provider channel (or the full catalog). */
-  const inResultsMode = trimmedQuery.length > 0 || category !== null;
+  /* While a search is active the grid shows those results; otherwise it
+     browses the selected category/channel (or the full catalog). */
+  const inResultsMode = trimmedQuery.length > 0;
 
   const surprise = () => {
     if (!movies || movies.length === 0) return;
@@ -477,38 +495,36 @@ export default function Landing() {
           </motion.div>
         </section>
 
-        {/* Category sections */}
-        {categories.length > 0 && (
-          <section className="mt-6 sm:mt-8">
-            <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0">
+        {/* Category sections — chips come from the embed catalog's genres. */}
+        <section className="mt-6 sm:mt-8">
+          <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0">
+            <button
+              type="button"
+              onClick={() => clearGenre()}
+              className={`shrink-0 rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
+                genre === null
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+              }`}
+            >
+              All categories
+            </button>
+            {embedCategories.map((cat) => (
               <button
+                key={cat.id}
                 type="button"
-                onClick={() => setCategory(null)}
+                onClick={() => selectGenre(cat)}
                 className={`shrink-0 rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
-                  category === null
+                  genre?.id === cat.id
                     ? "border-primary bg-primary text-primary-foreground"
                     : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
                 }`}
               >
-                All categories
+                {cat.name}
               </button>
-              {categories.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => setCategory(category === c ? null : c)}
-                  className={`shrink-0 rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
-                    category === c
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
-                  }`}
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
+            ))}
+          </div>
+        </section>
 
         {/* Catalog */}
         {/* Ad slots: leaderboard (desktop) / mobile banner. */}
@@ -605,21 +621,23 @@ export default function Landing() {
             <div>
               <h2 className="font-display text-2xl font-bold tracking-tight sm:text-3xl">
                 {inResultsMode
-                  ? trimmedQuery
-                    ? "Search results"
-                    : category
-                  : selectedProvider
-                    ? `${selectedProvider.name} Movies`
-                    : "All Movies"}
+                  ? "Search results"
+                  : genre
+                    ? `${genre.name} Movies`
+                    : selectedProvider
+                      ? `${selectedProvider.name} Movies`
+                      : "All Movies"}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 {inResultsMode
-                  ? trimmedQuery
-                    ? `${catalog.length} ${catalog.length === 1 ? "movie" : "movies"} found for “${trimmedQuery}”`
-                    : `Browsing the ${category} collection.`
-                  : selectedProvider
-                    ? `Streaming on ${selectedProvider.name} — pick a poster and press play.`
-                    : "Fresh from the full IMDB & TMDB catalog — updated weekly. Pick a poster and press play."}
+                  ? `${catalog.length} ${catalog.length === 1 ? "movie" : "movies"} found for “${trimmedQuery}”`
+                  : genre
+                    ? `Browsing the ${genre.name} collection${
+                        selectedProvider ? ` on ${selectedProvider.name}` : ""
+                      } — pick a poster and press play.`
+                    : selectedProvider
+                      ? `Streaming on ${selectedProvider.name} — pick a poster and press play.`
+                      : "Fresh from the full IMDB & TMDB catalog — updated weekly. Pick a poster and press play."}
               </p>
             </div>
           </div>
@@ -649,7 +667,7 @@ export default function Landing() {
                     {trimmedQuery ? "Nothing matched" : "No movies yet"}
                   </p>
                   <p className="max-w-sm text-sm text-muted-foreground">
-                    {trimmedQuery || category
+                    {trimmedQuery
                       ? "Try fewer words, a different spelling, or clear the filters."
                       : "The catalog is empty — check back soon."}
                   </p>
@@ -701,7 +719,9 @@ export default function Landing() {
                     size="lg"
                     className="gap-2"
                     disabled={tmdbLoading}
-                    onClick={() => void loadTmdb(tmdbBatch + 1, selectedProvider?.id ?? null)}
+                    onClick={() =>
+                      void loadTmdb(tmdbBatch + 1, selectedProvider?.id ?? null, genre?.id ?? null)
+                    }
                   >
                     {tmdbLoading ? (
                       <Loader2 className="size-4 animate-spin" />

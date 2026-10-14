@@ -226,11 +226,58 @@ tmdbRoutes.get("/providers", async (c) => {
   }
 });
 
-/** vidbox discover API — keyless paginated catalog (20 rows per page). */
-async function fetchDiscoverPage(watchProvider: string, p: number) {
+/* Keyless category list: vidbox's search meta endpoint exposes the embed
+   catalog's own movie genres (TMDB ids + names), so the landing chips are
+   auto-populated from the embed source and /browse can filter by the same
+   ids. Cached ~6h — the genre set rarely changes. */
+
+export interface CategoryInfo {
+  id: number;
+  name: string;
+}
+
+const VIDBOX_META = "https://vidbox.wtf/api/search/meta?country=all";
+const META_CACHE_MS = 6 * 60 * 60 * 1000;
+let metaCache: { at: number; categories: CategoryInfo[] } | null = null;
+
+async function fetchVidboxCategories(): Promise<CategoryInfo[]> {
+  if (metaCache && Date.now() - metaCache.at < META_CACHE_MS) {
+    return metaCache.categories;
+  }
+  const res = await fetch(VIDBOX_META, {
+    headers: {
+      accept: "application/json",
+      "user-agent": VIDBOX_UA,
+      referer: "https://vidbox.wtf/search",
+    },
+  });
+  if (!res.ok) return metaCache?.categories ?? [];
+  const data = (await res.json()) as {
+    movieGenres?: { id: number; name: string }[];
+  };
+  const list = (data.movieGenres ?? [])
+    .filter((g) => g?.name && typeof g?.id === "number")
+    .map((g) => ({ id: g.id, name: g.name }));
+  if (list.length > 0) metaCache = { at: Date.now(), categories: list };
+  return list;
+}
+
+tmdbRoutes.get("/categories", async (c) => {
+  try {
+    const categories = await fetchVidboxCategories();
+    return c.json({ categories });
+  } catch (err) {
+    console.error("category fetch failed", err);
+    return c.json({ categories: [] }, 502);
+  }
+});
+
+/** vidbox discover API — keyless paginated catalog (20 rows per page).
+    `genre` is a TMDB genre id ("all" = unfiltered). */
+async function fetchDiscoverPage(watchProvider: string, p: number, genre = "all") {
   const url =
     `${VIDBOX_DISCOVER}?type=movie&page=${p}&sort=popularity` +
-    `&genre=all&year=all&watch_provider=${encodeURIComponent(watchProvider)}` +
+    `&genre=${encodeURIComponent(genre)}&year=all&watch_provider=${encodeURIComponent(watchProvider)}` +
     `&country=all&rating=all&now_playing=false&trending=false`;
   const res = await fetch(url, {
     headers: {
@@ -250,6 +297,7 @@ async function fetchDiscoverPage(watchProvider: string, p: number) {
 async function discoverBatch(
   watchProvider: string,
   batch: number,
+  genre = "all",
 ): Promise<{ items: BrowseItem[]; page: number; hasMore: boolean } | null> {
   const offset = (batch - 1) * BATCH_SIZE;
   const firstPage = Math.floor(offset / PROVIDER_PAGE_SIZE) + 1;
@@ -259,7 +307,7 @@ async function discoverBatch(
      silently drop the second page of the batch. */
   const pages: Awaited<ReturnType<typeof fetchDiscoverPage>>[] = [];
   for (let i = 0; i < pagesNeeded; i++) {
-    pages.push(await fetchDiscoverPage(watchProvider, firstPage + i));
+    pages.push(await fetchDiscoverPage(watchProvider, firstPage + i, genre));
   }
   const first = pages[0];
   if (!first?.results) return null;
@@ -310,13 +358,14 @@ tmdbRoutes.get("/browse", async (c) => {
   const batch = Math.max(1, Math.floor(Number(c.req.query("page") ?? 1)) || 1);
   const key = c.env.TMDB_API_KEY;
   const provider = (c.req.query("provider") ?? "").trim();
+  const genre = (c.req.query("genre") ?? "").trim();
 
   /* Provider channel (Netflix, Prime Video, …): vidbox's own discover API
      filters by watch_provider keyless and returns TMDB-shaped rows, 40 per
      page with total_pages — same batch/offset math as the TMDB path. */
   if (provider) {
     try {
-      const disc = await discoverBatch(provider, batch);
+      const disc = await discoverBatch(provider, batch, genre || "all");
       if (!disc) {
         return c.json(
           { items: [], page: batch, hasMore: false, error: "Provider catalog unavailable" },
@@ -332,13 +381,20 @@ tmdbRoutes.get("/browse", async (c) => {
 
   /* No TMDB key → keyless paginated catalog from vidbox discover so Load
      More keeps working; falls back to the home-grid scrape + iTunes pad
-     when discover is unreachable. */
+     when discover is unreachable (unfiltered batches only — the scrape
+     carries no genre info). */
   if (!key) {
     try {
-      const disc = await discoverBatch("all", batch);
+      const disc = await discoverBatch("all", batch, genre || "all");
       if (disc) return c.json(disc);
     } catch (err) {
       console.error("keyless discover failed", err);
+    }
+    if (genre) {
+      return c.json(
+        { items: [], page: batch, hasMore: false, error: "Category catalog unavailable" },
+        502,
+      );
     }
     try {
       let all = await scrapeVidbox();
@@ -387,9 +443,13 @@ tmdbRoutes.get("/browse", async (c) => {
   const pagesNeeded = Math.ceil((rowInPage + BATCH_SIZE) / TMDB_PAGE_SIZE);
 
   const fetchPage = async (p: number) => {
-    const url =
-      `https://api.themoviedb.org/3/trending/${mediaType}/week` +
-      `?api_key=${encodeURIComponent(key)}&page=${p}`;
+    /* Trending has no genre filter — a selected category switches to the
+       discover endpoint sorted by popularity instead. */
+    const url = genre
+      ? `https://api.themoviedb.org/3/discover/movie?api_key=${encodeURIComponent(key)}` +
+        `&sort_by=popularity.desc&with_genres=${encodeURIComponent(genre)}&page=${p}`
+      : `https://api.themoviedb.org/3/trending/${mediaType}/week` +
+        `?api_key=${encodeURIComponent(key)}&page=${p}`;
     const res = await fetch(url, { headers: { accept: "application/json" } });
     if (!res.ok) return null;
     return (await res.json()) as {
