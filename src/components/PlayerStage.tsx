@@ -162,24 +162,26 @@ export default function PlayerStage({
   /* The URL of whichever full-cover iframe server is active ("" = none). */
   const iframeServerUrl = (usingVidSrc ? vidsrcUrl : autoembedUrl) ?? "";
 
+  /* Numbered server list — 1, 2, 3… in menu order. */
   const servers: { key: string; label: string; sub?: string }[] = [];
+  let serverNo = 0;
   if (vidsrcUrl)
-    servers.push({ key: "vidsrc", label: "Server 1", sub: "VidSrc · vidsrc.to" });
+    servers.push({ key: "vidsrc", label: `Server ${++serverNo}`, sub: "VidSrc · vidsrc.to" });
   servers.push({
     key: "embed",
-    label: embedSource ? "Server 2" : "Embed",
+    label: `Server ${++serverNo}`,
     sub: "vidbox/vidapi · ad-free",
   });
   /* Anime/Drama episode servers key off the TMDB id — only offer them when
      the current title actually has one. */
   if (tmdbId) {
-    servers.push({ key: "anime", label: "Server 3", sub: "Anime · VidNest" });
-    servers.push({ key: "drama", label: "Server 4", sub: "Drama · Videasy" });
+    servers.push({ key: "anime", label: `Server ${++serverNo}`, sub: "Anime · VidNest" });
+    servers.push({ key: "drama", label: `Server ${++serverNo}`, sub: "Drama · Videasy" });
   }
   if (hasNativeSource)
     servers.push({
       key: "original",
-      label: vidsrcUrl ? "Server 2" : "Original",
+      label: `Server ${++serverNo}`,
       sub: "This site's file",
     });
 
@@ -560,7 +562,6 @@ export default function PlayerStage({
 
   /* -------- Inline host of the persistent video -------------------------- */
   return (
-    <>
     <div
       ref={containerCallback}
       className={`group/player relative w-full overflow-hidden bg-black shadow-[0_24px_80px_-24px_rgba(0,0,0,0.9)] ${
@@ -1226,62 +1227,6 @@ export default function PlayerStage({
         </div>
       </div>
     </div>
-
-      {/* Playlists & streams — every playback option for this title listed
-          right under the player, not hidden inside the control menus. */}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Playlists
-        </span>
-        {servers.map((s) => (
-          <button
-            key={s.key}
-            type="button"
-            onClick={() => selectServer(s.key)}
-            aria-pressed={server === s.key}
-            className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
-              server === s.key
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
-            }`}
-          >
-            {s.label}
-            {s.sub ? ` · ${s.sub}` : ""}
-          </button>
-        ))}
-      </div>
-      {usingEmbed && embedCandidates.length > 1 && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Streams
-          </span>
-          {embedCandidates.map((cand) => {
-            let host = cand.url;
-            try {
-              host = new URL(cand.url).hostname;
-            } catch {
-              /* keep full url */
-            }
-            return (
-              <button
-                key={cand.url}
-                type="button"
-                title={cand.url}
-                onClick={() => playEmbedCandidate(cand)}
-                aria-pressed={embedStream === cand.url}
-                className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
-                  embedStream === cand.url
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
-                }`}
-              >
-                {host} ({cand.via})
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </>
   );
 }
 
@@ -1306,7 +1251,12 @@ function ServerSwitcher({
 }) {
   const active = servers.find((s) => s.key === activeKey);
   return (
-    <div className="relative" data-player-menu>
+    <div
+      className="relative"
+      data-player-menu
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
       <button
         type="button"
         onClick={() => setOpen(!open)}
