@@ -1,5 +1,6 @@
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
+import { animeEmbedUrl, dramaEmbedUrl } from "@/lib/autoembed";
 import {
   isEmbedUrl,
   resolveEmbedStream,
@@ -140,12 +141,28 @@ export default function PlayerStage({
   /* Default to Server 1 only when there is no stored file to play — so the
      API-backed embed auto-plays for catalog entries without a local source,
      while existing files keep their native player (quality/dub/subtitles). */
-  const [server, setServer] = useState<"original" | "vidsrc" | "embed">(
+  const [server, setServer] = useState<
+    "original" | "vidsrc" | "embed" | "anime" | "drama"
+  >(
     embedSource ? "embed" : vidsrcUrl && !videoUrl ? "vidsrc" : "original",
   );
   const [serverOpen, setServerOpen] = useState(false);
   const usingVidSrc = server === "vidsrc" && Boolean(vidsrcUrl);
   const usingEmbed = server === "embed";
+
+  /* -------- AutoEmbed episode servers: 3 = anime, 4 = drama -------- */
+  const [aeEpisode, setAeEpisode] = useState(episode ?? 1);
+  const [dramaServer, setDramaServer] = useState(1);
+  const usingAutoembed = server === "anime" || server === "drama";
+  const autoembedUrl =
+    server === "anime"
+      ? animeEmbedUrl(title, aeEpisode)
+      : server === "drama"
+        ? dramaEmbedUrl(title, aeEpisode, dramaServer)
+        : "";
+  /* The URL of whichever full-cover iframe server is active ("" = none). */
+  const iframeServerUrl = (usingVidSrc ? vidsrcUrl : autoembedUrl) ?? "";
+
   const servers: { key: string; label: string; sub?: string }[] = [];
   if (vidsrcUrl)
     servers.push({ key: "vidsrc", label: "Server 1", sub: "VidSrc · vidsrc.to" });
@@ -154,6 +171,8 @@ export default function PlayerStage({
     label: embedSource ? "Server 2" : "Embed",
     sub: "vidbox/vidapi · ad-free",
   });
+  servers.push({ key: "anime", label: "Server 3", sub: "Anime · autoembed" });
+  servers.push({ key: "drama", label: "Server 4", sub: "Drama · autoembed" });
   if (hasNativeSource)
     servers.push({
       key: "original",
@@ -223,8 +242,16 @@ export default function PlayerStage({
   }, [embedSource]);
 
   const selectServer = (key: string) => {
-    const next =
-      key === "embed" ? "embed" : key === "vidsrc" ? "vidsrc" : "original";
+    const next: "original" | "vidsrc" | "embed" | "anime" | "drama" =
+      key === "embed"
+        ? "embed"
+        : key === "vidsrc"
+          ? "vidsrc"
+          : key === "anime"
+            ? "anime"
+            : key === "drama"
+              ? "drama"
+              : "original";
     if (next === "original" && embedStream) {
       setEmbedStream(null);
       start(
@@ -240,12 +267,16 @@ export default function PlayerStage({
     bumpControlsActivity();
   };
 
-  /* When an iframe server (VidSrc / embed fallback) takes over, pause the
-     native file so the two never output audio at once. */
+  /* When an iframe server (VidSrc / autoembed / embed fallback) takes over,
+     pause the native file so the two never output audio at once. */
   useEffect(() => {
-    if ((usingVidSrc || (usingEmbed && embedIframe)) && playing) controls.pause();
+    if (
+      (usingVidSrc || usingAutoembed || (usingEmbed && embedIframe)) &&
+      playing
+    )
+      controls.pause();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usingVidSrc, usingEmbed, embedIframe, playing]);
+  }, [usingVidSrc, usingAutoembed, usingEmbed, embedIframe, playing]);
 
   const isHost = isActive && mode === "inline";
 
@@ -582,12 +613,14 @@ export default function PlayerStage({
         </button>
       )}
 
-      {/* VidSrc "Server 1" — full-cover iframe over the native stage. */}
-      {usingVidSrc && vidsrcUrl && (
+      {/* Full-cover iframe servers — VidSrc "Server 1" and the AutoEmbed
+          episode players "Server 3" (anime) / "Server 4" (drama). */}
+      {(usingVidSrc || usingAutoembed) && iframeServerUrl && (
         <div className="absolute inset-0 z-[60] bg-black">
           <iframe
-            src={vidsrcUrl}
-            title={`${title} — Server 1`}
+            key={iframeServerUrl}
+            src={iframeServerUrl}
+            title={`${title} — ${usingVidSrc ? "Server 1" : server === "anime" ? "Server 3 · Anime" : "Server 4 · Drama"}`}
             className="absolute inset-0 size-full border-0"
             allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
             allowFullScreen
@@ -595,7 +628,65 @@ export default function PlayerStage({
           />
           {/* Floating top strip — the iframe covers the native control bar,
               so Server switch + fullscreen live here. */}
-          <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-1.5 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-2 pb-8 pt-2 sm:px-3">
+          <div className="absolute inset-x-0 top-0 z-10 flex flex-wrap items-center gap-1.5 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-2 pb-8 pt-2 sm:px-3">
+            {usingAutoembed && (
+              <>
+                {/* Episode stepper — autoembed URLs are per-episode. */}
+                <div className="flex items-center gap-0.5 rounded-lg bg-black/55 text-white backdrop-blur-sm">
+                  <button
+                    type="button"
+                    onClick={() => setAeEpisode((e) => Math.max(1, e - 1))}
+                    className="rounded-lg p-1.5 transition-colors hover:bg-white/15"
+                    aria-label="Previous episode"
+                  >
+                    <ChevronLeft className="size-4" />
+                  </button>
+                  <span className="min-w-[64px] text-center text-xs font-semibold tabular-nums">
+                    Ep {aeEpisode}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAeEpisode((e) => e + 1)}
+                    className="rounded-lg p-1.5 transition-colors hover:bg-white/15"
+                    aria-label="Next episode"
+                  >
+                    <ChevronRight className="size-4" />
+                  </button>
+                </div>
+                {/* Drama backend picker — the ?server= query param. */}
+                {server === "drama" && (
+                  <div className="flex items-center gap-1 rounded-lg bg-black/55 px-2 py-1 backdrop-blur-sm">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-white/60">
+                      Src
+                    </span>
+                    {[1, 2, 3].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setDramaServer(n)}
+                        aria-pressed={dramaServer === n}
+                        className={`rounded-md px-2 py-0.5 text-xs font-semibold transition-colors ${
+                          dramaServer === n
+                            ? "bg-primary text-primary-foreground"
+                            : "text-white/70 hover:bg-white/15"
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <a
+                  href={iframeServerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-lg bg-black/55 px-2.5 py-1.5 text-xs text-white backdrop-blur-sm transition-colors hover:bg-black/75"
+                  title="If the player stays blank, open the provider directly"
+                >
+                  Open ↗
+                </a>
+              </>
+            )}
             <div className="ml-auto flex items-center gap-1.5">
               <ServerSwitcher
                 servers={servers}
