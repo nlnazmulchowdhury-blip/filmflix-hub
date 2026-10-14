@@ -240,3 +240,95 @@ embedResolveRoutes.get("/stream", async (c) => {
     return c.json({ candidates: [], hops: [], error: "resolver crashed" }, 502);
   }
 });
+
+/* ---------------- qualities (per-resolution download links) ---------------- */
+
+interface QualityEntry {
+  label: string;
+  url: string;
+  height?: number;
+  bandwidth?: number;
+}
+
+function qualityLabel(height: number | undefined, bandwidth: number): string {
+  if (height) {
+    if (height >= 2160) return "4K";
+    return `${height}p`;
+  }
+  if (bandwidth >= 4_000_000) return "1080p";
+  if (bandwidth >= 2_000_000) return "720p";
+  if (bandwidth >= 900_000) return "480p";
+  return "360p";
+}
+
+/** Parse a master playlist into variant entries (best quality first). */
+function parseMasterPlaylist(text: string, base: URL): QualityEntry[] {
+  const lines = text.split(/\r?\n/);
+  const entries: QualityEntry[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^#EXT-X-STREAM-INF:([^\r\n]+)/);
+    if (!m) continue;
+    const attrs = m[1];
+    const bandwidth = Number(
+      attrs.match(/BANDWIDTH=(\d+)/)?.[1] ??
+        attrs.match(/AVERAGE-BANDWIDTH=(\d+)/)?.[1] ??
+        0,
+    );
+    const res = attrs.match(/RESOLUTION=(\d+)x(\d+)/);
+    const height = res ? Number(res[2]) : undefined;
+    let uri = "";
+    let uriAt = i;
+    for (let j = i + 1; j < lines.length; j++) {
+      const t = lines[j].trim();
+      if (!t) continue;
+      if (t.startsWith("#")) break;
+      uri = t;
+      uriAt = j;
+      break;
+    }
+    if (!uri) continue;
+    const abs = safeUrl(new URL(uri, base).href)?.href;
+    if (abs)
+      entries.push({ label: qualityLabel(height, bandwidth), url: abs, height, bandwidth });
+    i = uriAt; // continue scanning after the URI line
+  }
+  // Highest resolution first; keep only the best entry per label.
+  entries.sort(
+    (a, b) => (b.height ?? 0) - (a.height ?? 0) || (b.bandwidth ?? 0) - (a.bandwidth ?? 0),
+  );
+  const seen = new Set<string>();
+  return entries.filter((e) => (seen.has(e.label) ? false : (seen.add(e.label), true)));
+}
+
+embedResolveRoutes.get("/qualities", async (c) => {
+  const url = c.req.query("url") ?? "";
+  if (!safeUrl(url))
+    return c.json({ kind: "empty", entries: [], error: "invalid url" }, 400);
+  try {
+    const res = await fetchPage(url, new URL(url).origin);
+    const finalUrl = safeUrl(res.url)?.href ?? url;
+    const ctype = res.headers.get("content-type") ?? "";
+    const text = await res.text();
+
+    if (ctype.includes("mpegurl") || text.trimStart().startsWith("#EXTM3U")) {
+      const entries = parseMasterPlaylist(text, new URL(finalUrl));
+      if (entries.length) return c.json({ kind: "hls", entries });
+      // Media playlist — no variants, but the playlist itself is the stream.
+      return c.json({ kind: "hls", entries: [{ label: "Original", url: finalUrl }] });
+    }
+    if (
+      ctype.startsWith("video/") ||
+      /\.(mp4|mkv|webm|mov|m4v)(\?|$)/i.test(url)
+    )
+      return c.json({ kind: "direct", entries: [{ label: "Original", url: finalUrl }] });
+
+    const found = extractM3u8(text, new URL(finalUrl));
+    return c.json({
+      kind: found.length ? "hls" : "empty",
+      entries: found.slice(0, 8).map((f) => ({ label: "Stream", url: f.url })),
+    });
+  } catch (err) {
+    console.error("quality probe failed", err);
+    return c.json({ kind: "empty", entries: [], error: "fetch failed" }, 502);
+  }
+});

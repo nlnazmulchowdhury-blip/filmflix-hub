@@ -66,3 +66,23 @@ export async function resolveEmbedStream(
     `/embed/stream?url=${encodeURIComponent(embedUrl.trim())}`,
   );
 }
+
+export interface EmbedQuality {
+  label: string;
+  url: string;
+}
+
+export interface EmbedQualitiesResult {
+  kind: "hls" | "direct" | "empty";
+  entries: EmbedQuality[];
+  error?: string;
+}
+
+/** Ask the Worker to read a stream URL's master playlist and list resolutions. */
+export async function fetchEmbedQualities(
+  streamUrl: string,
+): Promise<EmbedQualitiesResult> {
+  return api.get<EmbedQualitiesResult>(
+    `/embed/qualities?url=${encodeURIComponent(streamUrl.trim())}`,
+  );
+}

@@ -4,12 +4,14 @@ import { animeEmbedUrl, dramaEmbedUrl } from "@/lib/autoembed";
 import {
   isEmbedUrl,
   resolveEmbedStream,
+  fetchEmbedQualities,
   type EmbedCandidate,
 } from "@/lib/embed-resolver";
 import {
   Captions,
   ChevronLeft,
   ChevronRight,
+  Download,
   Gauge,
   Languages,
   Link2,
@@ -195,6 +197,16 @@ export default function PlayerStage({
   const [embedIframe, setEmbedIframe] = useState(false);
   const [embedStream, setEmbedStream] = useState<string | null>(null);
   const [embedPanelOpen, setEmbedPanelOpen] = useState(false);
+
+  /* -------- Download menu: this site's files + the resolved stream's
+      resolutions (asked from the Worker when the menu opens). -------- */
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const downloadFiles: { label: string; url: string }[] = [];
+  if (videoUrl && !embedSource)
+    downloadFiles.push({ label: "Main file", url: videoUrl });
+  for (const q of qualities)
+    if (q.videoUrl) downloadFiles.push({ label: q.label, url: q.videoUrl });
+  const streamProbeUrl = embedStream || embedCandidates[0]?.url || "";
 
   const playEmbedCandidate = useCallback(
     (c: EmbedCandidate) => {
@@ -679,6 +691,15 @@ export default function PlayerStage({
                 align="right"
                 drop="down"
               />
+              <DownloadMenu
+                files={downloadFiles}
+                streamUrl={streamProbeUrl}
+                title={title}
+                open={downloadOpen}
+                setOpen={setDownloadOpen}
+                align="right"
+                drop="down"
+              />
               <button
                 type="button"
                 onClick={toggleFullscreen}
@@ -713,6 +734,15 @@ export default function PlayerStage({
                 onSelect={selectServer}
                 open={serverOpen}
                 setOpen={setServerOpen}
+                align="right"
+                drop="down"
+              />
+              <DownloadMenu
+                files={downloadFiles}
+                streamUrl={streamProbeUrl}
+                title={title}
+                open={downloadOpen}
+                setOpen={setDownloadOpen}
                 align="right"
                 drop="down"
               />
@@ -1053,6 +1083,15 @@ export default function PlayerStage({
             />
           )}
 
+          <DownloadMenu
+            files={downloadFiles}
+            streamUrl={streamProbeUrl}
+            title={title}
+            open={downloadOpen}
+            setOpen={setDownloadOpen}
+            align="right"
+          />
+
           {/* Settings gear: night mode, loop, rotate, captions, speed, quality. */}
           <div className="relative ml-auto" data-player-menu>
             <button
@@ -1306,6 +1345,122 @@ function ServerSwitcher({
               {s.key === activeKey && <span className="text-xs">✓</span>}
             </button>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------- Download menu ------------------------- */
+
+/** File name hint for the `download` attribute (browsers may ignore it
+ *  cross-origin — the link still opens the file for saving). */
+function downloadName(title: string, label: string, url: string): string {
+  const ext =
+    /\.(m3u8|mp4|mkv|webm|mov|m4v)(\?|#|$)/i.exec(url)?.[1]?.toLowerCase() ?? "mp4";
+  const clean = (s: string) =>
+    s
+      .replace(/[^\p{L}\p{N}]+/gu, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase();
+  return `${clean(title).slice(0, 60) || "video"}-${clean(label) || "file"}.${ext}`;
+}
+
+function DownloadMenu({
+  files,
+  streamUrl,
+  title,
+  open,
+  setOpen,
+  align = "right",
+  drop = "up",
+}: {
+  files: { label: string; url: string }[];
+  streamUrl: string;
+  title: string;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  align?: "left" | "right";
+  /** See ServerSwitcher — top-strip menus must open downward to escape overflow-hidden. */
+  drop?: "up" | "down";
+}) {
+  const [qualities, setQualities] = useState<{ label: string; url: string }[]>([]);
+  const [probeStatus, setProbeStatus] = useState<"idle" | "loading" | "done">("idle");
+  const loadedFor = useRef("");
+
+  useEffect(() => {
+    if (!open || !streamUrl || loadedFor.current === streamUrl) return;
+    loadedFor.current = streamUrl;
+    setProbeStatus("loading");
+    fetchEmbedQualities(streamUrl)
+      .then((r) => {
+        setQualities(r.entries ?? []);
+        setProbeStatus("done");
+      })
+      .catch(() => {
+        setQualities([]);
+        setProbeStatus("done");
+      });
+  }, [open, streamUrl]);
+
+  const row = (label: string, sub: string, url: string) => (
+    <a
+      key={url + label}
+      href={url}
+      download={downloadName(title, label, url)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10"
+      title={url}
+    >
+      <span className="flex flex-col">
+        <span>{label}</span>
+        {sub && <span className="text-[10px] font-normal text-white/50">{sub}</span>}
+      </span>
+      <Download className="size-4 shrink-0 text-white/60" />
+    </a>
+  );
+
+  return (
+    <div
+      className="relative"
+      data-player-menu
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15"
+        aria-label="Download"
+        title="Download"
+      >
+        <Download className="size-5" />
+        <span className="hidden text-xs font-semibold min-[420px]:inline">Download</span>
+      </button>
+      {open && (
+        <div
+          className={`absolute z-30 min-w-[220px] max-h-[60vh] overflow-y-auto rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur ${
+            drop === "down" ? "top-full mt-2" : "bottom-full mb-2"
+          } ${align === "right" ? "right-0" : "left-0"}`}
+        >
+          <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
+            Download
+          </p>
+          {files.map((f) => row(f.label, "This site's file", f.url))}
+          {qualities.map((q) => row(q.label, "Provider stream", q.url))}
+          {probeStatus === "loading" && (
+            <p className="flex items-center gap-2 px-3 py-2 text-xs text-white/60">
+              <Loader2 className="size-3.5 animate-spin" /> Checking resolutions…
+            </p>
+          )}
+          {files.length === 0 && qualities.length === 0 && probeStatus !== "loading" && (
+            <p className="px-3 py-2 text-xs leading-relaxed text-white/60">
+              {streamUrl
+                ? "No separate resolutions found for this stream — the current file still downloads from the provider page."
+                : "Nothing downloadable on this server yet — pick the ad-free embed server, it extracts the raw stream."}
+            </p>
+          )}
         </div>
       )}
     </div>
