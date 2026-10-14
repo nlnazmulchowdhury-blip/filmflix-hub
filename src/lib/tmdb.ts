@@ -71,3 +71,12 @@ export async function listCategories(): Promise<CategoryInfo[]> {
   const r = await api.get<{ categories: CategoryInfo[] }>(`/tmdb/categories`);
   return r.categories ?? [];
 }
+
+/** "More videos" for the player page — titles related to one TMDB movie,
+    scraped keyless from the embed source's own watch page. */
+export async function listRelated(tmdbId: string): Promise<TmdbItem[]> {
+  const r = await api.get<{ items: TmdbItem[] }>(
+    `/tmdb/related?tmdbId=${encodeURIComponent(tmdbId)}`,
+  );
+  return r.items ?? [];
+}

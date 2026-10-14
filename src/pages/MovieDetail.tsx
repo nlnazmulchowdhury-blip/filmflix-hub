@@ -5,9 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import PlayerStage from "@/components/PlayerStage";
+import VidSrcResultCard from "@/components/VidSrcResultCard";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { vaplayerEmbedUrl } from "@/lib/vaplayer";
+import { listRelated, type TmdbItem } from "@/lib/tmdb";
 import AdBanner from "@/components/AdBanner";
 import AdSideRail from "@/components/AdSideRail";
 import { AD_BANNERS } from "@/lib/ad-banners";
@@ -217,6 +219,46 @@ export default function MovieDetail() {
     ? (movie.downloads ?? []).filter((d: any) => d.url)
     : [];
 
+  /* -------- "More videos" under the player ------------------------------ */
+  /* Titles related to this one, scraped keyless from the embed source's own
+     watch page (its "You may also like" grid). Needs a TMDB id — available
+     for vaplayer titles and catalog entries that carry one. */
+  const relatedTmdbId: string | null =
+    vaplayerId ?? ((movie as any)?.tmdbId as string | undefined) ?? null;
+  const [related, setRelated] = useState<TmdbItem[]>([]);
+  useEffect(() => {
+    if (!relatedTmdbId) {
+      setRelated([]);
+      return;
+    }
+    let cancelled = false;
+    listRelated(relatedTmdbId)
+      .then((r) => {
+        if (!cancelled) setRelated(r);
+      })
+      .catch(() => {
+        if (!cancelled) setRelated([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [relatedTmdbId]);
+
+  const playRelated = (item: TmdbItem) => {
+    navigate(`/movie/vaplayer-${item.tmdbId}`, {
+      state: {
+        external: "vaplayer",
+        tmdbId: item.tmdbId,
+        kind: item.kind,
+        title: item.title,
+        posterUrl: item.posterUrl ?? undefined,
+        backdropUrl: item.backdropUrl ?? undefined,
+        overview: item.overview,
+        embedUrl: item.embedUrl,
+      },
+    });
+  };
+
   /* Clicking a quality must start a file download, not open a tab that plays
      the movie. Direct CDN links can't do that: they serve `video/mp4` with no
      `Content-Disposition` and browsers ignore the `download` attribute on
@@ -386,6 +428,35 @@ export default function MovieDetail() {
               tmdbId={!isVidSrc ? (externalMovie as any).tmdbId : undefined}
               kind={(isVidSrc ? (externalState.kind || "movie") : (externalMovie as any).kind) as any}
             />
+
+            {/* More videos — titles related to this one from the embed catalog. */}
+            {related.length > 0 && (
+              <section aria-label="More videos">
+                <h2 className="font-display flex items-center gap-2 text-lg font-bold tracking-tight">
+                  <ListVideo className="size-5 text-primary" />
+                  More videos
+                  <span className="text-sm font-medium text-muted-foreground">
+                    ({related.length})
+                  </span>
+                </h2>
+                <div className="mt-3 grid grid-cols-3 gap-3 sm:grid-cols-6">
+                  {related.map((item, i) => (
+                    <VidSrcResultCard
+                      key={`${item.kind}-${item.tmdbId}`}
+                      hit={{
+                        imdbId: `tmdb-${item.tmdbId}`,
+                        title: item.title,
+                        year: item.year,
+                        kind: item.kind,
+                        posterUrl: item.posterUrl ?? undefined,
+                      }}
+                      index={i}
+                      onPlay={() => playRelated(item)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* Episode / parts playlist */}
             {playlist.length > 1 && (

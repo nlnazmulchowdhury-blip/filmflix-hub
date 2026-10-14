@@ -115,8 +115,8 @@ function decodePoster(wsrv: string): string | null {
   if (!m) return null;
   try {
     const decoded = decodeURIComponent(m[1]);
-    // Bump w300/original to a consistent w500 for the card grid.
-    return decoded.replace(/\/(w300|original|w185)\//, "/w500/");
+    // Normalise thumbnail sizes to a consistent w500 for card grids.
+    return decoded.replace(/\/(w185|w300|w342|original)\//, "/w500/");
   } catch {
     return null;
   }
@@ -269,6 +269,74 @@ tmdbRoutes.get("/categories", async (c) => {
   } catch (err) {
     console.error("category fetch failed", err);
     return c.json({ categories: [] }, 502);
+  }
+});
+
+/* "More videos" for the player page: vidbox's movie watch page is SSR-
+   rendered with a "You may also like" grid — each card pairs an
+   /movie/{tmdbId} link with its wsrv.nl poster (title in alt, year in the
+   subtitle), so related titles can be scraped keyless. Cached ~1h per title. */
+
+const relatedCache = new Map<string, { at: number; items: BrowseItem[] }>();
+
+async function scrapeRelated(tmdbId: string): Promise<BrowseItem[]> {
+  const hit = relatedCache.get(tmdbId);
+  if (hit && Date.now() - hit.at < SCRAPE_CACHE_MS) return hit.items;
+  const res = await fetch(`https://vidbox.wtf/movie/${encodeURIComponent(tmdbId)}`, {
+    headers: {
+      "user-agent": VIDBOX_UA,
+      accept: "text/html,application/xhtml+xml",
+    },
+  });
+  if (!res.ok) return hit?.items ?? [];
+  const html = await res.text();
+  const start = html.indexOf("You may also like");
+  if (start < 0) return hit?.items ?? [];
+  const window_ = html.slice(start, start + 60_000);
+  const items: BrowseItem[] = [];
+  const seen = new Set<string>([tmdbId]);
+  const cardRe = /<a href="\/movie\/(\d+)">([\s\S]*?)<\/a>/g;
+  let m: RegExpExecArray | null;
+  while ((m = cardRe.exec(window_)) && items.length < 18) {
+    const id = m[1];
+    const body = m[2];
+    const title = body.match(/alt="([^"]+)"/)?.[1]?.trim();
+    const src = body.match(/src="(https:\/\/wsrv\.nl[^"]+)"/)?.[1];
+    if (!title || !src) continue;
+    const tkey = normTitle(title);
+    if (seen.has(id) || seen.has(tkey)) continue;
+    const poster = decodePoster(src);
+    if (!poster) continue;
+    const year = Number(body.match(/(\d{4})\s*<\/p>/)?.[1]) || undefined;
+    seen.add(id);
+    seen.add(tkey);
+    items.push({
+      tmdbId: id,
+      kind: "movie",
+      title,
+      year,
+      posterUrl: poster,
+      backdropUrl: null,
+      overview: "",
+      embedUrl: vaplayerEmbedUrl({ tmdbId: id, kind: "movie" }),
+    });
+  }
+  if (items.length > 0) {
+    if (relatedCache.size > 60) relatedCache.clear();
+    relatedCache.set(tmdbId, { at: Date.now(), items });
+  }
+  return items;
+}
+
+tmdbRoutes.get("/related", async (c) => {
+  const tmdbId = (c.req.query("tmdbId") ?? "").trim();
+  if (!/^\d{1,10}$/.test(tmdbId))
+    return c.json({ items: [], error: "Invalid tmdbId" }, 400);
+  try {
+    return c.json({ items: await scrapeRelated(tmdbId) });
+  } catch (err) {
+    console.error("related scrape failed", err);
+    return c.json({ items: [] }, 502);
   }
 });
 
