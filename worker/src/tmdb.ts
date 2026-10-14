@@ -226,6 +226,55 @@ tmdbRoutes.get("/providers", async (c) => {
   }
 });
 
+/** vidbox discover API — keyless paginated catalog (20 rows per page). */
+async function fetchDiscoverPage(watchProvider: string, p: number) {
+  const url =
+    `${VIDBOX_DISCOVER}?type=movie&page=${p}&sort=popularity` +
+    `&genre=all&year=all&watch_provider=${encodeURIComponent(watchProvider)}` +
+    `&country=all&rating=all&now_playing=false&trending=false`;
+  const res = await fetch(url, {
+    headers: {
+      accept: "application/json",
+      "user-agent": VIDBOX_UA,
+      referer: "https://vidbox.wtf/search",
+    },
+  });
+  if (!res.ok) {
+    console.error("discover page", p, "status", res.status);
+    return null;
+  }
+  return (await res.json()) as { results?: TmdbResult[]; total_pages?: number };
+}
+
+/** One 60-item batch from discover; null when the source is unreachable. */
+async function discoverBatch(
+  watchProvider: string,
+  batch: number,
+): Promise<{ items: BrowseItem[]; page: number; hasMore: boolean } | null> {
+  const offset = (batch - 1) * BATCH_SIZE;
+  const firstPage = Math.floor(offset / PROVIDER_PAGE_SIZE) + 1;
+  const rowInPage = offset % PROVIDER_PAGE_SIZE;
+  const pagesNeeded = Math.ceil((rowInPage + BATCH_SIZE) / PROVIDER_PAGE_SIZE);
+  /* Sequential: vidbox throttles parallel requests from one IP, which would
+     silently drop the second page of the batch. */
+  const pages: Awaited<ReturnType<typeof fetchDiscoverPage>>[] = [];
+  for (let i = 0; i < pagesNeeded; i++) {
+    pages.push(await fetchDiscoverPage(watchProvider, firstPage + i));
+  }
+  const first = pages[0];
+  if (!first?.results) return null;
+  const rows: TmdbResult[] = [];
+  for (const d of pages) if (d?.results) rows.push(...d.results);
+  const items = rows
+    .slice(rowInPage, rowInPage + BATCH_SIZE)
+    .map(toCard)
+    .filter((x): x is BrowseItem => x !== null);
+  const totalPages = first.total_pages ?? 1;
+  const hasMore =
+    rows.length > rowInPage + BATCH_SIZE || firstPage + pagesNeeded - 1 < totalPages;
+  return { items, page: batch, hasMore };
+}
+
 /* Keyless pad: iTunes top-movies RSS (JSON). The primary keyless scraper
    (vidbox) sometimes has fewer than a full batch; iTunes reliably returns
    current popular titles so the homepage still fills 60 cards without any
@@ -266,61 +315,31 @@ tmdbRoutes.get("/browse", async (c) => {
      filters by watch_provider keyless and returns TMDB-shaped rows, 40 per
      page with total_pages — same batch/offset math as the TMDB path. */
   if (provider) {
-    const offset = (batch - 1) * BATCH_SIZE;
-    const firstPage = Math.floor(offset / PROVIDER_PAGE_SIZE) + 1;
-    const rowInPage = offset % PROVIDER_PAGE_SIZE;
-    const pagesNeeded = Math.ceil((rowInPage + BATCH_SIZE) / PROVIDER_PAGE_SIZE);
-
-    const fetchPage = async (p: number) => {
-      const url =
-        `${VIDBOX_DISCOVER}?type=movie&page=${p}&sort=popularity` +
-        `&genre=all&year=all&watch_provider=${encodeURIComponent(provider)}` +
-        `&country=all&rating=all&now_playing=false&trending=false`;
-      const res = await fetch(url, {
-        headers: {
-          accept: "application/json",
-          "user-agent": VIDBOX_UA,
-          referer: `https://vidbox.wtf/search?page=1&watch_provider=${encodeURIComponent(provider)}`,
-        },
-      });
-      if (!res.ok) {
-        console.error("discover page", p, "status", res.status);
-        return null;
-      }
-      return (await res.json()) as { results?: TmdbResult[]; total_pages?: number };
-    };
-
     try {
-      /* Sequential: vidbox throttles parallel requests from one IP, which
-         would silently drop the second page of the batch. */
-      const pages: Awaited<ReturnType<typeof fetchPage>>[] = [];
-      for (let i = 0; i < pagesNeeded; i++) pages.push(await fetchPage(firstPage + i));
-      const first = pages[0];
-      if (!first?.results) {
+      const disc = await discoverBatch(provider, batch);
+      if (!disc) {
         return c.json(
           { items: [], page: batch, hasMore: false, error: "Provider catalog unavailable" },
           502,
         );
       }
-      const rows: TmdbResult[] = [];
-      for (const d of pages) if (d?.results) rows.push(...d.results);
-      const items = rows
-        .slice(rowInPage, rowInPage + BATCH_SIZE)
-        .map(toCard)
-        .filter((x): x is BrowseItem => x !== null);
-      const totalPages = first.total_pages ?? 1;
-      const hasMore =
-        rows.length > rowInPage + BATCH_SIZE || firstPage + pagesNeeded - 1 < totalPages;
-      return c.json({ items, page: batch, hasMore });
+      return c.json(disc);
     } catch (err) {
       console.error("provider browse failed", err);
       return c.json({ items: [], page: batch, hasMore: false, error: "Provider fetch failed" }, 502);
     }
   }
 
-  /* No TMDB key → fall back to the embed provider's own home grid so the
-     landing still shows real movies + banners (keyless). */
+  /* No TMDB key → keyless paginated catalog from vidbox discover so Load
+     More keeps working; falls back to the home-grid scrape + iTunes pad
+     when discover is unreachable. */
   if (!key) {
+    try {
+      const disc = await discoverBatch("all", batch);
+      if (disc) return c.json(disc);
+    } catch (err) {
+      console.error("keyless discover failed", err);
+    }
     try {
       let all = await scrapeVidbox();
       /* Pad to a full batch from iTunes when the primary source runs short. */
