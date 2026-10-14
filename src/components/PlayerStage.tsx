@@ -704,16 +704,6 @@ export default function PlayerStage({
             referrerPolicy="origin"
           />
           <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-1.5 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-2 pb-8 pt-2 sm:px-3">
-            <button
-              type="button"
-              onClick={() => {
-                setEmbedIframe(false);
-                setEmbedPanelOpen(true);
-              }}
-              className="rounded-lg bg-black/50 px-2.5 py-1.5 text-xs text-white backdrop-blur-sm transition-colors hover:bg-black/70"
-            >
-              Retry stream
-            </button>
             <div className="ml-auto flex items-center gap-1.5">
               <ServerSwitcher
                 servers={servers}
