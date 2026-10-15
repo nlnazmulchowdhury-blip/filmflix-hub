@@ -55,10 +55,3 @@ export const PRCONTAINER = {
   width: 300,
   height: 250,
 } as const;
-
-/** profitableratecpmnetwork site-wide tags (push / overlay). Injected once in
- *  index.html <head> so they run on every page. */
-export const PR_GLOBAL_SCRIPTS = [
-  "https://pl31851420.profitableratecpmnetwork.com/f3/96/58/f39658518f373b729b440c28658fc542.js",
-  "https://pl31851421.profitableratecpmnetwork.com/14/7a/9a/147a9af75d6a14a6565d244881a12dcb.js",
-] as const;
