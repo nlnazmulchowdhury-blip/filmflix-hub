@@ -49,6 +49,15 @@ async function request<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
+  /* Pages answers any unknown path with index.html. When that happens the
+     call never reached the Worker (stale cached bundle, wrong base URL), and
+     "Unexpected token '<'" is what the JSON parse would have reported. */
+  if (text.trimStart().startsWith("<")) {
+    throw new ApiError(
+      res.status,
+      "Backend unreachable — the page asked its own origin for API data. Hard-reload (Ctrl+Shift+R).",
+    );
+  }
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) {
     throw new ApiError(res.status, data?.error ?? `Request failed (${res.status})`);
