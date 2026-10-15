@@ -18,7 +18,7 @@ import {
 import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
 import AdContainer from "@/components/AdContainer";
-import AdSideRail from "@/components/AdSideRail";
+import AdRail from "@/components/AdRail";
 import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
@@ -312,10 +312,6 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Fixed side rails (160×600 skyscraper) — only on very wide screens. */}
-      <AdSideRail side="left" breakpoint="wide" />
-      <AdSideRail side="right" breakpoint="wide" />
-
       {/* Ambient background */}
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[520px] w-[820px] -translate-x-1/2 rounded-full bg-primary/14 blur-[140px]" />
@@ -697,46 +693,60 @@ export default function Landing() {
             )
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-                {tmdbItems.map((item, i) => (
-                  <VidSrcResultCard
-                    key={`${item.kind}-${item.tmdbId}`}
-                    hit={tmdbToHit(item)}
-                    index={i % 10}
-                    onPlay={() => playTmdb(item)}
-                  />
-                ))}
-                {/* Skeletons for the first batch, or a light tail while loading more. */}
-                {tmdbLoading &&
-                  Array.from({ length: tmdbItems.length === 0 ? 12 : 6 }).map((_, i) => (
-                    <Skeleton key={`sk-${i}`} className="aspect-[2/3] rounded-xl" />
-                  ))}
-              </div>
+              <div className="flex items-start gap-4">
+                {/* Left banner rail — grows with the catalog on Load More. */}
+                <AdRail
+                  count={Math.max(3, Math.ceil(tmdbItems.length / 8))}
+                  className="hidden lg:flex"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                    {tmdbItems.map((item, i) => (
+                      <VidSrcResultCard
+                        key={`${item.kind}-${item.tmdbId}`}
+                        hit={tmdbToHit(item)}
+                        index={i % 10}
+                        onPlay={() => playTmdb(item)}
+                      />
+                    ))}
+                    {/* Skeletons for the first batch, or a light tail while loading more. */}
+                    {tmdbLoading &&
+                      Array.from({ length: tmdbItems.length === 0 ? 12 : 6 }).map((_, i) => (
+                        <Skeleton key={`sk-${i}`} className="aspect-[2/3] rounded-xl" />
+                      ))}
+                  </div>
 
-              {tmdbError && tmdbItems.length === 0 && (
-                <p className="mt-4 text-sm text-destructive">{tmdbError}</p>
-              )}
+                  {tmdbError && tmdbItems.length === 0 && (
+                    <p className="mt-4 text-sm text-destructive">{tmdbError}</p>
+                  )}
 
-              {tmdbMore && (
-                <div className="mt-8 flex justify-center">
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    className="gap-2"
-                    disabled={tmdbLoading}
-                    onClick={() =>
-                      void loadTmdb(tmdbBatch + 1, selectedProvider?.id ?? null, genre?.id ?? null)
-                    }
-                  >
-                    {tmdbLoading ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <Film className="size-4" />
-                    )}
-                    {tmdbLoading ? "Loading…" : "Load More"}
-                  </Button>
+                  {tmdbMore && (
+                    <div className="mt-8 flex justify-center">
+                      <Button
+                        variant="outline"
+                        size="lg"
+                        className="gap-2"
+                        disabled={tmdbLoading}
+                        onClick={() =>
+                          void loadTmdb(tmdbBatch + 1, selectedProvider?.id ?? null, genre?.id ?? null)
+                        }
+                      >
+                        {tmdbLoading ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <Film className="size-4" />
+                        )}
+                        {tmdbLoading ? "Loading…" : "Load More"}
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              )}
+                {/* Right banner rail — mirrors the left, grows with Load More. */}
+                <AdRail
+                  count={Math.max(3, Math.ceil(tmdbItems.length / 8))}
+                  className="hidden lg:flex"
+                />
+              </div>
             </>
           )}
         </section>
