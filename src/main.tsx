@@ -3,6 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { MiniPlayerProvider } from "@/components/MiniPlayerProvider";
 import AnalyticsTracker from "@/components/AnalyticsTracker";
+import { startMediaSniffer } from "@/lib/media-sniffer";
 import HelpCenterWidget from "@/components/HelpCenterWidget";
 import InstallPrompt from "@/components/InstallPrompt";
 import { ThemeProvider } from "next-themes";
@@ -144,6 +145,10 @@ function HelpCenterRouteGate() {
   return <HelpCenterWidget />;
 }
 
+
+/** IDM grabs streams by watching the requests the player makes, not by
+ *  guessing provider endpoints — start that capture before anything plays. */
+startMediaSniffer();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

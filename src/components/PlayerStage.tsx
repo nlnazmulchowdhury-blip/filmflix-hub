@@ -9,7 +9,12 @@ import {
   type EmbedCandidate,
   type TitleDownloadProvider,
 } from "@/lib/embed-resolver";
-import { downloadHlsAsMp4, saveBlob, isHlsLink } from "@/lib/hls-download";
+import { downloadHls, proxyUrl, saveBlob, isHlsLink } from "@/lib/hls-download";
+import {
+  setSnifferReferer,
+  useSniffedStreams,
+  type SniffedStream,
+} from "@/lib/media-sniffer";
 import {
   Captions,
   ChevronLeft,
@@ -696,7 +701,7 @@ export default function PlayerStage({
               />
               <DownloadMenu
                 files={downloadFiles}
-                streamUrl={streamProbeUrl}
+                streamUrl={streamProbeUrl} referer={embedUrl || embedSource || iframeServerUrl}
                 ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
                 title={title}
                 open={downloadOpen}
@@ -743,7 +748,7 @@ export default function PlayerStage({
               />
               <DownloadMenu
                 files={downloadFiles}
-                streamUrl={streamProbeUrl}
+                streamUrl={streamProbeUrl} referer={embedUrl || embedSource || iframeServerUrl}
                 ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
                 title={title}
                 open={downloadOpen}
@@ -1090,7 +1095,7 @@ export default function PlayerStage({
 
           <DownloadMenu
             files={downloadFiles}
-            streamUrl={streamProbeUrl}
+            streamUrl={streamProbeUrl} referer={embedUrl || embedSource || iframeServerUrl}
             ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
             title={title}
             open={downloadOpen}
@@ -1375,6 +1380,7 @@ function downloadName(title: string, label: string, url: string): string {
 function DownloadMenu({
   files,
   streamUrl,
+  referer,
   ids,
   title,
   open,
@@ -1384,6 +1390,8 @@ function DownloadMenu({
 }: {
   files: { label: string; url: string }[];
   streamUrl: string;
+  /** Embed page the stream came from — CDNs hotlink-check this on download. */
+  referer?: string;
   ids: {
     tmdbId?: string | number | null;
     imdbId?: string | null;
@@ -1402,7 +1410,17 @@ function DownloadMenu({
   const [providers, setProviders] = useState<TitleDownloadProvider[]>([]);
   const [probeStatus, setProbeStatus] = useState<"idle" | "loading" | "done">("idle");
   const [progress, setProgress] = useState<Record<string, number>>({});
+  const [savedNote, setSavedNote] = useState<Record<string, string>>({});
+  const [copied, setCopied] = useState("");
   const loadedFor = useRef("");
+
+  /* What the player actually fetched this session — the IDM-style list. It is
+     the only source that works for token-rotating CDNs, because the URL it
+     reports is the one that is live right now. */
+  const sniffed = useSniffedStreams();
+  useEffect(() => {
+    setSnifferReferer(referer ?? "");
+  }, [referer]);
 
   const probeKey = `${streamUrl}|${ids.tmdbId ?? ""}|${ids.imdbId ?? ""}|${ids.kind ?? ""}|${ids.season ?? 0}|${ids.episode ?? 0}`;
 
@@ -1429,35 +1447,86 @@ function DownloadMenu({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, probeKey]);
 
-  const row = (label: string, sub: string, url: string) => (
-    <a
-      key={url + label}
-      href={url}
-      download={downloadName(title, label, url)}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10"
-      title={url}
+  /* Sniffed URLs the probing above did not already list. */
+  const listed = new Set([
+    ...files.map((f) => f.url),
+    ...qualities.map((q) => q.url),
+    ...providers.flatMap((p) => p.entries.map((e) => e.url)),
+  ]);
+  const detected: SniffedStream[] = sniffed.filter((s) => !listed.has(s.url));
+
+  /* The copy button hands out the Worker byte-pipe link: plain, public, no
+     browser headers needed, Range-correct — so IDM (or any manager) pulls the
+     file at full speed with resume. That is the escape hatch when the
+     in-app remux is not enough. */
+  const copyBtn = (label: string, url: string) => (
+    <button
+      type="button"
+      title="Copy direct link — paste into IDM or any download manager"
+      onClick={() => {
+        navigator.clipboard
+          ?.writeText(proxyUrl(url, referer || undefined, downloadName(title, label, url)))
+          .then(() => {
+            setCopied(url);
+            setTimeout(() => setCopied(""), 2500);
+          })
+          .catch(() => undefined);
+      }}
+      className="shrink-0 rounded p-1.5 text-white/45 transition-colors hover:bg-white/15 hover:text-white"
     >
-      <span className="flex flex-col">
-        <span>{label}</span>
-        {sub && <span className="text-[10px] font-normal text-white/50">{sub}</span>}
-      </span>
-      <Download className="size-4 shrink-0 text-white/60" />
-    </a>
+      {copied === url ? (
+        <span className="text-[10px] font-semibold text-primary">copied ✓</span>
+      ) : (
+        <Link2 className="size-4" />
+      )}
+    </button>
   );
 
-  /* HLS rows download in-browser (segments → remuxed .mp4) with live progress;
-     direct files fall back to the plain anchor row. */
+  const line = (label: string, sub: string, url: string, main: ReactNode) => (
+    <div
+      key={url + label}
+      className="flex items-center gap-1 pr-2 transition-colors hover:bg-white/10"
+      title={url}
+    >
+      <div className="min-w-0 flex-1">{main}</div>
+      {copyBtn(label, url)}
+    </div>
+  );
+
+  /* Direct files go through the byte pipe with an attachment header: a plain
+     cross-origin `download` link is silently ignored by browsers, which is why
+     these rows used to just open the video in a new tab. */
+  const row = (label: string, sub: string, url: string) =>
+    line(
+      label,
+      sub,
+      url,
+      <a
+        href={proxyUrl(url, referer || undefined, downloadName(title, label, url))}
+        download={downloadName(title, label, url)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white"
+      >
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate">{label}</span>
+          {sub && <span className="text-[10px] font-normal text-white/50">{sub}</span>}
+        </span>
+        <Download className="size-4 shrink-0 text-white/60" />
+      </a>,
+    );
+
+  /* HLS rows download in-browser (segments → remuxed .mp4) with live progress. */
   const streamRow = (label: string, sub: string, url: string) => {
     if (!isHlsLink(url)) return row(label, sub, url);
     const pct = progress[url];
     const busy = pct !== undefined && pct >= 0 && pct < 1;
     const start = () => {
       setProgress((p) => ({ ...p, [url]: 0 }));
-      downloadHlsAsMp4(url, (f) => setProgress((p) => ({ ...p, [url]: f })))
-        .then((blob) => {
+      downloadHls(url, (f) => setProgress((p) => ({ ...p, [url]: f })), { referer })
+        .then(({ blob, skipped }) => {
           saveBlob(blob, downloadName(title, label, url).replace(/\.m3u8$/i, ".mp4"));
+          if (skipped) setSavedNote((n) => ({ ...n, [url]: `${skipped} parts skipped` }));
           setProgress((p) => ({ ...p, [url]: 1 }));
           setTimeout(
             () =>
@@ -1471,19 +1540,18 @@ function DownloadMenu({
         })
         .catch(() => setProgress((p) => ({ ...p, [url]: -1 })));
     };
-    return (
-      <div
-        key={url + label}
-        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-sm text-white"
-        title={url}
-      >
+    return line(
+      label,
+      sub,
+      url,
+      <div className="flex w-full items-center justify-between gap-3 px-3 py-2 text-sm text-white">
         <button
           type="button"
           disabled={busy}
           onClick={start}
           className="flex min-w-0 flex-1 flex-col items-start text-left transition-colors hover:text-primary disabled:opacity-60"
         >
-          <span>{label}</span>
+          <span className="truncate">{label}</span>
           {sub && <span className="text-[10px] font-normal text-white/50">{sub}</span>}
         </button>
         {busy ? (
@@ -1491,7 +1559,9 @@ function DownloadMenu({
             {Math.round((pct || 0) * 100)}%
           </span>
         ) : pct === 1 ? (
-          <span className="shrink-0 text-[10px] font-semibold text-primary">saved ✓</span>
+          <span className="shrink-0 text-[10px] font-semibold text-primary">
+            {savedNote[url] ? `saved · ${savedNote[url]}` : "saved ✓"}
+          </span>
         ) : pct === -1 ? (
           <button
             type="button"
@@ -1503,7 +1573,7 @@ function DownloadMenu({
         ) : (
           <Download className="size-4 shrink-0 text-white/60" />
         )}
-      </div>
+      </div>,
     );
   };
 
@@ -1536,6 +1606,12 @@ function DownloadMenu({
           {files.map((f) => streamRow(f.label, "This site's file", f.url))}
           {qualities.map((q) => streamRow(q.label, "Now-playing stream", q.url))}
           {providers.flatMap((p) => p.entries.map((e) => streamRow(e.label, p.name, e.url)))}
+          {detected.length > 0 && (
+            <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-white/50">
+              Detected on this page
+            </p>
+          )}
+          {detected.map((s) => streamRow(s.label, `Sniffed · ${s.host}`, s.url))}
           {probeStatus === "loading" && (
             <p className="flex items-center gap-2 px-3 py-2 text-xs text-white/60">
               <Loader2 className="size-3.5 animate-spin" /> Checking providers &amp;
@@ -1545,13 +1621,20 @@ function DownloadMenu({
           {files.length === 0 &&
             qualities.length === 0 &&
             providers.length === 0 &&
+            detected.length === 0 &&
             probeStatus !== "loading" && (
               <p className="px-3 py-2 text-xs leading-relaxed text-white/60">
-                No downloadable stream found for this title yet — every provider
-                serving it hides the file behind a browser check. Try another
-                server, then open Download again.
+                Nothing has played yet, so there is no stream to grab. Start the
+                video (or switch server) and open Download again — every URL the
+                player pulls shows up here automatically.
               </p>
             )}
+          {(detected.length > 0 || files.length + qualities.length + providers.length > 0) && (
+            <p className="px-3 py-2 text-[10px] leading-relaxed text-white/40">
+              Stuck on a big file? Hit the link icon to copy a direct URL — paste
+              it into IDM and it downloads with resume and multiple connections.
+            </p>
+          )}
         </div>
       )}
     </div>

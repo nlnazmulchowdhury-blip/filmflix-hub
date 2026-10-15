@@ -414,11 +414,20 @@ embedResolveRoutes.get("/downloads", async (c) => {
 });
 
 /* CORS-friendly byte pipe so the browser can fetch provider playlists and
-   media segments (their CDNs rarely send Access-Control-Allow-Origin). */
+   media segments (their CDNs rarely send Access-Control-Allow-Origin).
+
+   Also the escape hatch for external download managers: the link is plain,
+   public and needs no browser headers, so IDM/aria2c/xdownloader can pull it
+   directly. Range requests are passed through and the upstream byte metadata
+   is echoed back, otherwise multi-connection managers see a length mismatch
+   and abort the file. */
+const RANGE_HEADERS = ["content-length", "content-range", "last-modified", "etag"];
+
 embedResolveRoutes.get("/proxy", async (c) => {
   const url = c.req.query("url") ?? "";
   const safe = safeUrl(url);
   if (!safe) return c.json({ error: "invalid url" }, 400);
+  const range = c.req.header("range");
   try {
     const res = await fetch(safe.href, {
       redirect: "follow",
@@ -427,17 +436,25 @@ embedResolveRoutes.get("/proxy", async (c) => {
         Referer: c.req.query("ref") ?? safe.origin + "/",
         Origin: safe.origin,
         Accept: "*/*",
+        ...(range ? { Range: range } : {}),
       },
     });
     if (!res.ok || !res.body)
       return new Response(null, { status: res.status || 502 });
-    return new Response(res.body, {
-      headers: {
-        "Content-Type":
-          res.headers.get("content-type") ?? "application/octet-stream",
-        "Cache-Control": "public, max-age=3600",
-      },
-    });
+    const headers: Record<string, string> = {
+      "Content-Type":
+        res.headers.get("content-type") ?? "application/octet-stream",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=3600",
+    };
+    for (const h of RANGE_HEADERS) {
+      const v = res.headers.get(h);
+      if (v) headers[h] = v;
+    }
+    /* A filename makes managers save instead of stream, and names the file. */
+    const name = (c.req.query("name") ?? "").replace(/["\r\n\t\\]/g, "").slice(0, 80);
+    if (name) headers["Content-Disposition"] = `attachment; filename="${name}"`;
+    return new Response(res.body, { status: res.status, headers });
   } catch (err) {
     console.error("proxy fetch failed", err);
     return c.json({ error: "fetch failed" }, 502);

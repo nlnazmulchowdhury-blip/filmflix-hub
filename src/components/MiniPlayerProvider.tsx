@@ -35,6 +35,7 @@ import {
   type TokenContext,
 } from "@/lib/hls-token";
 import Hls from "hls.js";
+import { reportHlsLevels } from "@/lib/media-sniffer";
 function formatTime(sec: number) {
   if (!Number.isFinite(sec)) return "0:00";
   const m = Math.floor(sec / 60);
@@ -145,10 +146,17 @@ function buildHls(el: HTMLVideoElement, src: string) {
       : undefined,
   });
   activeHls = hls;
-  hls.on(Hls.Events.MANIFEST_PARSED, () => {
+  hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
+    /* Feed the media sniffer: hls.js knows every resolution the CDN offers,
+       which is exactly the list IDM shows next to the browser button. */
+    reportHlsLevels(src, data.levels ?? []);
     if (resumeAt > 0) el.currentTime = resumeAt;
     el.playbackRate = rate;
     el.play().catch(() => undefined);
+  });
+  hls.on(Hls.Events.LEVEL_SWITCHED, (_evt, data) => {
+    const level = hls.levels?.[data.level as number];
+    if (level) reportHlsLevels(src, [level]);
   });
   hls.loadSource(src);
   hls.attachMedia(el);
