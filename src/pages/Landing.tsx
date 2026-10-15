@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
+import GetTheApp from "@/components/GetTheApp";
 import MovieCard from "@/components/MovieCard";
 import VidSrcResultCard, { type VidSrcHit } from "@/components/VidSrcResultCard";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
@@ -784,6 +785,8 @@ export default function Landing() {
             </CardContent>
           </Card>
         </section>
+
+        <GetTheApp />
 
         {/* Ad slot: full banner. */}
         <div className="mt-10 flex justify-center">

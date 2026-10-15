@@ -11,6 +11,7 @@ import { tmdbRoutes } from "./tmdb";
 import { embedResolveRoutes } from "./embedresolve";
 import { supportRoutes } from "./support";
 import { tvCategoryRoutes } from "./tvCategories";
+import { appBuildRoutes } from "./appbuilds";
 import { uploadRoutes } from "./uploads";
 import { hashPassword, verifyPassword, newSalt, newToken, SESSION_TTL_SECONDS } from "./password";
 
@@ -1062,6 +1063,7 @@ app.route("/embed", embedResolveRoutes);
 
 app.route("/support", supportRoutes);
 app.route("/tv/categories", tvCategoryRoutes);
+app.route("/app/builds", appBuildRoutes);
 app.route("/uploads", uploadRoutes);
 
 /* ------------------------------------------------------------------ */

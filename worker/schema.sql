@@ -141,3 +141,16 @@ CREATE TABLE IF NOT EXISTS shortlinks (
   real_url    TEXT NOT NULL,
   resolved_at INTEGER NOT NULL
 );
+
+/* One row per operating system the FilmFlix app ships for. `url` is wherever
+   the binary actually lives today (GitHub release, Drive, an R2 object once
+   the bucket is enabled) — the landing "Get the app" cards turn into real
+   Download buttons only for platforms that have a row here. */
+CREATE TABLE IF NOT EXISTS app_builds (
+  platform   TEXT PRIMARY KEY,      -- 'android' | 'ios' | 'windows' | 'macos' | 'tv'
+  url        TEXT NOT NULL,
+  version    TEXT,
+  size_bytes INTEGER,
+  notes      TEXT,
+  updated_at INTEGER NOT NULL
+);

@@ -35,6 +35,7 @@ import Logo from "@/components/Logo";
 import MovieApiPanel from "@/components/MovieApiPanel";
 import MovieFormDialog from "@/components/MovieFormDialog";
 import RelayUrlHelper from "@/components/RelayUrlHelper";
+import AppBuildsPanel from "@/components/AppBuildsPanel";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -63,6 +64,7 @@ import {
   Search,
   Send,
   ShieldAlert,
+  Smartphone,
   ShieldCheck,
   ShieldOff,
   Trash2,
@@ -772,6 +774,9 @@ function AdminContent() {
                       {brokenCount}
                     </span>
                   )}
+                </TabsTrigger>
+                <TabsTrigger value="apps" className="gap-1.5">
+                  <Smartphone className="size-3.5" /> Apps
                 </TabsTrigger>
               </TabsList>
               </div>
@@ -2272,6 +2277,11 @@ function AdminContent() {
                     </div>
                   )}
                 </Card>
+              </TabsContent>
+
+              {/* App builds — which OS gets a real download button */}
+              <TabsContent value="apps">
+                <AppBuildsPanel />
               </TabsContent>
 
               {/* Support — help-center chat inbox */}
