@@ -20,6 +20,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  ExternalLink,
   Gauge,
   Languages,
   Link2,
@@ -702,6 +703,7 @@ export default function PlayerStage({
               <DownloadMenu
                 files={downloadFiles}
                 streamUrl={streamProbeUrl} referer={embedUrl || embedSource || iframeServerUrl}
+                iframeUrl={iframeServerUrl}
                 ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
                 title={title}
                 open={downloadOpen}
@@ -749,6 +751,7 @@ export default function PlayerStage({
               <DownloadMenu
                 files={downloadFiles}
                 streamUrl={streamProbeUrl} referer={embedUrl || embedSource || iframeServerUrl}
+                iframeUrl={(embedUrl || embedSource) as string}
                 ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
                 title={title}
                 open={downloadOpen}
@@ -761,6 +764,7 @@ export default function PlayerStage({
                 onClick={toggleFullscreen}
                 className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
                 aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+                title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
               >
                 {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
               </button>
@@ -1381,6 +1385,7 @@ function DownloadMenu({
   files,
   streamUrl,
   referer,
+  iframeUrl = "",
   ids,
   title,
   open,
@@ -1392,6 +1397,8 @@ function DownloadMenu({
   streamUrl: string;
   /** Embed page the stream came from — CDNs hotlink-check this on download. */
   referer?: string;
+  /** Active server is a third-party player frame — its traffic is invisible here. */
+  iframeUrl?: string;
   ids: {
     tmdbId?: string | number | null;
     imdbId?: string | null;
@@ -1423,10 +1430,14 @@ function DownloadMenu({
   }, [referer]);
 
   const probeKey = `${streamUrl}|${ids.tmdbId ?? ""}|${ids.imdbId ?? ""}|${ids.kind ?? ""}|${ids.season ?? 0}|${ids.episode ?? 0}`;
+  /* Providers answer in ~12s and often come back empty — a failed sweep must
+     stay re-runnable from the menu instead of being cached for the title. */
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!open || loadedFor.current === probeKey) return;
-    loadedFor.current = probeKey;
+    const key = `${probeKey}#${attempt}`;
+    if (!open || loadedFor.current === key) return;
+    loadedFor.current = key;
     setProbeStatus("loading");
     // Provider sweep works on every embed server (iframe-only ones included);
     // the master-playlist probe only applies once a raw stream is resolved.
@@ -1445,7 +1456,7 @@ function DownloadMenu({
       setProbeStatus("done");
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, probeKey]);
+  }, [open, probeKey, attempt]);
 
   /* Sniffed URLs the probing above did not already list. */
   const listed = new Set([
@@ -1577,6 +1588,19 @@ function DownloadMenu({
     );
   };
 
+  const nothingYet =
+    files.length === 0 &&
+    qualities.length === 0 &&
+    providers.length === 0 &&
+    detected.length === 0;
+  const iframeHost = (() => {
+    try {
+      return new URL(iframeUrl).hostname.replace(/^www\./, "");
+    } catch {
+      return "the provider";
+    }
+  })();
+
   return (
     <div
       className="relative"
@@ -1618,17 +1642,67 @@ function DownloadMenu({
               resolutions…
             </p>
           )}
-          {files.length === 0 &&
-            qualities.length === 0 &&
-            providers.length === 0 &&
-            detected.length === 0 &&
-            probeStatus !== "loading" && (
-              <p className="px-3 py-2 text-xs leading-relaxed text-white/60">
-                Nothing has played yet, so there is no stream to grab. Start the
-                video (or switch server) and open Download again — every URL the
-                player pulls shows up here automatically.
+          {nothingYet && probeStatus !== "loading" && iframeUrl && (
+            <div className="px-3 py-2">
+              <p className="text-xs leading-relaxed text-white/60">
+                <span className="font-semibold text-white/80">{iframeHost}</span>{" "}
+                plays this title inside its own player frame. A frame from another
+                site is sealed — this page cannot see the file it pulls, so there
+                is nothing for us to list.
               </p>
-            )}
+              <p className="mt-2 text-xs leading-relaxed text-white/60">
+                IDM can: it watches the whole browser, not just this tab. Open the
+                player by itself and its grabber bar offers 1080p / 720p / 480p.
+              </p>
+              <a
+                href={iframeUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 flex w-full items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-sm text-white transition-colors hover:bg-white/20"
+              >
+                <ExternalLink className="size-4 shrink-0" />
+                Open {iframeHost} in a new tab
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard
+                    ?.writeText(iframeUrl)
+                    .then(() => {
+                      setCopied(iframeUrl);
+                      setTimeout(() => setCopied(""), 2500);
+                    })
+                    .catch(() => undefined);
+                }}
+                className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/15"
+              >
+                <Link2 className="size-4 shrink-0" />
+                {copied === iframeUrl ? "copied ✓" : "Copy player address"}
+              </button>
+            </div>
+          )}
+          {nothingYet && probeStatus !== "loading" && !iframeUrl && (
+            <p className="px-3 py-2 text-xs leading-relaxed text-white/60">
+              Nothing has played yet, so there is no stream to grab. Start the
+              video (or switch server) and open Download again — every URL the
+              player pulls shows up here automatically.
+            </p>
+          )}
+          {nothingYet && (
+            <button
+              type="button"
+              disabled={probeStatus === "loading"}
+              onClick={() => setAttempt((a) => a + 1)}
+              className="mx-3 mb-1 mt-1 flex items-center gap-2 rounded-lg border border-white/15 px-2.5 py-1.5 text-[11px] font-semibold text-white/70 transition-colors hover:bg-white/15 disabled:opacity-50"
+            >
+              {probeStatus === "loading" ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <RotateCcw className="size-3" />
+              )}
+              {probeStatus === "loading" ? "Checking providers…" : "Check providers again"}
+            </button>
+          )}
           {(detected.length > 0 || files.length + qualities.length + providers.length > 0) && (
             <p className="px-3 py-2 text-[10px] leading-relaxed text-white/40">
               Stuck on a big file? Hit the link icon to copy a direct URL — paste
