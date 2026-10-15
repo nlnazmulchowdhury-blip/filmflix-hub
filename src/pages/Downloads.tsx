@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
+import AdBanner from "@/components/AdBanner";
+import { AD_BANNERS } from "@/lib/ad-banners";
 import {
   PLATFORMS,
   detectPlatform,
@@ -229,6 +231,12 @@ export default function Downloads() {
           itself. New builds appear here the moment they are published in the
           admin panel.
         </p>
+
+        {/* Footer banner: leaderboard on desktop, 320×50 on phones. */}
+        <section className="mt-10 flex justify-center">
+          <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
+          <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
+        </section>
       </main>
     </div>
   );

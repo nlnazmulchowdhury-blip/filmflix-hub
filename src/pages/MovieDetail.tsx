@@ -7,6 +7,9 @@ import Logo from "@/components/Logo";
 import PlayerStage from "@/components/PlayerStage";
 import VidSrcResultCard from "@/components/VidSrcResultCard";
 import ThemeToggle from "@/components/ThemeToggle";
+import AdBanner from "@/components/AdBanner";
+import AdSideRail from "@/components/AdSideRail";
+import { AD_BANNERS } from "@/lib/ad-banners";
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { vaplayerEmbedUrl } from "@/lib/vaplayer";
 import { listRelated, type TmdbItem } from "@/lib/tmdb";
@@ -382,6 +385,10 @@ export default function MovieDetail() {
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
       </div>
 
+      {/* Fixed side rails (160×600 skyscraper) — wide screens only. */}
+      <AdSideRail side="left" />
+      <AdSideRail side="right" />
+
       <header className="sticky top-0 z-40 glass-panel border-b">
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-2 px-3 sm:px-6">
           <Link to="/" aria-label="FilmFlix home" className="shrink-0">
@@ -423,6 +430,12 @@ export default function MovieDetail() {
               defaultServer={(externalMovie as any).defaultServer}
               providerEmbedUrl={isVidSrc ? undefined : (externalMovie as any).embedUrl}
             />
+
+            {/* Below-player banner: leaderboard on desktop, 320×50 on phones. */}
+            <section className="flex justify-center">
+              <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
+              <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
+            </section>
 
             {/* More videos — titles related to this one from the embed catalog. */}
             {related.length > 0 && (

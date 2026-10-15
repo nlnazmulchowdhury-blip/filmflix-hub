@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/table";
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
+import AdBanner from "@/components/AdBanner";
+import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
@@ -103,6 +105,12 @@ export default function Dashboard() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl space-y-8 px-4 pb-24 pt-8 sm:px-6">
+        {/* Top banner: leaderboard on desktop, 320×50 on phones. */}
+        <section className="flex justify-center">
+          <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
+          <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
+        </section>
+
         <div>
           <h1 className="font-display text-2xl font-bold tracking-tight sm:text-3xl">
             Welcome back{user?.name ? `, ${user.name}` : ""}

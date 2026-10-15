@@ -16,6 +16,10 @@ import {
   type TmdbItem,
 } from "@/lib/tmdb";
 import ThemeToggle from "@/components/ThemeToggle";
+import AdBanner from "@/components/AdBanner";
+import AdContainer from "@/components/AdContainer";
+import AdSideRail from "@/components/AdSideRail";
+import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
@@ -308,6 +312,10 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {/* Fixed side rails (160×600 skyscraper) — only on very wide screens. */}
+      <AdSideRail side="left" breakpoint="wide" />
+      <AdSideRail side="right" breakpoint="wide" />
+
       {/* Ambient background */}
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[520px] w-[820px] -translate-x-1/2 rounded-full bg-primary/14 blur-[140px]" />
@@ -490,6 +498,12 @@ export default function Landing() {
               <Dices className="size-4" />
             </Button>
           </motion.div>
+        </section>
+
+        {/* Top banner: leaderboard on desktop, 320×50 on phones. */}
+        <section className="mt-6 flex justify-center">
+          <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
+          <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
         </section>
 
         {/* Category sections — chips come from the embed catalog's genres. */}
@@ -727,6 +741,15 @@ export default function Landing() {
           )}
         </section>
 
+        {/* Mid-content ad row — 300×250 rectangle, PR container unit, half-page. */}
+        <section className="mt-10 flex flex-wrap items-center justify-center gap-6">
+          <AdBanner {...AD_BANNERS.square} />
+          <AdContainer />
+          <div className="hidden sm:block">
+            <AdBanner {...AD_BANNERS.halfpage} />
+          </div>
+        </section>
+
         {/* Quick links row */}
         <section className="mt-10 grid gap-4 sm:mt-14 sm:grid-cols-3">
           <Card className="card-lift border-border/60 bg-card/70">
@@ -769,6 +792,11 @@ export default function Landing() {
               </Button>
             </CardContent>
           </Card>
+        </section>
+
+        {/* Footer banner (468×60). */}
+        <section className="mt-12 flex justify-center">
+          <AdBanner {...AD_BANNERS.banner} />
         </section>
       </main>
 
