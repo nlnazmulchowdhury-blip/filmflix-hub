@@ -130,11 +130,17 @@ export function noteMediaUrl(
  */
 export function reportHlsLevels(
   src: string,
-  levels: { url?: string; height?: number; width?: number; bitrate?: number }[],
+  levels: {
+    /** hls.js keeps redundant fallback URLs per level, so this can be a list. */
+    url?: string | string[];
+    height?: number;
+    width?: number;
+    bitrate?: number;
+  }[],
 ): void {
   noteMediaUrl(src);
   for (const l of levels) {
-    const url = l.url ?? "";
+    const url = Array.isArray(l.url) ? l.url[0] : l.url;
     if (!url) continue;
     const height = l.height || (l.width ? Math.round((l.width * 9) / 16) : 0);
     noteMediaUrl(url, { height, bitrate: l.bitrate, referer: src });

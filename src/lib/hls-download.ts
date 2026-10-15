@@ -16,6 +16,10 @@
 import { Transmuxer } from "mux.js/lib/mp4/transmuxer";
 import { API_BASE } from "@/lib/api";
 
+/** ArrayBuffer-backed view — WebCrypto and Blob both reject the generic
+ *  `Uint8Array<ArrayBufferLike>` in this TS lib configuration. */
+type Bytes = Uint8Array<ArrayBuffer>;
+
 /** Direct, header-free link: usable by the browser, by IDM, or by curl. */
 export function proxyUrl(url: string, referer?: string, name?: string): string {
   const q = new URLSearchParams({ url });
@@ -33,7 +37,7 @@ async function raw(url: string, referer?: string): Promise<Response> {
   return fetch(proxyUrl(url, referer));
 }
 
-async function fetchBytes(url: string, opts: FetchOpts = {}): Promise<Uint8Array> {
+async function fetchBytes(url: string, opts: FetchOpts = {}): Promise<Bytes> {
   const attempts = opts.attempts ?? 3;
   let last = "network error";
   for (let i = 0; i < attempts; i++) {
@@ -69,14 +73,14 @@ interface Segment {
   url: string;
   /** AES-128 key URI + IV for this segment, when the playlist encrypts it. */
   keyUri: string | null;
-  iv: Uint8Array | null;
+  iv: Bytes | null;
 }
 
 interface MediaPlaylist {
   segments: Segment[];
   initSegment: string | null;
   initKeyUri: string | null;
-  initIv: Uint8Array | null;
+  initIv: Bytes | null;
   isTs: boolean;
   /** Present for methods we cannot decrypt (SAMPLE-AES, FairPlay). */
   unsupportedEncryption: boolean;
@@ -86,7 +90,7 @@ function absolutize(uri: string, base: string): string {
   return new URL(uri, base).href;
 }
 
-function hexToBytes(hex: string): Uint8Array {
+function hexToBytes(hex: string): Bytes {
   const clean = hex.replace(/[^0-9a-fA-F]/g, "");
   const out = new Uint8Array(clean.length / 2);
   for (let i = 0; i < out.length; i++)
@@ -95,7 +99,7 @@ function hexToBytes(hex: string): Uint8Array {
 }
 
 /** Segment IV defaults to the media sequence number, big-endian (RFC 8216). */
-function seqIv(seq: number): Uint8Array {
+function seqIv(seq: number): Bytes {
   const iv = new Uint8Array(16);
   new DataView(iv.buffer).setBigUint64(8, BigInt(seq));
   return iv;
@@ -106,7 +110,7 @@ function parseMediaPlaylist(text: string, baseUrl: string): MediaPlaylist {
   const segments: Segment[] = [];
   let initSegment: string | null = null;
   let keyUri: string | null = null;
-  let keyIv: Uint8Array | null = null;
+  let keyIv: Bytes | null = null;
   let unsupportedEncryption = false;
   let seq = 0;
   const init = { seq: 0 };
@@ -171,7 +175,7 @@ function aesKey(uri: string, referer?: string): Promise<CryptoKey> {
   return cached;
 }
 
-async function decrypt(bytes: Uint8Array, seg: { keyUri: string | null; iv: Uint8Array | null }, referer?: string) {
+async function decrypt(bytes: Bytes, seg: { keyUri: string | null; iv: Bytes | null }, referer?: string): Promise<Bytes> {
   if (!seg.keyUri || !seg.iv) return bytes;
   try {
     const key = await aesKey(seg.keyUri, referer);
@@ -230,7 +234,7 @@ async function mapLimit<T, R>(
   return out;
 }
 
-function remuxTs(segments: Uint8Array[]): Uint8Array {
+function remuxTs(segments: Bytes[]): Bytes {
   const transmuxer = new Transmuxer();
   const parts: Uint8Array[] = [];
   let initPushed = false;
@@ -297,7 +301,7 @@ export async function downloadHls(
     onProgress?.(done / segments.length);
     return decrypt(bytes, seg, referer);
   });
-  const ok = bodies.filter((b): b is Uint8Array => b !== null);
+  const ok = bodies.filter((b): b is Bytes => b !== null);
   if (!ok.length) throw new Error("every segment failed");
   /* MPEG-TS demuxers resync on 0x47, so dropped segments stay playable. */
   return {
