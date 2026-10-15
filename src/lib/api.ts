@@ -55,7 +55,11 @@ async function request<T>(
   if (text.trimStart().startsWith("<")) {
     throw new ApiError(
       res.status,
-      "Backend unreachable — the page asked its own origin for API data. Hard-reload (Ctrl+Shift+R).",
+      "The API returned a web page instead of data (status " +
+        res.status +
+        " for " +
+        path +
+        ") — a stale bundle or wrong API origin. Hard-reload (Ctrl+Shift+R).",
     );
   }
   const data = text ? JSON.parse(text) : null;
