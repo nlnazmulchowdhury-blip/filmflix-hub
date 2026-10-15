@@ -86,3 +86,29 @@ export async function fetchEmbedQualities(
     `/embed/qualities?url=${encodeURIComponent(streamUrl.trim())}`,
   );
 }
+
+export interface TitleDownloadProvider {
+  name: string;
+  entries: { label: string; url: string }[];
+}
+
+/** Ask the Worker to probe every server-side-extractable provider for this
+ *  title — powers the Download menu on iframe-only embed servers. */
+export async function fetchTitleDownloads(ids: {
+  tmdbId?: string | number | null;
+  imdbId?: string | null;
+  kind?: "movie" | "series" | null;
+  season?: number;
+  episode?: number;
+}): Promise<TitleDownloadProvider[]> {
+  const q = new URLSearchParams();
+  if (ids.tmdbId) q.set("tmdb", String(ids.tmdbId));
+  if (ids.imdbId) q.set("imdb", ids.imdbId);
+  q.set("kind", ids.kind === "series" ? "tv" : "movie");
+  if (ids.season) q.set("season", String(ids.season));
+  if (ids.episode) q.set("episode", String(ids.episode));
+  const r = await api.get<{ providers?: TitleDownloadProvider[] }>(
+    `/embed/downloads?${q.toString()}`,
+  );
+  return r.providers ?? [];
+}

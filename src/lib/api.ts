@@ -9,6 +9,7 @@
 
 const FALLBACK_API_BASE = "https://filmflix-hub.nlnazmulchowdhury.workers.dev";
 const BASE = import.meta.env.VITE_API_BASE?.trim() ? import.meta.env.VITE_API_BASE.trim() : FALLBACK_API_BASE;
+export const API_BASE = BASE;
 const TOKEN_KEY = "ff-session-token";
 
 export function getToken(): string | null {

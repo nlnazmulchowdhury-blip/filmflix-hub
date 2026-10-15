@@ -332,3 +332,114 @@ embedResolveRoutes.get("/qualities", async (c) => {
     return c.json({ kind: "empty", entries: [], error: "fetch failed" }, 502);
   }
 });
+
+/* ---------------- downloads (per-title, every embed server) ---------------- */
+
+interface TitleRef {
+  tmdb: string;
+  imdb: string;
+  kind: "movie" | "tv";
+  season: number;
+  episode: number;
+}
+
+interface DownloadProvider {
+  name: string;
+  entries: QualityEntry[];
+}
+
+type Extractor = (t: TitleRef) => Promise<QualityEntry[]>;
+
+/** Resolve a provider page with the generic chain-walker, then expand the
+ *  best candidate's master playlist into per-resolution entries. */
+function pageExtractor(name: string, page: (t: TitleRef) => string): { name: string; extract: Extractor } {
+  return {
+    name,
+    async extract(t) {
+      const r = await resolveEmbedStream(page(t));
+      for (const cand of r.candidates.slice(0, 2)) {
+        try {
+          const res = await fetchPage(cand.url, new URL(cand.url).origin);
+          const text = await res.text();
+          if (!text.trimStart().startsWith("#EXTM3U")) continue;
+          const variants = parseMasterPlaylist(text, new URL(safeUrl(res.url)?.href ?? cand.url));
+          if (variants.length) return variants;
+        } catch {
+          /* one bad candidate should not kill the provider */
+        }
+      }
+      return r.candidates.map((cand) => ({ label: "Stream", url: cand.url }));
+    },
+  };
+}
+
+/* Providers whose streams are extractable with plain HTTP (verified against
+   TMDB 603 / 119052). New extractors plug in here. */
+const downloadExtractors: { name: string; extract: Extractor }[] = [
+  pageExtractor("VidLink", (t) =>
+    t.kind === "tv"
+      ? `https://vidlink.pro/tv/${t.tmdb}/${t.season}/${t.episode}`
+      : `https://vidlink.pro/movie/${t.tmdb}`,
+  ),
+  pageExtractor("VidNest", (t) =>
+    t.kind === "tv"
+      ? `https://vidnest.fun/tv/${t.tmdb}/${t.season}/${t.episode}`
+      : `https://vidnest.fun/movie/${t.tmdb}`,
+  ),
+  pageExtractor("Videasy", (t) =>
+    t.kind === "tv"
+      ? `https://player.videasy.to/tv/${t.tmdb}/${t.season}/${t.episode}`
+      : `https://player.videasy.to/movie/${t.tmdb}`,
+  ),
+];
+
+embedResolveRoutes.get("/downloads", async (c) => {
+  const tmdb = (c.req.query("tmdb") ?? "").replace(/\D/g, "");
+  const imdb = /^tt\d{6,9}$/.test(c.req.query("imdb") ?? "") ? c.req.query("imdb")! : "";
+  if (!tmdb && !imdb) return c.json({ providers: [], error: "no usable id" }, 400);
+  const ref: TitleRef = {
+    tmdb,
+    imdb,
+    kind: c.req.query("kind") === "tv" ? "tv" : "movie",
+    season: Math.min(200, Math.max(1, Number(c.req.query("season")) || 1)),
+    episode: Math.min(1000, Math.max(1, Number(c.req.query("episode")) || 1)),
+  };
+  const settled = await Promise.allSettled(
+    downloadExtractors.map(async (p) => ({ name: p.name, entries: await p.extract(ref) })),
+  );
+  const providers: DownloadProvider[] = settled
+    .map((r) => (r.status === "fulfilled" && r.value.entries.length ? r.value : null))
+    .filter((p): p is DownloadProvider => p !== null);
+  return c.json({ providers });
+});
+
+/* CORS-friendly byte pipe so the browser can fetch provider playlists and
+   media segments (their CDNs rarely send Access-Control-Allow-Origin). */
+embedResolveRoutes.get("/proxy", async (c) => {
+  const url = c.req.query("url") ?? "";
+  const safe = safeUrl(url);
+  if (!safe) return c.json({ error: "invalid url" }, 400);
+  try {
+    const res = await fetch(safe.href, {
+      redirect: "follow",
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Referer: c.req.query("ref") ?? safe.origin + "/",
+        Origin: safe.origin,
+        Accept: "*/*",
+      },
+    });
+    if (!res.ok || !res.body)
+      return new Response(null, { status: res.status || 502 });
+    return new Response(res.body, {
+      headers: {
+        "Content-Type":
+          res.headers.get("content-type") ?? "application/octet-stream",
+        "Cache-Control": "public, max-age=3600",
+      },
+    });
+  } catch (err) {
+    console.error("proxy fetch failed", err);
+    return c.json({ error: "fetch failed" }, 502);
+  }
+});

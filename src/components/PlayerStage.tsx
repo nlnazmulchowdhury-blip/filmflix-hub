@@ -5,8 +5,11 @@ import {
   isEmbedUrl,
   resolveEmbedStream,
   fetchEmbedQualities,
+  fetchTitleDownloads,
   type EmbedCandidate,
+  type TitleDownloadProvider,
 } from "@/lib/embed-resolver";
+import { downloadHlsAsMp4, saveBlob, isHlsLink } from "@/lib/hls-download";
 import {
   Captions,
   ChevronLeft,
@@ -694,6 +697,7 @@ export default function PlayerStage({
               <DownloadMenu
                 files={downloadFiles}
                 streamUrl={streamProbeUrl}
+                ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
                 title={title}
                 open={downloadOpen}
                 setOpen={setDownloadOpen}
@@ -740,6 +744,7 @@ export default function PlayerStage({
               <DownloadMenu
                 files={downloadFiles}
                 streamUrl={streamProbeUrl}
+                ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
                 title={title}
                 open={downloadOpen}
                 setOpen={setDownloadOpen}
@@ -1086,6 +1091,7 @@ export default function PlayerStage({
           <DownloadMenu
             files={downloadFiles}
             streamUrl={streamProbeUrl}
+            ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
             title={title}
             open={downloadOpen}
             setOpen={setDownloadOpen}
@@ -1369,6 +1375,7 @@ function downloadName(title: string, label: string, url: string): string {
 function DownloadMenu({
   files,
   streamUrl,
+  ids,
   title,
   open,
   setOpen,
@@ -1377,6 +1384,13 @@ function DownloadMenu({
 }: {
   files: { label: string; url: string }[];
   streamUrl: string;
+  ids: {
+    tmdbId?: string | number | null;
+    imdbId?: string | null;
+    kind?: "movie" | "series" | null;
+    season?: number;
+    episode?: number;
+  };
   title: string;
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -1385,23 +1399,35 @@ function DownloadMenu({
   drop?: "up" | "down";
 }) {
   const [qualities, setQualities] = useState<{ label: string; url: string }[]>([]);
+  const [providers, setProviders] = useState<TitleDownloadProvider[]>([]);
   const [probeStatus, setProbeStatus] = useState<"idle" | "loading" | "done">("idle");
+  const [progress, setProgress] = useState<Record<string, number>>({});
   const loadedFor = useRef("");
 
+  const probeKey = `${streamUrl}|${ids.tmdbId ?? ""}|${ids.imdbId ?? ""}|${ids.kind ?? ""}|${ids.season ?? 0}|${ids.episode ?? 0}`;
+
   useEffect(() => {
-    if (!open || !streamUrl || loadedFor.current === streamUrl) return;
-    loadedFor.current = streamUrl;
+    if (!open || loadedFor.current === probeKey) return;
+    loadedFor.current = probeKey;
     setProbeStatus("loading");
-    fetchEmbedQualities(streamUrl)
-      .then((r) => {
-        setQualities(r.entries ?? []);
-        setProbeStatus("done");
-      })
-      .catch(() => {
-        setQualities([]);
-        setProbeStatus("done");
-      });
-  }, [open, streamUrl]);
+    // Provider sweep works on every embed server (iframe-only ones included);
+    // the master-playlist probe only applies once a raw stream is resolved.
+    Promise.all([
+      (ids.tmdbId || ids.imdbId ? fetchTitleDownloads(ids) : Promise.resolve([])).catch(
+        () => [] as TitleDownloadProvider[],
+      ),
+      streamUrl
+        ? fetchEmbedQualities(streamUrl)
+            .then((r) => r.entries ?? [])
+            .catch(() => [])
+        : Promise.resolve([]),
+    ]).then(([prov, quals]) => {
+      setProviders(prov);
+      setQualities(quals);
+      setProbeStatus("done");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, probeKey]);
 
   const row = (label: string, sub: string, url: string) => (
     <a
@@ -1420,6 +1446,66 @@ function DownloadMenu({
       <Download className="size-4 shrink-0 text-white/60" />
     </a>
   );
+
+  /* HLS rows download in-browser (segments → remuxed .mp4) with live progress;
+     direct files fall back to the plain anchor row. */
+  const streamRow = (label: string, sub: string, url: string) => {
+    if (!isHlsLink(url)) return row(label, sub, url);
+    const pct = progress[url];
+    const busy = pct !== undefined && pct >= 0 && pct < 1;
+    const start = () => {
+      setProgress((p) => ({ ...p, [url]: 0 }));
+      downloadHlsAsMp4(url, (f) => setProgress((p) => ({ ...p, [url]: f })))
+        .then((blob) => {
+          saveBlob(blob, downloadName(title, label, url).replace(/\.m3u8$/i, ".mp4"));
+          setProgress((p) => ({ ...p, [url]: 1 }));
+          setTimeout(
+            () =>
+              setProgress((p) => {
+                const n = { ...p };
+                delete n[url];
+                return n;
+              }),
+            4000,
+          );
+        })
+        .catch(() => setProgress((p) => ({ ...p, [url]: -1 })));
+    };
+    return (
+      <div
+        key={url + label}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-sm text-white"
+        title={url}
+      >
+        <button
+          type="button"
+          disabled={busy}
+          onClick={start}
+          className="flex min-w-0 flex-1 flex-col items-start text-left transition-colors hover:text-primary disabled:opacity-60"
+        >
+          <span>{label}</span>
+          {sub && <span className="text-[10px] font-normal text-white/50">{sub}</span>}
+        </button>
+        {busy ? (
+          <span className="shrink-0 text-[10px] tabular-nums text-white/70">
+            {Math.round((pct || 0) * 100)}%
+          </span>
+        ) : pct === 1 ? (
+          <span className="shrink-0 text-[10px] font-semibold text-primary">saved ✓</span>
+        ) : pct === -1 ? (
+          <button
+            type="button"
+            onClick={start}
+            className="shrink-0 text-[10px] font-semibold text-red-400 hover:text-red-300"
+          >
+            failed — retry
+          </button>
+        ) : (
+          <Download className="size-4 shrink-0 text-white/60" />
+        )}
+      </div>
+    );
+  };
 
   return (
     <div
@@ -1447,20 +1533,25 @@ function DownloadMenu({
           <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
             Download
           </p>
-          {files.map((f) => row(f.label, "This site's file", f.url))}
-          {qualities.map((q) => row(q.label, "Provider stream", q.url))}
+          {files.map((f) => streamRow(f.label, "This site's file", f.url))}
+          {qualities.map((q) => streamRow(q.label, "Now-playing stream", q.url))}
+          {providers.flatMap((p) => p.entries.map((e) => streamRow(e.label, p.name, e.url)))}
           {probeStatus === "loading" && (
             <p className="flex items-center gap-2 px-3 py-2 text-xs text-white/60">
-              <Loader2 className="size-3.5 animate-spin" /> Checking resolutions…
+              <Loader2 className="size-3.5 animate-spin" /> Checking providers &amp;
+              resolutions…
             </p>
           )}
-          {files.length === 0 && qualities.length === 0 && probeStatus !== "loading" && (
-            <p className="px-3 py-2 text-xs leading-relaxed text-white/60">
-              {streamUrl
-                ? "No separate resolutions found for this stream — the current file still downloads from the provider page."
-                : "Nothing downloadable on this server yet — pick the ad-free embed server, it extracts the raw stream."}
-            </p>
-          )}
+          {files.length === 0 &&
+            qualities.length === 0 &&
+            providers.length === 0 &&
+            probeStatus !== "loading" && (
+              <p className="px-3 py-2 text-xs leading-relaxed text-white/60">
+                No downloadable stream found for this title yet — every provider
+                serving it hides the file behind a browser check. Try another
+                server, then open Download again.
+              </p>
+            )}
         </div>
       )}
     </div>
