@@ -7,6 +7,7 @@ export interface AuthState {
   user: (ApiUser & { _id?: string }) | null;
   signIn: (step: string, formData: FormData) => Promise<void>;
   signOut: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 /**
@@ -45,6 +46,17 @@ export function useAuthCf(): AuthState {
     setToken(token);
     const me = await api.get<{ user: ApiUser | null }>("/auth/me");
     setUser(me.user);
+  }, []);
+
+  /* Role changes happen server-side only (the admin-code unlock, for one), so
+     the UI has to re-read /auth/me to notice them. */
+  const refreshUser = useCallback(async () => {
+    try {
+      const me = await api.get<{ user: ApiUser | null }>("/auth/me");
+      setUser(me.user);
+    } catch {
+      // A blip here must not sign the visitor out — keep the cached user.
+    }
   }, []);
 
   const signIn = useCallback(async (provider: string, formData: FormData) => {
@@ -106,6 +118,7 @@ export function useAuthCf(): AuthState {
     user: user ? { ...user, _id: user.id } : null,
     signIn,
     signOut,
+    refreshUser,
   };
 }
 

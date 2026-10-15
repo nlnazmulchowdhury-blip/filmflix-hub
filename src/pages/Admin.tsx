@@ -34,6 +34,7 @@ import {
 import Logo from "@/components/Logo";
 import MovieApiPanel from "@/components/MovieApiPanel";
 import MovieFormDialog from "@/components/MovieFormDialog";
+import MovieInspector from "@/components/MovieInspector";
 import RelayUrlHelper from "@/components/RelayUrlHelper";
 import AppBuildsPanel from "@/components/AppBuildsPanel";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -53,6 +54,8 @@ import {
   ChevronsUp,
   Clapperboard,
   CreditCard,
+  Eye,
+  EyeOff,
   Film,
   Headset,
   KeyRound,
@@ -63,6 +66,7 @@ import {
   Plus,
   Search,
   Send,
+  ScanSearch,
   ShieldAlert,
   Smartphone,
   ShieldCheck,
@@ -96,7 +100,7 @@ const fmtDateTime = (ms: number) =>
   });
 
 function AdminContent() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, refreshUser } = useAuth();
   const isAdmin = user?.role === "admin";
   const movies = useQuery(api.movies.list);
   // Admin-only feeds: don't run them until the admin role is confirmed,
@@ -282,6 +286,18 @@ function AdminContent() {
   };
 
   const removeMovie = useMutation(api.movies.remove);
+  const updateMovie = useMutation(api.movies.update);
+  const [busyBlock, setBusyBlock] = useState<string | null>(null);
+  /* Quick block/unblock straight from the row: PATCH only {hidden}, so the
+     Worker's key-presence gate leaves every other field untouched. */
+  const toggleBlock = async (m: any) => {
+    setBusyBlock(m._id);
+    try {
+      await updateMovie({ id: m._id, hidden: !m.hidden });
+    } finally {
+      setBusyBlock(null);
+    }
+  };
   const removeCategory = useMutation(api.categories.remove);
   const createCategory = useMutation(api.categories.create);
   const verifyAdminCode = useMutation(api.movies.verifyAdminCode);
@@ -306,6 +322,7 @@ function AdminContent() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Doc<"movies"> | null>(null);
+  const [inspectId, setInspectId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Doc<"movies"> | null>(null);
   const [deletingCategory, setDeletingCategory] = useState<{
     name: string;
@@ -517,6 +534,14 @@ function AdminContent() {
     });
   }, [movies, movieSearch]);
 
+  /* The overview card reports what visitors actually see (live = not blocked);
+     total/hidden ride underneath so a blocked title never silently vanishes. */
+  const movieCounts = useMemo(() => {
+    if (!movies) return null;
+    const hidden = movies.filter((m: any) => m.hidden).length;
+    return { total: movies.length, live: movies.length - hidden, hidden };
+  }, [movies]);
+
   const handleVerifyCode = async () => {
     if (!adminCode.trim()) {
       toast.error("Enter the admin access code");
@@ -525,6 +550,9 @@ function AdminContent() {
     setIsVerifying(true);
     try {
       await verifyAdminCode({ code: adminCode });
+      /* The role flips in D1 only — isAdmin below reads the local user object,
+         so re-pull it or the panel stays locked until a manual reload. */
+      await refreshUser();
       toast.success("Admin access granted");
       setAdminCode("");
     } catch (err) {
@@ -682,11 +710,15 @@ function AdminContent() {
                     <Film className="size-3.5" /> Movies
                   </CardDescription>
                   <CardTitle className="font-display text-3xl">
-                    {movies === undefined ? "—" : movies.length}
+                    {movieCounts ? movieCounts.live : "—"}
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="text-xs text-muted-foreground">
-                  Titles in the catalog.
+                  {movieCounts && movieCounts.total > 0
+                    ? `${movieCounts.total} in catalog${
+                        movieCounts.hidden > 0 ? ` · ${movieCounts.hidden} blocked` : ""
+                      }`
+                    : "Titles live on the site."}
                 </CardContent>
               </Card>
               <Card className="border-border/60 bg-card/70">
@@ -968,7 +1000,14 @@ function AdminContent() {
                               </div>
                             </TableCell>
                             <TableCell className="max-w-[38vw] sm:max-w-[200px]">
-                              <p className="truncate font-medium">{m.title}</p>
+                              <p className="flex items-center gap-1.5 truncate font-medium">
+                                {m.title}
+                                {m.hidden && (
+                                  <Badge variant="outline" className="shrink-0 border-destructive/40 text-destructive">
+                                    Blocked
+                                  </Badge>
+                                )}
+                              </p>
                               <p className="truncate text-xs text-muted-foreground">
                                 {m.videoUrl ? "Video ready" : "No video"}
                               </p>
@@ -1044,6 +1083,27 @@ function AdminContent() {
                             </TableCell>
                             <TableCell>
                               <div className="flex justify-end gap-1.5">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className={m.hidden ? "size-8 text-destructive hover:text-destructive" : "size-8"}
+                                  aria-label={m.hidden ? `Unblock ${m.title}` : `Block ${m.title}`}
+                                  title={m.hidden ? "Unblock — show on the site again" : "Block — hide from the site (keeps the title)"}
+                                  disabled={busyBlock === m._id}
+                                  onClick={() => toggleBlock(m)}
+                                >
+                                  {m.hidden ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-8"
+                                  aria-label={`Inspect ${m.title}`}
+                                  title="Full inspector — embed, servers, downloads, health"
+                                  onClick={() => setInspectId(m._id)}
+                                >
+                                  <ScanSearch className="size-4" />
+                                </Button>
                                 <Button
                                   variant="ghost"
                                   size="icon"
@@ -2681,6 +2741,14 @@ function AdminContent() {
         }}
         movie={editing}
         categories={categories}
+      />
+
+      <MovieInspector
+        movieId={inspectId}
+        open={inspectId != null}
+        onOpenChange={(o) => {
+          if (!o) setInspectId(null);
+        }}
       />
 
       {deleting && (

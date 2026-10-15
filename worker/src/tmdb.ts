@@ -556,3 +556,74 @@ tmdbRoutes.get("/browse", async (c) => {
     return c.json({ items: [], page: batch, hasMore: false, error: "TMDB fetch failed" }, 502);
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* Admin inspector pickers                                             */
+/*                                                                     */
+/* The movie editor needs to attach real external ids to a title.      */
+/* /search turns a free-text query into candidate cards (TMDB when a   */
+/* key is configured, the vidbox home grid filtered by title otherwise) */
+/* and /external resolves the IMDb id for a chosen TMDB id so Server 1   */
+/* can light up.                                                        */
+/* ------------------------------------------------------------------ */
+
+tmdbRoutes.get("/search", async (c) => {
+  const q = (c.req.query("q") ?? "").trim();
+  if (q.length < 2) return c.json({ items: [], source: "none" });
+  const key = c.env.TMDB_API_KEY;
+
+  if (key) {
+    try {
+      const url =
+        `https://api.themoviedb.org/3/search/multi?api_key=${encodeURIComponent(key)}` +
+        `&query=${encodeURIComponent(q)}&include_adult=false&page=1`;
+      const res = await fetch(url, { headers: { accept: "application/json" } });
+      if (!res.ok) throw new Error(`TMDB ${res.status}`);
+      const data = (await res.json()) as { results?: TmdbResult[] };
+      const items = (data.results ?? [])
+        .filter((r) => r.media_type === "movie" || r.media_type === "tv")
+        .map(toCard)
+        .filter((x): x is BrowseItem => x !== null)
+        .slice(0, 16);
+      return c.json({ items, source: "tmdb" });
+    } catch (err) {
+      console.error("tmdb search failed", err);
+      return c.json({ items: [], source: "none", error: "search failed" }, 502);
+    }
+  }
+
+  /* Keyless: filter the cached vidbox trending grid by title substring. */
+  try {
+    const all = await scrapeVidbox();
+    const needle = q.toLowerCase();
+    return c.json({
+      items: all.filter((x) => x.title.toLowerCase().includes(needle)).slice(0, 16),
+      source: "vidbox",
+    });
+  } catch (err) {
+    console.error("keyless search failed", err);
+    return c.json({ items: [], source: "none" }, 502);
+  }
+});
+
+/** Resolve the IMDb id (and echo TMDB's own poster/overview) for a picked
+ *  title so the inspector can populate Server 1 in one click. */
+tmdbRoutes.get("/external", async (c) => {
+  const tmdbId = (c.req.query("tmdbId") ?? "").trim();
+  const kind = (c.req.query("kind") ?? "movie").toLowerCase() === "tv" ? "tv" : "movie";
+  if (!/^\d{1,10}$/.test(tmdbId)) return c.json({ error: "Invalid tmdbId" }, 400);
+  const key = c.env.TMDB_API_KEY;
+  if (!key) return c.json({ tmdbId, imdbId: null, error: "No TMDB key" }, 200);
+  try {
+    const res = await fetch(
+      `https://api.themoviedb.org/3/${kind}/${tmdbId}/external_ids?api_key=${encodeURIComponent(key)}`,
+      { headers: { accept: "application/json" } },
+    );
+    if (!res.ok) throw new Error(`TMDB ${res.status}`);
+    const data = (await res.json()) as { imdb_id?: string | null };
+    return c.json({ tmdbId, imdbId: data.imdb_id ?? null });
+  } catch (err) {
+    console.error("external ids lookup failed", err);
+    return c.json({ tmdbId, imdbId: null, error: "lookup failed" }, 502);
+  }
+});

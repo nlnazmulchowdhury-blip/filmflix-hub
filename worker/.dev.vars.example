@@ -4,3 +4,8 @@
 # TMDB v3 key (https://www.themoviedb.org/settings/api → "API Key" or "Read
 # Access Token"). Powers the landing "All Movies" browse grid.
 TMDB_API_KEY=
+
+# Shared admin unlock code — the /nazmul panel posts this to
+# /movies/verify-admin-code to promote the signed-in user to admin. Without it
+# the panel fails with "ADMIN_ACCESS_CODE is not configured on the worker".
+ADMIN_ACCESS_CODE=

@@ -10,9 +10,6 @@ import ThemeToggle from "@/components/ThemeToggle";
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { vaplayerEmbedUrl } from "@/lib/vaplayer";
 import { listRelated, type TmdbItem } from "@/lib/tmdb";
-import AdBanner from "@/components/AdBanner";
-import AdSideRail from "@/components/AdSideRail";
-import { AD_BANNERS } from "@/lib/ad-banners";
 import { convexSiteUrl, downloadFileUrl } from "@/lib/video-url";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -403,11 +400,6 @@ export default function MovieDetail() {
         </div>
       </header>
 
-      {/* Ad rails: skyscrapers flanking the page on very wide screens —
-          auto-scaled so they never get cut off on short screens. */}
-      <AdSideRail side="left" />
-      <AdSideRail side="right" />
-
       <main className="mx-auto w-full max-w-6xl px-3 pb-24 pt-4 sm:px-6 sm:pt-8">
         {!externalMovie ? (
           <div className="space-y-6">
@@ -427,6 +419,9 @@ export default function MovieDetail() {
               imdbId={(isVidSrc ? vidsrcImdbId : (externalMovie as any).imdbId) || undefined}
               tmdbId={!isVidSrc ? (externalMovie as any).tmdbId : undefined}
               kind={(isVidSrc ? (externalState.kind || "movie") : (externalMovie as any).kind) as any}
+              disabledServers={(externalMovie as any).disabledServers}
+              defaultServer={(externalMovie as any).defaultServer}
+              providerEmbedUrl={isVidSrc ? undefined : (externalMovie as any).embedUrl}
             />
 
             {/* More videos — titles related to this one from the embed catalog. */}
@@ -701,12 +696,6 @@ export default function MovieDetail() {
               </aside>
             </div>
             )}
-
-            {/* Banner ads */}
-            <div className="flex justify-center">
-              <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
-              <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
-            </div>
           </div>
         )}
       </main>

@@ -42,6 +42,8 @@ app.use("*", cors({
     "https://filmbd.pages.dev",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5199",
+    "http://127.0.0.1:5199",
   ],
   allowMethods: ["GET", "POST", "PATCH", "DELETE", "PUT", "OPTIONS"],
   allowHeaders: ["Content-Type", "Authorization"],
@@ -157,6 +159,15 @@ function movieOut(r: any) {
     seasons: parseJsonArray(r.seasons),
     order: r.sort_order ?? undefined,
     contributorId: r.contributor_id ?? undefined,
+    /* External ids let the player rebuild Servers 1/3/4 for admin-created
+       titles; the rest are per-movie embed overrides the inspector edits. */
+    tmdbId: r.tmdb_id ?? undefined,
+    imdbId: r.imdb_id ?? undefined,
+    embedUrl: r.embed_url ?? undefined,
+    disabledServers: parseJsonArray(r.disabled_servers),
+    defaultServer: r.default_server ?? undefined,
+    downloads: parseJsonArray(r.downloads),
+    hidden: !!r.hidden,
   };
 }
 
@@ -386,9 +397,13 @@ app.post("/movies/verify-admin-code", async (c) => {
 /* ------------------------------------------------------------------ */
 
 app.get("/movies", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT * FROM movies ORDER BY COALESCE(sort_order, 999999), created_at`,
-  ).all();
+  /* Admins see everything; the public catalog omits titles the inspector has
+     unpublished (hidden = 1). */
+  const me = await userForToken(c.env.DB, c.req.header("Authorization"));
+  const sql = me?.role === "admin"
+    ? `SELECT * FROM movies ORDER BY COALESCE(sort_order, 999999), created_at`
+    : `SELECT * FROM movies WHERE hidden = 0 ORDER BY COALESCE(sort_order, 999999), created_at`;
+  const { results } = await c.env.DB.prepare(sql).all();
   return c.json((results ?? []).map(movieOut));
 });
 
@@ -397,12 +412,6 @@ app.get("/movies/:mid", async (c) => {
   if (!row) throw new HttpError(404, "Movie not found");
   return c.json(movieOut(row));
 });
-
-const movieFields = [
-  "title", "description", "posterUrl", "backdropUrl", "videoUrl", "genre",
-  "year", "rating", "kind", "order", "qualities", "subtitles", "episodes",
-  "dubs", "seasons",
-];
 
 function normalizeCategories(input: { category?: string; categories?: string[] }): string[] {
   return [...new Set(
@@ -421,7 +430,7 @@ function toJson(v: unknown): string | null {
 }
 
 app.post("/movies", async (c) => {
-  await requireAdmin(c);
+  const admin = await requireAdmin(c);
   const body = await c.req.json<any>();
   const names = normalizeCategories(body);
   const mid = id();
@@ -429,8 +438,9 @@ app.post("/movies", async (c) => {
   await c.env.DB.prepare(
     `INSERT INTO movies (id, title, description, poster_url, backdrop_url, video_url,
        genre, category, categories, year, rating, kind, qualities, subtitles,
-       episodes, dubs, seasons, sort_order, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       episodes, dubs, seasons, tmdb_id, imdb_id, embed_url, disabled_servers,
+       default_server, downloads, hidden, sort_order, contributor_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     mid, body.title ?? "Untitled", body.description ?? null,
     body.posterUrl ?? null, body.backdropUrl ?? null, body.videoUrl ?? null,
@@ -441,7 +451,10 @@ app.post("/movies", async (c) => {
     toJson(body.episodes),
     toJson(body.dubs),
     toJson(body.seasons),
-    order, Date.now(),
+    body.tmdbId ?? null, body.imdbId ?? null, body.embedUrl ?? null,
+    toJson(body.disabledServers), body.defaultServer ?? null,
+    toJson(body.downloads), body.hidden ? 1 : 0,
+    order, admin.id, Date.now(),
   ).run();
   return c.json({ id: mid });
 });
@@ -451,30 +464,77 @@ app.patch("/movies/:mid", async (c) => {
   const body = await c.req.json<any>();
   const row = await getMovieRow(c.env.DB, c.req.param("mid"));
   if (!row) throw new HttpError(404, "Movie not found");
-  const names = normalizeCategories(body);
 
+  /* Reorder actions carry only their own key, so handle and return before the
+     field loop. moveToTop drops the title below the current minimum; move
+     swaps sort_order with the on-screen neighbour. */
+  if (body.toTop) {
+    const m = await c.env.DB.prepare(
+      `SELECT COALESCE(MIN(COALESCE(sort_order, 999999)), 0) AS m FROM movies`,
+    ).first<any>();
+    await c.env.DB.prepare(`UPDATE movies SET sort_order = ? WHERE id = ?`)
+      .bind((m?.m ?? 0) - 1, row.id).run();
+    return c.json({ id: row.id, moved: true });
+  }
+  if (body.move === "up" || body.move === "down") {
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, COALESCE(sort_order, 999999) AS so FROM movies
+       ORDER BY COALESCE(sort_order, 999999), created_at`,
+    ).all<any>();
+    const list = results ?? [];
+    const i = list.findIndex((x: any) => x.id === row.id);
+    const j = body.move === "up" ? i - 1 : i + 1;
+    if (i >= 0 && j >= 0 && j < list.length) {
+      await c.env.DB.prepare(`UPDATE movies SET sort_order = ? WHERE id = ?`)
+        .bind(list[j].so, list[i].id).run();
+      await c.env.DB.prepare(`UPDATE movies SET sort_order = ? WHERE id = ?`)
+        .bind(list[i].so, list[j].id).run();
+    }
+    return c.json({ id: row.id, moved: true });
+  }
+
+  const names = normalizeCategories(body);
   const sets: string[] = [];
   const binds: any[] = [];
-  const col = (name: string, colName: string, val: any, json = false) => {
-    if (val === undefined) return;
+  /* Only touch columns the caller actually sent. A PATCH body with just
+     {title} used to null out description/poster/video/order because the old
+     helper read `body.x ?? null` for keys that were never present — checking
+     `key in body` keeps a partial update genuinely partial. */
+  const scalar = (key: string, colName: string) => {
+    if (!(key in body)) return;
     sets.push(`${colName} = ?`);
-    binds.push(json ? JSON.stringify(val) : val === null ? null : val);
+    binds.push(body[key] ?? null);
   };
-  col(body.title, "title", body.title);
-  col(body.description, "description", body.description ?? null);
-  col(body.posterUrl, "poster_url", body.posterUrl ?? null);
-  col(body.backdropUrl, "backdrop_url", body.backdropUrl ?? null);
-  col(body.videoUrl, "video_url", body.videoUrl ?? null);
-  col(body.genre, "genre", body.genre ?? null);
-  col(body.year, "year", body.year ?? null);
-  col(body.rating, "rating", body.rating ?? null);
-  col(body.kind, "kind", body.kind ?? null);
-  col(body.order, "sort_order", body.order ?? null);
-  col(body.qualities, "qualities", toJson(body.qualities), false);
-  col(body.subtitles, "subtitles", toJson(body.subtitles), false);
-  col(body.episodes, "episodes", toJson(body.episodes), false);
-  col(body.dubs, "dubs", toJson(body.dubs), false);
-  col(body.seasons, "seasons", toJson(body.seasons), false);
+  const jsonCol = (key: string, colName: string) => {
+    if (!(key in body)) return;
+    sets.push(`${colName} = ?`);
+    binds.push(toJson(body[key]));
+  };
+  scalar("title", "title");
+  scalar("description", "description");
+  scalar("posterUrl", "poster_url");
+  scalar("backdropUrl", "backdrop_url");
+  scalar("videoUrl", "video_url");
+  scalar("genre", "genre");
+  scalar("year", "year");
+  scalar("rating", "rating");
+  scalar("kind", "kind");
+  scalar("order", "sort_order");
+  scalar("tmdbId", "tmdb_id");
+  scalar("imdbId", "imdb_id");
+  scalar("embedUrl", "embed_url");
+  scalar("defaultServer", "default_server");
+  jsonCol("qualities", "qualities");
+  jsonCol("subtitles", "subtitles");
+  jsonCol("episodes", "episodes");
+  jsonCol("dubs", "dubs");
+  jsonCol("seasons", "seasons");
+  jsonCol("disabledServers", "disabled_servers");
+  jsonCol("downloads", "downloads");
+  if ("hidden" in body) {
+    sets.push("hidden = ?");
+    binds.push(body.hidden ? 1 : 0);
+  }
   if (names.length > 0 || body.categories !== undefined || body.category !== undefined) {
     sets.push(`category = ?`, `categories = ?`);
     binds.push(names[0] ?? null, names.length ? JSON.stringify(names) : null);
@@ -511,6 +571,96 @@ app.post("/movies/remove-category", async (c) => {
     changed++;
   }
   return c.json({ changed });
+});
+
+/* ------------------------------------------------------------------ */
+/* admin movie inspector: full read + live link probe                 */
+/* ------------------------------------------------------------------ */
+
+/** Everything the inspector shows for one title: the full doc, engagement
+ *  roll-ups, recent dub jobs, and which embed servers its current ids unlock. */
+app.get("/movies/:mid/inspect", async (c) => {
+  await requireAdmin(c);
+  const row = await getMovieRow(c.env.DB, c.req.param("mid"));
+  if (!row) throw new HttpError(404, "Movie not found");
+  const m = movieOut(row);
+  const db = c.env.DB;
+  const count = (sql: string) => db.prepare(sql).bind(row.id).first<any>();
+  const [comments, watchlist, screenings, views, dubs] = await Promise.all([
+    count(`SELECT COUNT(*) AS n FROM comments WHERE movie_id = ?`),
+    count(`SELECT COUNT(*) AS n FROM watchlist WHERE movie_id = ?`),
+    count(`SELECT COUNT(*) AS n FROM screenings WHERE movie_id = ?`),
+    count(`SELECT COUNT(*) AS n, MAX(created_at) AS last FROM page_views WHERE movie_id = ?`),
+    db.prepare(
+      `SELECT id, target_lang, status, created_at FROM dub_jobs WHERE movie_id = ?
+       ORDER BY created_at DESC LIMIT 10`,
+    ).bind(row.id).all(),
+  ]);
+  return c.json({
+    movie: m,
+    engagement: {
+      comments: comments?.n ?? 0,
+      watchlist: watchlist?.n ?? 0,
+      screenings: screenings?.n ?? 0,
+      views: views?.n ?? 0,
+      lastViewed: views?.last ?? null,
+    },
+    dubJobs: (dubs.results ?? []).map((r: any) => ({
+      id: r.id, lang: r.target_lang, status: r.status, createdAt: r.created_at,
+    })),
+    /* Which player servers this title can currently reach, derived from the
+       stored ids so the inspector's availability matrix matches the player. */
+    servers: {
+      vidsrc: !!(m.imdbId || m.tmdbId),
+      vidbox: !!(m.tmdbId || m.embedUrl),
+      vidapi: !!m.tmdbId,
+      anime: !!m.tmdbId,
+      drama: !!m.tmdbId,
+      original: !!m.videoUrl,
+    },
+  });
+});
+
+/** Probe every URL this title references (media + downloads + embeds) and
+ *  mirror the outcome into link_health so the global panel sees it too. */
+app.post("/movies/:mid/health", async (c) => {
+  await requireAdmin(c);
+  const row = await getMovieRow(c.env.DB, c.req.param("mid"));
+  if (!row) throw new HttpError(404, "Movie not found");
+  const m = movieOut(row);
+  const urls: { label: string; url: string }[] = [];
+  const push = (label: string, url?: string | null) => {
+    if (url && /^https?:\/\//i.test(url)) urls.push({ label, url });
+  };
+  push("Poster", m.posterUrl);
+  push("Backdrop", m.backdropUrl);
+  push("Primary video", m.videoUrl);
+  push("Embed page", m.embedUrl);
+  for (const q of m.qualities ?? []) push(`Quality ${q?.label ?? ""}`, q?.videoUrl);
+  for (const d of m.dubs ?? []) push(`Dub ${d?.label ?? ""}`, d?.videoUrl);
+  for (const ep of m.episodes ?? []) push(`Episode ${ep?.title ?? ""}`, ep?.videoUrl);
+  for (const dl of m.downloads ?? []) push(`Download ${dl?.label ?? ""}`, dl?.url);
+
+  const results = await Promise.all(urls.map(async ({ label, url }) => {
+    const probe = await probeUrl(url);
+    await c.env.DB.prepare(
+      `INSERT INTO link_health (url, status, http_status, error, checked_at, targets)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(url) DO UPDATE SET status = excluded.status,
+         http_status = excluded.http_status, error = excluded.error,
+         checked_at = excluded.checked_at, targets = excluded.targets`,
+    ).bind(url, probe.status, probe.httpStatus ?? null, probe.error ?? null,
+      Date.now(), JSON.stringify([{ kind: "movie", name: label, movieId: row.id }])).run();
+    return { label, url, ok: probe.status === "ok", status: probe.httpStatus ?? null, error: probe.error ?? null };
+  }));
+
+  return c.json({
+    movieId: row.id,
+    checked: results.length,
+    failed: results.filter((r) => !r.ok).length,
+    checkedAt: Date.now(),
+    results,
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -905,12 +1055,28 @@ app.get("/analytics/summary", async (c) => {
     });
   }
 
+  const orders = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS total,
+            COALESCE(SUM(amount_cents), 0) AS revenue_cents,
+            COALESCE(SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END), 0) AS paid
+       FROM orders`,
+  ).first<{ total: number; revenue_cents: number; paid: number }>();
+  const newCustomers = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM users WHERE created_at >= ?`,
+  ).bind(last30Start).first<{ n: number }>();
+
   return c.json({
     total: views.length,
     today: views.filter((v: any) => v.created_at >= todayStart).length,
     last7: views.filter((v: any) => v.created_at >= last7Start).length,
     last30: views.filter((v: any) => v.created_at >= last30Start).length,
     visitors7: signedIn7.size + anon7,
+    business: {
+      totalOrders: orders?.total ?? 0,
+      totalRevenue: (orders?.revenue_cents ?? 0) / 100,
+      sales: orders?.paid ?? 0,
+      newCustomers: newCustomers?.n ?? 0,
+    },
     topPaths: [...byPath.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
       .map(([path, count]) => ({ path, count })),
     topMovies,
@@ -973,16 +1139,23 @@ app.post("/shortlinks/migrate", async (c) => {
 
 app.get("/link-health/summary", async (c) => {
   const user = await userForToken(c.env.DB, c.req.header("Authorization"));
-  if (!user || user.role !== "admin") return c.json({ failures: [], lastCheckedAt: null });
+  if (!user || user.role !== "admin") {
+    return c.json({ failures: [], ignoredFailures: [], trackedCount: 0, lastCheckedAt: null });
+  }
   const { results } = await c.env.DB.prepare(
     `SELECT * FROM link_health WHERE status = 'fail' ORDER BY url`,
   ).all();
+  const tracked = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM link_health`).first<any>();
   const last = await c.env.DB.prepare(`SELECT MAX(checked_at) AS t FROM link_health`).first<any>();
   return c.json({
     failures: (results ?? []).map((r: any) => ({
       url: r.url, httpStatus: r.http_status, error: r.error, checkedAt: r.checked_at,
       targets: JSON.parse(r.targets),
     })),
+    /* Ignoring a report needs an `ignored` column that this table never grew,
+       so the list is always empty — the panel reads the key unconditionally. */
+    ignoredFailures: [],
+    trackedCount: tracked?.n ?? 0,
     lastCheckedAt: last?.t ?? null,
   });
 });

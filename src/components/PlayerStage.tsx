@@ -1,6 +1,7 @@
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
 import { animeEmbedUrl, dramaEmbedUrl } from "@/lib/autoembed";
+import { vidboxEmbedUrl, vidapiEmbedUrl } from "@/lib/vaplayer";
 import {
   isEmbedUrl,
   resolveEmbedStream,
@@ -69,6 +70,9 @@ export default function PlayerStage({
   kind,
   season,
   episode,
+  disabledServers,
+  defaultServer,
+  providerEmbedUrl,
 }: {
   movieId: string;
   videoUrl: string;
@@ -82,6 +86,12 @@ export default function PlayerStage({
   /** Season/episode for series embeds (defaults to 1/1). */
   season?: number;
   episode?: number;
+  /** Server keys an admin turned off for this title — hidden from the menu. */
+  disabledServers?: string[];
+  /** Server key the admin chose to open on; falls back to the auto heuristic. */
+  defaultServer?: string;
+  /** Explicit provider embed page an admin stored (feeds the vidbox server). */
+  providerEmbedUrl?: string | null;
 }) {
   const {
     movie,
@@ -145,21 +155,62 @@ export default function PlayerStage({
   /* -------- Playback server: stored file vs VidSrc "Server 1" -------- */
   const vidsrcUrl = vidsrcEmbedUrl({ imdbId, tmdbId, kind, season, episode });
   /* A stored URL that is actually a provider player page (vidapi.ru,
-     vidbox.wtf, …) — it goes through the embed resolver, never to <video>. */
-  const embedSource = isEmbedUrl(videoUrl) ? videoUrl : "";
+     vidbox.wtf, …) — it goes through the embed resolver, never to <video>.
+     An admin can also pin an explicit provider page (embed_url). */
+  const embedSource = providerEmbedUrl || (isEmbedUrl(videoUrl) ? videoUrl : "");
   const hasNativeSource =
     (Boolean(videoUrl) && !embedSource) || dubs.length > 0 || qualities.length > 0;
+
+  /* The two ad-free provider chains, each its own selectable server:
+     vidbox  → vidlink.pro (server-side resolvable; an admin-pinned embedSource
+               is a vidlink.pro page, so it belongs to the vidbox server).
+     vidapi  → vidapi.ru (Turnstile chain → iframe fallback); needs a TMDB id. */
+  const vidboxTarget =
+    embedSource || vidboxEmbedUrl({ tmdbId, imdbId, kind, season, episode });
+  const vidapiTarget = vidapiEmbedUrl({ tmdbId, imdbId, kind, season, episode });
+
+  /* Numbered server list — 1, 2, 3… in menu order. `off()` drops any server the
+     admin disabled for this title; each server still keys off the ids it
+     actually needs so a disabled-but-unbuildable server never shows a dead tab. */
+  const off = (k: string) => Array.isArray(disabledServers) && disabledServers.includes(k);
+  const servers: { key: string; label: string; sub?: string }[] = [];
+  let serverNo = 0;
+  if (vidsrcUrl && !off("vidsrc"))
+    servers.push({ key: "vidsrc", label: `Server ${++serverNo}`, sub: "VidSrc · vidsrc.to" });
+  if (vidboxTarget && !off("vidbox"))
+    servers.push({ key: "vidbox", label: `Server ${++serverNo}`, sub: "vidbox · ad-free" });
+  if (vidapiTarget && !off("vidapi"))
+    servers.push({ key: "vidapi", label: `Server ${++serverNo}`, sub: "vidapi · ad-free" });
+  /* Anime/Drama episode servers key off the TMDB id — only offer them when
+     the current title actually has one. */
+  if (tmdbId && !off("anime"))
+    servers.push({ key: "anime", label: `Server ${++serverNo}`, sub: "Anime · VidNest" });
+  if (tmdbId && !off("drama"))
+    servers.push({ key: "drama", label: `Server ${++serverNo}`, sub: "Drama · Videasy" });
+  if (hasNativeSource && !off("original"))
+    servers.push({
+      key: "original",
+      label: `Server ${++serverNo}`,
+      sub: "This site's file",
+    });
+
   /* Default to Server 1 only when there is no stored file to play — so the
      API-backed embed auto-plays for catalog entries without a local source,
-     while existing files keep their native player (quality/dub/subtitles). */
+     while existing files keep their native player (quality/dub/subtitles).
+     An admin-set default wins, but only when that server is actually shown;
+     otherwise fall back to the same heuristic, then to the first live server. */
+  const baseDefault = vidboxTarget ? "vidbox" : vidsrcUrl && !videoUrl ? "vidsrc" : "original";
+  const usableKeys = servers.map((s) => s.key);
+  const wanted =
+    defaultServer && usableKeys.includes(defaultServer) ? defaultServer : baseDefault;
+  const initialServer = usableKeys.includes(wanted) ? wanted : (usableKeys[0] ?? baseDefault);
   const [server, setServer] = useState<
-    "original" | "vidsrc" | "embed" | "anime" | "drama"
-  >(
-    embedSource ? "embed" : vidsrcUrl && !videoUrl ? "vidsrc" : "original",
-  );
+    "original" | "vidsrc" | "vidbox" | "vidapi" | "anime" | "drama"
+  >(initialServer as any);
   const [serverOpen, setServerOpen] = useState(false);
   const usingVidSrc = server === "vidsrc" && Boolean(vidsrcUrl);
-  const usingEmbed = server === "embed";
+  const usingEmbed = server === "vidbox" || server === "vidapi";
+  const currentEmbedTarget = server === "vidapi" ? vidapiTarget : vidboxTarget;
 
   /* -------- Episode servers: 3 = Anime (VidNest), 4 = Drama (Videasy) -------- */
   const [aeEpisode, setAeEpisode] = useState(episode ?? 1);
@@ -172,29 +223,6 @@ export default function PlayerStage({
         : "";
   /* The URL of whichever full-cover iframe server is active ("" = none). */
   const iframeServerUrl = (usingVidSrc ? vidsrcUrl : autoembedUrl) ?? "";
-
-  /* Numbered server list — 1, 2, 3… in menu order. */
-  const servers: { key: string; label: string; sub?: string }[] = [];
-  let serverNo = 0;
-  if (vidsrcUrl)
-    servers.push({ key: "vidsrc", label: `Server ${++serverNo}`, sub: "VidSrc · vidsrc.to" });
-  servers.push({
-    key: "embed",
-    label: `Server ${++serverNo}`,
-    sub: "vidbox/vidapi · ad-free",
-  });
-  /* Anime/Drama episode servers key off the TMDB id — only offer them when
-     the current title actually has one. */
-  if (tmdbId) {
-    servers.push({ key: "anime", label: `Server ${++serverNo}`, sub: "Anime · VidNest" });
-    servers.push({ key: "drama", label: `Server ${++serverNo}`, sub: "Drama · Videasy" });
-  }
-  if (hasNativeSource)
-    servers.push({
-      key: "original",
-      label: `Server ${++serverNo}`,
-      sub: "This site's file",
-    });
 
   /* -------- Embed resolver ("Server 2"): provider page → raw HLS stream ---- */
   const [embedUrl, setEmbedUrl] = useState(embedSource);
@@ -261,23 +289,33 @@ export default function PlayerStage({
     [playEmbedCandidate],
   );
 
-  /* Stored URL is an embed page: resolve it as soon as the stage mounts. */
+  /* An embed server (vidbox/vidapi) is showing: resolve its provider page to a
+     raw stream. Re-runs when the active server's target changes (switching
+     vidbox↔vidapi), clearing the previous server's candidates/stream first. */
   useEffect(() => {
-    if (embedSource) void runEmbedResolve(embedSource);
+    if (!usingEmbed) return;
+    setEmbedUrl(currentEmbedTarget);
+    setEmbedCandidates([]);
+    setEmbedError("");
+    setEmbedIframe(false);
+    setEmbedStream(null);
+    if (currentEmbedTarget) void runEmbedResolve(currentEmbedTarget);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [embedSource]);
+  }, [usingEmbed, currentEmbedTarget]);
 
   const selectServer = (key: string) => {
-    const next: "original" | "vidsrc" | "embed" | "anime" | "drama" =
-      key === "embed"
-        ? "embed"
-        : key === "vidsrc"
-          ? "vidsrc"
-          : key === "anime"
-            ? "anime"
-            : key === "drama"
-              ? "drama"
-              : "original";
+    const next: "original" | "vidsrc" | "vidbox" | "vidapi" | "anime" | "drama" =
+      key === "vidbox"
+        ? "vidbox"
+        : key === "vidapi"
+          ? "vidapi"
+          : key === "vidsrc"
+            ? "vidsrc"
+            : key === "anime"
+              ? "anime"
+              : key === "drama"
+                ? "drama"
+                : "original";
     if (next === "original" && embedStream) {
       setEmbedStream(null);
       start(
@@ -286,10 +324,9 @@ export default function PlayerStage({
       );
     }
     setServer(next);
-    if (next === "embed") {
-      setEmbedPanelOpen(true);
-      if (embedStatus === "idle") void runEmbedResolve(embedUrl || embedSource);
-    }
+    /* Opening the panel is enough for the raw-stream servers; the resolve
+       effect fires when `next` changes the active embed target. */
+    if (next === "vidbox" || next === "vidapi") setEmbedPanelOpen(true);
     bumpControlsActivity();
   };
 
@@ -802,7 +839,7 @@ export default function PlayerStage({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void runEmbedResolve(embedUrl);
                 }}
-                placeholder="https://vidbox.wtf/e/…"
+                placeholder="https://vidlink.pro/movie/… or vidapi.ru/embed/movie/…"
                 className="min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-xs outline-none focus-visible:border-ring"
               />
               <button

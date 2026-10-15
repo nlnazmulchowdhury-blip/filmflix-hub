@@ -88,8 +88,8 @@ export default function AppBuildsPanel() {
         </CardTitle>
         <CardDescription>
           Point each platform at the file you publish (GitHub release, Drive mirror, or an R2
-          object URL). A platform with a URL shows a real Download button and QR on the landing
-          page; one without it falls back to "install as a web app".
+          object URL). A platform with a URL shows a real Download button and QR on the
+          /download page; one without it falls back to "install as a web app".
         </CardDescription>
       </CardHeader>
 

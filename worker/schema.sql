@@ -47,6 +47,15 @@ CREATE TABLE IF NOT EXISTS movies (
   episodes      TEXT,               -- JSON [{id,title,videoUrl,durationSec}]
   dubs          TEXT,               -- JSON [{label, videoUrl}]
   seasons       TEXT,               -- JSON [{id,title,episodes[]}]
+  /* Embed controls. tmdb_id/imdb_id re-enable Servers 1/3/4 for admin-created
+     titles (the player builds those embed URLs from the external ids). */
+  tmdb_id       TEXT,
+  imdb_id       TEXT,
+  embed_url     TEXT,               -- explicit provider/embed page URL
+  disabled_servers TEXT,            -- JSON array of server keys to hide
+  default_server   TEXT,            -- server key to select on open
+  downloads     TEXT,               -- JSON [{label,url,resolution}]
+  hidden        INTEGER NOT NULL DEFAULT 0,  -- 1 = keep out of the public catalog
   sort_order    INTEGER,
   contributor_id TEXT,
   created_at    INTEGER NOT NULL
@@ -101,6 +110,14 @@ CREATE TABLE IF NOT EXISTS tv_channels (
   created_at  INTEGER NOT NULL
 );
 
+/* Chips for the /tv page. Channels keep their own JSON category list, so this
+   table only owns the name — a chip may exist with zero channels on it. */
+CREATE TABLE IF NOT EXISTS tv_categories (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  created_at  INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS page_views (
   id          TEXT PRIMARY KEY,
   path        TEXT NOT NULL,
@@ -144,8 +161,8 @@ CREATE TABLE IF NOT EXISTS shortlinks (
 
 /* One row per operating system the FilmFlix app ships for. `url` is wherever
    the binary actually lives today (GitHub release, Drive, an R2 object once
-   the bucket is enabled) — the landing "Get the app" cards turn into real
-   Download buttons only for platforms that have a row here. */
+   the bucket is enabled) — the /download page turns a card into a real
+   Download button only for platforms that have a row here. */
 CREATE TABLE IF NOT EXISTS app_builds (
   platform   TEXT PRIMARY KEY,      -- 'android' | 'ios' | 'windows' | 'macos' | 'tv'
   url        TEXT NOT NULL,
@@ -154,3 +171,15 @@ CREATE TABLE IF NOT EXISTS app_builds (
   notes      TEXT,
   updated_at INTEGER NOT NULL
 );
+
+/* Help-center chat, one row per message in a visitor↔admin thread. */
+CREATE TABLE IF NOT EXISTS support_messages (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sender        TEXT NOT NULL CHECK (sender IN ('user','admin')),
+  text          TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  seen_by_user  INTEGER NOT NULL DEFAULT 0,
+  seen_by_admin INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_support_user ON support_messages(user_id);

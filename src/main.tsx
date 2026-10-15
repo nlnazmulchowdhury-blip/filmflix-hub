@@ -21,6 +21,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Checkout = lazy(() => import("./pages/Checkout.tsx"));
 const Admin = lazy(() => import("./pages/Admin.tsx"));
 const Tv = lazy(() => import("./pages/Tv.tsx"));
+const Downloads = lazy(() => import("./pages/Downloads.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 // Branded loading fallback for route transitions — mirrors the boot splash.
@@ -192,6 +193,7 @@ createRoot(document.getElementById("root")!).render(
                 }
               />
               <Route path="/tv" element={<Tv />} />
+              <Route path="/download" element={<Downloads />} />
               <Route
                 path="/nazmul"
                 element={

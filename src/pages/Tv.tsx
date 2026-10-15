@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import AdSideRail from "@/components/AdSideRail";
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
@@ -179,10 +178,6 @@ export default function TvPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
-      {/* Banner ads on the far edges (same rails as landing/movie detail). */}
-      <AdSideRail side="left" breakpoint="wide" />
-      <AdSideRail side="right" breakpoint="wide" />
-
       {/* Ambient background */}
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />

@@ -4,7 +4,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
-import GetTheApp from "@/components/GetTheApp";
 import MovieCard from "@/components/MovieCard";
 import VidSrcResultCard, { type VidSrcHit } from "@/components/VidSrcResultCard";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
@@ -17,9 +16,6 @@ import {
   type TmdbItem,
 } from "@/lib/tmdb";
 import ThemeToggle from "@/components/ThemeToggle";
-import AdBanner from "@/components/AdBanner";
-import AdSideRail from "@/components/AdSideRail";
-import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
@@ -319,10 +315,6 @@ export default function Landing() {
         <div className="absolute bottom-[10%] left-[-12%] h-[300px] w-[400px] rounded-full bg-chart-2/10 blur-[120px]" />
       </div>
 
-      {/* Ad slot: wide skyscraper — fixed side rails (auto-fit, never cut). */}
-      <AdSideRail side="left" breakpoint="wide" />
-      <AdSideRail side="right" breakpoint="wide" />
-
       {/* Header */}
       <header className="sticky top-0 z-40 glass-panel border-b">
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-2 px-3 sm:gap-4 sm:px-6">
@@ -343,6 +335,9 @@ export default function Landing() {
             </Link>
             <Link to="/tv" className={navLinkClass}>
               TV
+            </Link>
+            <Link to="/download" className={navLinkClass}>
+              Download
             </Link>
           </nav>
           {/* Mobile: hamburger + slide-in menu (desktop keeps the inline nav). */}
@@ -371,6 +366,7 @@ export default function Landing() {
                     to: isAuthenticated ? "/dashboard" : "/auth?returnTo=%2Fdashboard",
                   },
                   { label: "TV", to: "/tv" },
+                  { label: "Download", to: "/download" },
                   ...(isAuthenticated
                     ? [
                         {
@@ -528,12 +524,6 @@ export default function Landing() {
         </section>
 
         {/* Catalog */}
-        {/* Ad slots: leaderboard (desktop) / mobile banner. */}
-        <div className="mt-8 flex justify-center sm:mt-10">
-          <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
-          <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
-        </div>
-
         {/* Providers band — streaming channels; picking one loads its movies. */}
         <section id="providers" className="scroll-mt-24 pt-10">
           <div className="mb-4 flex items-center justify-between gap-4">
@@ -737,11 +727,6 @@ export default function Landing() {
           )}
         </section>
 
-        {/* Ad slot: medium rectangle. */}
-        <div className="mt-10 flex justify-center">
-          <AdBanner {...AD_BANNERS.square} />
-        </div>
-
         {/* Quick links row */}
         <section className="mt-10 grid gap-4 sm:mt-14 sm:grid-cols-3">
           <Card className="card-lift border-border/60 bg-card/70">
@@ -785,13 +770,6 @@ export default function Landing() {
             </CardContent>
           </Card>
         </section>
-
-        <GetTheApp />
-
-        {/* Ad slot: full banner. */}
-        <div className="mt-10 flex justify-center">
-          <AdBanner {...AD_BANNERS.banner} />
-        </div>
       </main>
 
       {/* Footer */}
