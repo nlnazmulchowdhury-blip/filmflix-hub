@@ -23,6 +23,7 @@ __pycache__/
 *.pyc
 *.log
 .dev.pid
+.wrangler/
 
 # Bun lockfile — Pages must install with npm (package-lock.json).
 # A tracked bun.lock makes the Pages build image choose Bun and the
