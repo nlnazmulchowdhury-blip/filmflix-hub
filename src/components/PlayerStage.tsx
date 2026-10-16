@@ -436,13 +436,17 @@ export default function PlayerStage({
      never disturbed — it already plays here. */
   useEffect(() => {
     if (usingEmbed || hasNativeSource) return;
+    /* Anime/drama are deliberately outside the race — their pages answer 200
+       for any TMDB id, so a probe cannot judge them and they would hijack the
+       winner onto a wrong show. Only VidSrc asks here. */
+    if (server !== "vidsrc") return;
     if (racedFor.current === raceKey) return;
     const chains = adFreeChains();
     if (!chains.length) return;
     racedFor.current = raceKey;
     void raceServers(server, chains, chains);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usingEmbed, hasNativeSource, raceKey]);
+  }, [usingEmbed, hasNativeSource, raceKey, server]);
 
   const selectServer = (key: string) => {
     const next:
@@ -934,7 +938,8 @@ export default function PlayerStage({
               {embedStatus === "resolving" ? (
                 <span className="flex items-center gap-1.5">
                   <Loader2 className="size-3.5 animate-spin" />
-                  Checking all servers…
+                  <span className="hidden sm:inline">Checking all servers…</span>
+                  <span className="sm:hidden">Checking…</span>
                 </span>
               ) : (
                 "Ad-free stream"
