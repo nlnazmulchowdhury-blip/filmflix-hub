@@ -67,6 +67,15 @@ export default function Landing() {
   const movies = useQuery(api.movies.list);
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
+  /* Typing must not search: every keystroke used to fire another catalog
+     lookup. The grid only follows the term the user submitted with Enter or
+     the Search button. */
+  const [searched, setSearched] = useState("");
+  const runSearch = () => setSearched(query.trim());
+  const clearSearch = () => {
+    setQuery("");
+    setSearched("");
+  };
 
   /* A catalog fetch that errors never resolves, and convex-react reports that
      the same way as "still loading". After a grace period stop showing
@@ -150,7 +159,7 @@ export default function Landing() {
 
   /** Clicking a channel tile filters the grid to it; clicking again clears. */
   const selectProvider = (p: ProviderInfo) => {
-    setQuery("");
+    clearSearch();
     setSelectedProvider((cur) => {
       const next = cur?.id === p.id ? null : p;
       setTmdbItems([]);
@@ -161,14 +170,14 @@ export default function Landing() {
 
   /** Clicking a category chip filters the grid to that genre; again clears. */
   const selectGenre = (cat: CategoryInfo) => {
-    setQuery("");
+    clearSearch();
     setTmdbItems([]);
     setTmdbMore(true);
     setGenre((cur) => (cur?.id === cat.id ? null : cat));
   };
 
   const clearGenre = () => {
-    setQuery("");
+    clearSearch();
     setTmdbItems([]);
     setTmdbMore(true);
     setGenre(null);
@@ -229,12 +238,13 @@ export default function Landing() {
   });
 
 
-  const trimmedQuery = query.trim();
-  /* Only surface external hits that match what's in the box right now. */
+  const trimmedQuery = searched;
+  /* Only surface external hits that match the submitted term. */
   const externalHits = external && external.q === trimmedQuery ? external.hits : null;
 
-  /* Debounced: resolve the typed title against IMDb (server-side, keyless)
-     so results that aren't in the catalog still play via Server 1. */
+  /* Resolve the submitted title against IMDb (server-side, keyless) so titles
+     outside the catalog still show up and play via Server 1. Runs on submit
+     only — never while the box is still being typed in. */
   useEffect(() => {
     if (trimmedQuery.length < 2) {
       setExternal(null);
@@ -242,23 +252,19 @@ export default function Landing() {
       return;
     }
     let cancelled = false;
-    const t = setTimeout(() => {
-      if (cancelled) return;
-      setExternalLoading(true);
-      searchExternal({ q: trimmedQuery })
-        .then((hits) => {
-          if (!cancelled) setExternal({ q: trimmedQuery, hits });
-        })
-        .catch(() => {
-          if (!cancelled) setExternal({ q: trimmedQuery, hits: [] });
-        })
-        .finally(() => {
-          if (!cancelled) setExternalLoading(false);
-        });
-    }, 600);
+    setExternalLoading(true);
+    searchExternal({ q: trimmedQuery })
+      .then((hits) => {
+        if (!cancelled) setExternal({ q: trimmedQuery, hits });
+      })
+      .catch(() => {
+        if (!cancelled) setExternal({ q: trimmedQuery, hits: [] });
+      })
+      .finally(() => {
+        if (!cancelled) setExternalLoading(false);
+      });
     return () => {
       cancelled = true;
-      clearTimeout(t);
     };
   }, [trimmedQuery, searchExternal]);
 
@@ -274,11 +280,11 @@ export default function Landing() {
     });
   };
 
-  /** Local catalog rows matching the typed query (title, description, …). */
+  /** Local catalog rows matching the submitted query (title, description, …). */
   const filtered = useMemo(() => {
     if (!movies) return null;
     let rows = movies;
-    const raw = query.trim();
+    const raw = trimmedQuery;
     if (raw) {
       const tokens = normalizeText(raw).split(" ").filter(Boolean);
       if (tokens.length > 0) {
@@ -301,7 +307,7 @@ export default function Landing() {
       }
     }
     return rows;
-  }, [movies, query]);
+  }, [movies, trimmedQuery]);
 
   const localResults = filtered ?? [];
   /* While searching, external VidSrc hits are merged into the same grid as
@@ -474,11 +480,15 @@ export default function Landing() {
       <main className="mx-auto w-full max-w-7xl px-4 pb-24 sm:px-6">
         {/* Search */}
         <section className="pt-6 sm:pt-14">
-          <motion.div
+          <motion.form
             initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, ease: "easeOut" }}
             className="mx-auto flex w-full max-w-2xl items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              runSearch();
+            }}
           >
             <div className="relative min-w-0 flex-1">
               <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -492,7 +502,7 @@ export default function Landing() {
               {query && (
                 <button
                   type="button"
-                  onClick={() => setQuery("")}
+                  onClick={clearSearch}
                   aria-label="Clear search"
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
                 >
@@ -500,6 +510,17 @@ export default function Landing() {
                 </button>
               )}
             </div>
+            {/* Results only move on submit (Enter or this button), so typing a
+                title no longer fires a lookup per word. */}
+            <Button
+              type="submit"
+              size="lg"
+              className="glow-accent h-11 shrink-0 rounded-xl px-4"
+              aria-label="Search"
+            >
+              <Search className="size-4" />
+              <span className="hidden sm:inline">Search</span>
+            </Button>
             {/* The dice button in the header covers phones, so this big
                 companion only shows from sm up. */}
             <Button
@@ -510,7 +531,7 @@ export default function Landing() {
             >
               <Dices className="size-4" />
             </Button>
-          </motion.div>
+          </motion.form>
         </section>
 
         {/* Top banner: leaderboard on desktop, 320×50 on phones. */}
