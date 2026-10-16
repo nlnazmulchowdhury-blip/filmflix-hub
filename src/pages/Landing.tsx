@@ -62,6 +62,9 @@ function searchableText(m: {
   );
 }
 
+/** Chips shown on phones before "More categories" — keeps the row to two lines. */
+const MOBILE_CATEGORY_CHIPS = 4;
+
 /** A typeahead row: a title (or category) plus the small label beside it. */
 type Suggestion = { title: string; note?: string };
 
@@ -137,6 +140,9 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
      behind it; picking one reloads the browse grid filtered to that genre. */
   const [embedCategories, setEmbedCategories] = useState<CategoryInfo[]>([]);
   const [genre, setGenre] = useState<CategoryInfo | null>(null);
+  /* Phones show a handful of chips plus "More categories"; the row used to be
+     a horizontal scroller, which read as a chip sliced in half at the edge. */
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
 
   /* -------- External VidSrc search (titles beyond the local catalog) ---- */
   const searchExternal = useAction(api.vidsrc.search);
@@ -719,7 +725,7 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
 
         {/* Category sections — chips come from the embed catalog's genres. */}
         <section className="mt-6 sm:mt-8">
-          <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0">
+          <div className="flex flex-wrap items-center gap-2 pb-1 sm:justify-center">
             <button
               type="button"
               onClick={() => clearGenre()}
@@ -731,12 +737,21 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
             >
               All categories
             </button>
-            {embedCategories.map((cat) => (
+            {embedCategories.map((cat, i) => (
               <button
                 key={cat.id}
                 type="button"
                 onClick={() => selectGenre(cat)}
                 className={`shrink-0 rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
+                  /* Beyond the first few, chips stay hidden on phones until
+                     "More categories" — except the active one, which must never
+                     disappear while it is filtering the grid. */
+                  i >= MOBILE_CATEGORY_CHIPS &&
+                  !categoriesOpen &&
+                  genre?.id !== cat.id
+                    ? "hidden sm:inline-flex"
+                    : ""
+                } ${
                   genre?.id === cat.id
                     ? "border-primary bg-primary text-primary-foreground"
                     : "border-border/70 bg-card/60 text-muted-foreground hover:border-foreground/30 hover:text-foreground"
@@ -745,6 +760,15 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
                 {cat.name}
               </button>
             ))}
+            {embedCategories.length > MOBILE_CATEGORY_CHIPS && (
+              <button
+                type="button"
+                onClick={() => setCategoriesOpen((v) => !v)}
+                className="shrink-0 rounded-full border border-primary/50 bg-primary/10 px-4 py-1.5 text-sm font-semibold text-primary sm:hidden"
+              >
+                {categoriesOpen ? "Show less" : "More categories"}
+              </button>
+            )}
           </div>
         </section>
 
