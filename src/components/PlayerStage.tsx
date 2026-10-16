@@ -1,9 +1,10 @@
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
 import { animeEmbedUrl, dramaEmbedUrl } from "@/lib/autoembed";
-import { vidboxEmbedUrl, vidapiEmbedUrl } from "@/lib/vaplayer";
+import { vidboxEmbedUrl, vidapiEmbedUrl, nxshaEmbedUrl } from "@/lib/vaplayer";
 import {
   isEmbedUrl,
+  probeEmbedPage,
   resolveEmbedStream,
   fetchEmbedQualities,
   fetchTitleDownloads,
@@ -164,10 +165,13 @@ export default function PlayerStage({
   /* The two ad-free provider chains, each its own selectable server:
      vidbox  → vidlink.pro (server-side resolvable; an admin-pinned embedSource
                is a vidlink.pro page, so it belongs to the vidbox server).
-     vidapi  → vidapi.ru (Turnstile chain → iframe fallback); needs a TMDB id. */
+     vidapi  → vidapi.ru (Turnstile chain → iframe fallback); needs a TMDB id.
+     nxsha   → web.nxsha.app: a multi-source player that switches upstream hosts
+               by itself. Iframe-only (its stream is fetched by client JS). */
   const vidboxTarget =
     embedSource || vidboxEmbedUrl({ tmdbId, imdbId, kind, season, episode });
   const vidapiTarget = vidapiEmbedUrl({ tmdbId, imdbId, kind, season, episode });
+  const nxshaTarget = nxshaEmbedUrl({ tmdbId, imdbId, kind, season, episode });
 
   /* Numbered server list — 1, 2, 3… in menu order. `off()` drops any server the
      admin disabled for this title; each server still keys off the ids it
@@ -187,6 +191,12 @@ export default function PlayerStage({
     servers.push({ key: "vidbox", label: `Server ${++serverNo}`, sub: "vidbox · ad-free" });
   if (vidapiTarget && !off("vidapi"))
     servers.push({ key: "vidapi", label: `Server ${++serverNo}`, sub: "vidapi · ad-free" });
+  if (nxshaTarget && !off("nxsha"))
+    servers.push({
+      key: "nxsha",
+      label: `Server ${++serverNo}`,
+      sub: "nxsha · multi-source",
+    });
   if (vidsrcUrl && !off("vidsrc"))
     servers.push({ key: "vidsrc", label: `Server ${++serverNo}`, sub: "VidSrc · has ads" });
   /* Anime/Drama episode servers key off the TMDB id — only offer them when
@@ -205,20 +215,32 @@ export default function PlayerStage({
     ? "original"
     : vidboxTarget
       ? "vidbox"
-      : vidsrcUrl && !videoUrl
-        ? "vidsrc"
-        : "original";
+      : vidapiTarget
+        ? "vidapi"
+        : nxshaTarget
+          ? "nxsha"
+          : vidsrcUrl && !videoUrl
+            ? "vidsrc"
+            : "original";
   const usableKeys = servers.map((s) => s.key);
   const wanted =
     defaultServer && usableKeys.includes(defaultServer) ? defaultServer : baseDefault;
   const initialServer = usableKeys.includes(wanted) ? wanted : (usableKeys[0] ?? baseDefault);
   const [server, setServer] = useState<
-    "original" | "vidsrc" | "vidbox" | "vidapi" | "anime" | "drama"
+    "original" | "vidsrc" | "vidbox" | "vidapi" | "nxsha" | "anime" | "drama"
   >(initialServer as any);
   const [serverOpen, setServerOpen] = useState(false);
   const usingVidSrc = server === "vidsrc" && Boolean(vidsrcUrl);
-  const usingEmbed = server === "vidbox" || server === "vidapi";
-  const currentEmbedTarget = server === "vidapi" ? vidapiTarget : vidboxTarget;
+  /* The provider-page servers: each shows that provider's own iframe, and each
+     gets a server-side ad-free resolve attempt before it. */
+  const usingEmbed =
+    server === "vidbox" || server === "vidapi" || server === "nxsha";
+  const currentEmbedTarget =
+    server === "vidapi"
+      ? vidapiTarget
+      : server === "nxsha"
+        ? nxshaTarget
+        : vidboxTarget;
 
   /* -------- Episode servers: 3 = Anime (VidNest), 4 = Drama (Videasy) -------- */
   const [aeEpisode, setAeEpisode] = useState(episode ?? 1);
@@ -241,12 +263,18 @@ export default function PlayerStage({
   const [embedError, setEmbedError] = useState("");
   const [embedStream, setEmbedStream] = useState<string | null>(null);
   const [embedPanelOpen, setEmbedPanelOpen] = useState(false);
+  /* Provider page health for the active server: null = still probing. */
+  const [embedLive, setEmbedLive] = useState<boolean | null>(null);
+  /* Servers already found dead, so the walk never loops back onto one. */
+  const deadEmbeds = useRef<Set<string>>(new Set());
 
   /* The provider iframe is visible for as long as an embed server is selected
      and no ad-free stream has been resolved — including while the resolver is
      still running. Our own player has nothing to play in that window, and a
-     black stage with a dead play button reads as a broken site. */
-  const embedIframe = usingEmbed && !embedStream;
+     black stage with a dead play button reads as a broken site. A page the
+     provider itself 500s stays hidden: its error wall is not a player. */
+  const embedIframe = usingEmbed && !embedStream && embedLive !== false;
+  const embedDead = usingEmbed && !embedStream && embedLive === false;
 
   /* -------- Download menu: this site's files + the resolved stream's
       resolutions (asked from the Worker when the menu opens). -------- */
@@ -282,7 +310,10 @@ export default function PlayerStage({
       setEmbedStatus("resolving");
       setEmbedError("");
       let lastError = "";
-      const chain = [target, ...[vidboxTarget, vidapiTarget].filter((u) => u && u !== target)];
+      const chain = [
+        target,
+        ...[vidboxTarget, vidapiTarget, nxshaTarget].filter((u) => u && u !== target),
+      ];
       for (const candidate of chain) {
         try {
           const r = await resolveEmbedStream(candidate);
@@ -305,7 +336,7 @@ export default function PlayerStage({
         `${lastError} No ad-free chain worked, so the provider player is shown instead.`,
       );
     },
-    [playEmbedCandidate, vidboxTarget, vidapiTarget],
+    [playEmbedCandidate, vidboxTarget, vidapiTarget, nxshaTarget],
   );
 
   /* An embed server (vidbox/vidapi) is showing: resolve its provider page to a
@@ -317,23 +348,58 @@ export default function PlayerStage({
     setEmbedCandidates([]);
     setEmbedError("");
     setEmbedStream(null);
-    if (currentEmbedTarget) void runEmbedResolve(currentEmbedTarget);
+    setEmbedLive(null);
+    if (!currentEmbedTarget) {
+      setEmbedLive(false);
+      return;
+    }
+    void runEmbedResolve(currentEmbedTarget);
+    /* Alongside the resolve: when the provider has no page for this title at
+       all, its iframe is an error wall, so walk on to the next server that
+       actually answers instead of painting it for the user. An unreachable
+       probe is not an answer — keep the server in that case. */
+    void probeEmbedPage(currentEmbedTarget).then((live) => {
+      if (live !== false) {
+        setEmbedLive(true);
+        return;
+      }
+      setEmbedLive(false);
+      deadEmbeds.current.add(server);
+      const next = servers
+        .map((s) => s.key)
+        .find(
+          (k) =>
+            k !== server &&
+            k !== "original" &&
+            !deadEmbeds.current.has(k),
+        );
+      if (next) setServer(next as typeof server);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usingEmbed, currentEmbedTarget]);
 
   const selectServer = (key: string) => {
-    const next: "original" | "vidsrc" | "vidbox" | "vidapi" | "anime" | "drama" =
+    const next:
+      | "original"
+      | "vidsrc"
+      | "vidbox"
+      | "vidapi"
+      | "nxsha"
+      | "anime"
+      | "drama" =
       key === "vidbox"
         ? "vidbox"
         : key === "vidapi"
           ? "vidapi"
-          : key === "vidsrc"
-            ? "vidsrc"
-            : key === "anime"
-              ? "anime"
-              : key === "drama"
-                ? "drama"
-                : "original";
+          : key === "nxsha"
+            ? "nxsha"
+            : key === "vidsrc"
+              ? "vidsrc"
+              : key === "anime"
+                ? "anime"
+                : key === "drama"
+                  ? "drama"
+                  : "original";
     if (next === "original" && embedStream) {
       setEmbedStream(null);
       start(
@@ -831,6 +897,43 @@ export default function PlayerStage({
               >
                 {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Every embed server on this title answered with an error page: say so
+          plainly rather than framing the provider's stack trace as a player. */}
+      {embedDead && (
+        <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black px-4">
+          <div className="w-full max-w-sm rounded-2xl border border-border/60 bg-card/95 p-5 text-center">
+            <p className="font-display text-base font-semibold">
+              No working server for this title
+            </p>
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              Every provider we tried has no player for this id right now. Pick
+              another server, or open the provider directly.
+            </p>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <ServerSwitcher
+                servers={servers}
+                activeKey={server}
+                onSelect={selectServer}
+                open={serverOpen}
+                setOpen={setServerOpen}
+                align="left"
+                drop="up"
+              />
+              {(embedUrl || embedSource) && (
+                <a
+                  href={(embedUrl || embedSource) as string}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-lg border border-border/60 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
+                >
+                  Open provider ↗
+                </a>
+              )}
             </div>
           </div>
         </div>

@@ -20,11 +20,12 @@ import { api } from "@/lib/api";
  * fully controllable and fully visible from the admin panel.
  */
 
-type ServerKey = "vidsrc" | "vidbox" | "vidapi" | "anime" | "drama" | "original";
+type ServerKey = "vidsrc" | "vidbox" | "vidapi" | "nxsha" | "anime" | "drama" | "original";
 const SERVER_META: { key: ServerKey; name: string; provider: string; needs: string }[] = [
   { key: "vidsrc", name: "VidSrc", provider: "vidsrc.to", needs: "IMDb or TMDB id" },
   { key: "vidbox", name: "vidbox", provider: "vidlink.pro · ad-free resolve", needs: "TMDB id or embed URL" },
   { key: "vidapi", name: "vidapi", provider: "vidapi.ru · iframe fallback", needs: "TMDB id" },
+  { key: "nxsha", name: "nxsha", provider: "web.nxsha.app · multi-source", needs: "TMDB id" },
   { key: "anime", name: "Anime · VidNest", provider: "vidnest.fun", needs: "TMDB id" },
   { key: "drama", name: "Drama · Videasy", provider: "player.videasy.to", needs: "TMDB id" },
   { key: "original", name: "This site's file", provider: "native <video>", needs: "stored video URL" },

@@ -614,6 +614,7 @@ app.get("/movies/:mid/inspect", async (c) => {
       vidsrc: !!(m.imdbId || m.tmdbId),
       vidbox: !!(m.tmdbId || m.embedUrl),
       vidapi: !!m.tmdbId,
+      nxsha: !!m.tmdbId,
       anime: !!m.tmdbId,
       drama: !!m.tmdbId,
       original: !!m.videoUrl,

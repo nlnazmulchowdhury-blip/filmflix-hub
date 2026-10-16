@@ -18,6 +18,7 @@
 
 const VIDBOX_BASE = "https://vidlink.pro";
 const VIDAPI_BASE = "https://vidapi.ru";
+const NXSHA_BASE = "https://web.nxsha.app";
 
 export interface EmbedTarget {
   id?: string | null;
@@ -36,8 +37,15 @@ function providerUrl(base: string, { id, tmdbId, imdbId, kind, season = 1, episo
     : `${base}/movie/${target}`;
 }
 
-/** vidbox server — resolvable vidlink.pro chain. */
+/** vidbox server — resolvable vidlink.pro chain.
+ *
+ *  vidlink.pro only understands TMDB numeric ids: an IMDb `tt…` id — or a
+ *  number it does not carry — makes its Next.js app answer 500, and that
+ *  "Application error" wall then renders full-size inside our iframe. Never
+ *  build a vidbox URL for those targets; the other servers take over. */
 export function vidboxEmbedUrl(target: EmbedTarget): string {
+  const t = target.id ?? target.tmdbId ?? target.imdbId;
+  if (!t || !/^\d+$/.test(String(t))) return "";
   return providerUrl(VIDBOX_BASE, target);
 }
 
@@ -52,3 +60,18 @@ export function vidapiEmbedUrl(target: EmbedTarget): string {
 
 /** Back-compat alias: catalog cards still carry a vidlink.pro (vidbox) URL. */
 export const vaplayerEmbedUrl = vidboxEmbedUrl;
+
+/** nxsha server — web.nxsha.app, a multi-source player (it picks between
+ *  several upstream hosts itself and embeds without frame blocking).
+ *
+ *  Its movie route only understands TMDB numeric ids (an IMDb `tt…` id 404s),
+ *  while its tv route takes either, so movies follow the same numeric-only
+ *  rule as vidbox. */
+export function nxshaEmbedUrl(target: EmbedTarget): string {
+  const t = target.id ?? target.tmdbId ?? target.imdbId;
+  if (!t) return "";
+  if (target.kind !== "series" && !/^\d+$/.test(String(t))) return "";
+  return target.kind === "series"
+    ? `${NXSHA_BASE}/embed/tv/${t}/${target.season ?? 1}/${target.episode ?? 1}`
+    : `${NXSHA_BASE}/embed/movie/${t}`;
+}

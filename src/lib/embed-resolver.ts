@@ -8,12 +8,13 @@
  * sniffs the requests a real browser makes; the Worker resolves what it can
  * server-side and fails over to the iframe view for token-handshake hosts.
  */
-import { api } from "@/lib/api";
+import { api, API_BASE } from "@/lib/api";
 import { isHlsUrl } from "@/lib/video-url";
 
 /** Hosts that serve a player page (not a stream) — candidates for resolution. */
 const EMBED_HOST_SUFFIXES = [
   "vidlink.pro",
+  "nxsha.app",
   "vidapi.ru",
   "vaplayer.ru",
   "vidbox.wtf",
@@ -65,6 +66,29 @@ export async function resolveEmbedStream(
   return api.get<EmbedResolveResult>(
     `/embed/stream?url=${encodeURIComponent(embedUrl.trim())}`,
   );
+}
+
+/** Is this provider page actually alive?
+ *
+ *  Providers answer their own error pages for ids they do not carry (vidlink.pro
+ *  500s and serves a Next.js "Application error" wall), which then fills our
+ *  iframe. The Worker's provider pipe echoes the upstream status, so one
+ *  status-only request tells us whether this server is worth showing at all.
+ *
+ *  `null` means "unknown": the probe itself never answered (Worker blip, offline
+ *  viewer). Callers must treat that as alive — mistaking a failed probe for a
+ *  dead provider would walk viewers off servers that work fine. */
+export async function probeEmbedPage(embedUrl: string): Promise<boolean | null> {
+  const target = (embedUrl ?? "").trim();
+  if (!target) return false;
+  try {
+    const res = await fetch(`${API_BASE}/embed/proxy?url=${encodeURIComponent(target)}`);
+    /* Never read the body — release the 80KB page we only probed for status. */
+    void res.body?.cancel().catch(() => undefined);
+    return res.ok;
+  } catch {
+    return null;
+  }
 }
 
 export interface EmbedQuality {
