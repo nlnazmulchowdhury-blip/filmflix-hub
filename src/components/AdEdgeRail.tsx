@@ -2,18 +2,22 @@ import { useEffect, useState } from "react";
 import AdBanner from "@/components/AdBanner";
 import { AD_BANNERS } from "@/lib/ad-banners";
 
-/** Tallest stack per rail — keeps the DOM bounded after many Load More clicks. */
-const MAX_UNITS = 30;
-const GAP = 16;
+/** Max units per rail — keeps the DOM bounded after many Load More clicks. */
+const MAX_UNITS = 20;
+/** Empty space left between two ads. Larger than a poster row, so only one
+ *  ad per side is ever on screen and the movies keep the visual focus. */
+const SLOT_GAP = 520;
+/** Clearance below the sticky header before the first ad. */
+const TOP_OFFSET = 120;
 /** Margin that must be free beside the content before a rail is drawn. */
 const MIN_GUTTER = 176;
 
 /**
  * Banner rails that live in the page's outer margins — beside the content
- * column, never over it. The stack is as tall as the scrollable page, so
- * scrolling down (or pressing Load More, which grows the page) keeps bringing
- * fresh ads into view. The unit is picked from the gutter actually available,
- * and nothing renders on screens too narrow to spare one.
+ * column, never over it. Ads are spaced a full screen apart and rendered
+ * slightly faded until hovered, so they read as background furniture rather
+ * than competition for the posters. The stack still spans the whole scroll
+ * height, so Load More keeps filling the margins.
  */
 export default function AdEdgeRail({ side }: { side: "left" | "right" }) {
   const [gutter, setGutter] = useState(0);
@@ -47,25 +51,28 @@ export default function AdEdgeRail({ side }: { side: "left" | "right" }) {
         : null;
   if (!unit) return null;
 
+  const slot = unit.height + SLOT_GAP;
   const count = Math.min(
     MAX_UNITS,
-    Math.max(1, Math.ceil(scrollH / (unit.height + GAP)) + 1),
+    Math.max(1, Math.ceil((scrollH - TOP_OFFSET) / slot)),
   );
 
   return (
     <aside
       aria-hidden
-      className={`absolute top-0 z-30 ${side === "left" ? "left-2" : "right-2"}`}
-      style={{ width: unit.width }}
+      className={`absolute z-30 ${side === "left" ? "left-2" : "right-2"}`}
+      style={{ top: TOP_OFFSET, width: unit.width }}
     >
-      <div className="flex flex-col items-center" style={{ gap: GAP }}>
+      <div className="flex flex-col items-center" style={{ gap: SLOT_GAP }}>
         {Array.from({ length: count }).map((_, i) => (
           <div
             key={i}
-            className="relative overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_16px_48px_-20px_rgba(0,0,0,0.45)]"
+            title="Advertisement"
+            className="relative rounded-xl border border-border/40 bg-card/50 opacity-70 shadow-sm transition-[opacity,filter] duration-300 hover:opacity-100 motion-reduce:transition-none"
+            style={{ width: unit.width, padding: 4 }}
           >
             <AdBanner {...unit} />
-            <span className="absolute -top-2 left-2 rounded-full border border-border/60 bg-background px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-muted-foreground shadow-sm">
+            <span className="absolute -top-2 left-2 rounded-full border border-border/40 bg-background px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
               Ad
             </span>
           </div>
