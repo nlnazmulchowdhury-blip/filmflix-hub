@@ -171,35 +171,43 @@ export default function PlayerStage({
 
   /* Numbered server list — 1, 2, 3… in menu order. `off()` drops any server the
      admin disabled for this title; each server still keys off the ids it
-     actually needs so a disabled-but-unbuildable server never shows a dead tab. */
+     actually needs so a disabled-but-unbuildable server never shows a dead tab.
+     Ad-free sources come first: the provider iframe is the only place the
+     provider's own ads can run, so it should never be the default pick. */
   const off = (k: string) => Array.isArray(disabledServers) && disabledServers.includes(k);
   const servers: { key: string; label: string; sub?: string }[] = [];
   let serverNo = 0;
-  if (vidsrcUrl && !off("vidsrc"))
-    servers.push({ key: "vidsrc", label: `Server ${++serverNo}`, sub: "VidSrc · vidsrc.to" });
-  if (vidboxTarget && !off("vidbox"))
-    servers.push({ key: "vidbox", label: `Server ${++serverNo}`, sub: "vidbox · ad-free" });
-  if (vidapiTarget && !off("vidapi"))
-    servers.push({ key: "vidapi", label: `Server ${++serverNo}`, sub: "vidapi · ad-free" });
-  /* Anime/Drama episode servers key off the TMDB id — only offer them when
-     the current title actually has one. */
-  if (tmdbId && !off("anime"))
-    servers.push({ key: "anime", label: `Server ${++serverNo}`, sub: "Anime · VidNest" });
-  if (tmdbId && !off("drama"))
-    servers.push({ key: "drama", label: `Server ${++serverNo}`, sub: "Drama · Videasy" });
   if (hasNativeSource && !off("original"))
     servers.push({
       key: "original",
       label: `Server ${++serverNo}`,
-      sub: "This site's file",
+      sub: "This site's file · no ads",
     });
+  if (vidboxTarget && !off("vidbox"))
+    servers.push({ key: "vidbox", label: `Server ${++serverNo}`, sub: "vidbox · ad-free" });
+  if (vidapiTarget && !off("vidapi"))
+    servers.push({ key: "vidapi", label: `Server ${++serverNo}`, sub: "vidapi · ad-free" });
+  if (vidsrcUrl && !off("vidsrc"))
+    servers.push({ key: "vidsrc", label: `Server ${++serverNo}`, sub: "VidSrc · has ads" });
+  /* Anime/Drama episode servers key off the TMDB id — only offer them when
+     the current title actually has one. */
+  if (tmdbId && !off("anime"))
+    servers.push({ key: "anime", label: `Server ${++serverNo}`, sub: "Anime · VidNest · has ads" });
+  if (tmdbId && !off("drama"))
+    servers.push({ key: "drama", label: `Server ${++serverNo}`, sub: "Drama · Videasy · has ads" });
 
   /* Default to Server 1 only when there is no stored file to play — so the
      API-backed embed auto-plays for catalog entries without a local source,
      while existing files keep their native player (quality/dub/subtitles).
      An admin-set default wins, but only when that server is actually shown;
      otherwise fall back to the same heuristic, then to the first live server. */
-  const baseDefault = vidboxTarget ? "vidbox" : vidsrcUrl && !videoUrl ? "vidsrc" : "original";
+  const baseDefault = hasNativeSource
+    ? "original"
+    : vidboxTarget
+      ? "vidbox"
+      : vidsrcUrl && !videoUrl
+        ? "vidsrc"
+        : "original";
   const usableKeys = servers.map((s) => s.key);
   const wanted =
     defaultServer && usableKeys.includes(defaultServer) ? defaultServer : baseDefault;
@@ -255,6 +263,9 @@ export default function PlayerStage({
     [start, movieId, title, posterUrl, backdropUrl],
   );
 
+  /* A provider page is only as good as the stream we can pull out of it
+     server-side, so a resolve walks every ad-free chain before the
+     ad-bearing provider iframe is shown. */
   const runEmbedResolve = useCallback(
     async (url: string) => {
       const target = url.trim();
@@ -266,27 +277,32 @@ export default function PlayerStage({
       setEmbedStatus("resolving");
       setEmbedError("");
       setEmbedIframe(false);
-      try {
-        const r = await resolveEmbedStream(target);
-        setEmbedCandidates(r.candidates ?? []);
-        if (r.candidates?.length) {
-          setEmbedStatus("ready");
-          playEmbedCandidate(r.candidates[0]);
-        } else {
-          setEmbedStatus("failed");
-          setEmbedError(
-            r.error ||
-              "No stream found — this provider hides it behind a browser check. Falling back to the provider iframe.",
-          );
-          setEmbedIframe(true);
+      let lastError = "";
+      const chain = [target, ...[vidboxTarget, vidapiTarget].filter((u) => u && u !== target)];
+      for (const candidate of chain) {
+        try {
+          const r = await resolveEmbedStream(candidate);
+          if (r.candidates?.length) {
+            setEmbedCandidates(r.candidates);
+            setEmbedStatus("ready");
+            playEmbedCandidate(r.candidates[0]);
+            return;
+          }
+          lastError = r.error || "No stream found behind this provider.";
+        } catch {
+          lastError = "Resolver request failed.";
         }
-      } catch {
-        setEmbedStatus("failed");
-        setEmbedError("Resolver request failed. Falling back to the provider iframe.");
-        setEmbedIframe(true);
       }
+      /* Every ad-free chain came up empty — the provider iframe is all that is
+         left, and that is where the provider's own ads live. */
+      setEmbedCandidates([]);
+      setEmbedStatus("failed");
+      setEmbedError(
+        `${lastError} No ad-free chain worked, so the provider player is shown instead.`,
+      );
+      setEmbedIframe(true);
     },
-    [playEmbedCandidate],
+    [playEmbedCandidate, vidboxTarget, vidapiTarget],
   );
 
   /* An embed server (vidbox/vidapi) is showing: resolve its provider page to a
