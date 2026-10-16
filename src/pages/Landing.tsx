@@ -311,7 +311,7 @@ export default function Landing() {
     "text-sm font-medium text-muted-foreground transition-colors hover:text-foreground";
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="relative min-h-screen bg-background text-foreground">
       {/* Banner rails in the outer page margins (beside the content column). */}
       <AdEdgeRail side="left" />
       <AdEdgeRail side="right" />
