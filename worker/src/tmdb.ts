@@ -859,17 +859,26 @@ async function tvmazeSeason(
     else grouped.set(s, [e]);
   }
 
-  const seasons: TvSeasonInfo[] = [...grouped.keys()]
+  /* TVMaze labels daily/talk shows' seasons with the YEAR (2014, 2015, …)
+     while our player and every embed provider count seasons 1..n like TMDB
+     does. Expose chronological ordinals here and translate back to the
+     source bucket when a season is requested. */
+  const keys = [...grouped.keys()]
     .filter((s) => s > 0)
-    .sort((a, b) => a - b)
-    .map((s) => ({
-      season: s,
-      name: `Season ${s}`,
-      episodeCount: grouped.get(s)?.length ?? 0,
-      posterUrl: null,
-    }));
+    .sort((a, b) => a - b);
+  if (!keys.length) return null;
 
-  const episodes: TvEpisodeInfo[] = (grouped.get(season) ?? [])
+  const seasons: TvSeasonInfo[] = keys.map((s, i) => ({
+    season: i + 1,
+    name: `Season ${i + 1}`,
+    episodeCount: grouped.get(s)?.length ?? 0,
+    posterUrl: null,
+  }));
+
+  const bucketKey = keys[Math.min(keys.length, Math.max(1, season)) - 1];
+  const ordinal = keys.indexOf(bucketKey) + 1;
+
+  const episodes: TvEpisodeInfo[] = (grouped.get(bucketKey) ?? [])
     .slice()
     .sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0))
     .map((e, i) => ({
@@ -885,8 +894,8 @@ async function tvmazeSeason(
   return {
     tmdbId,
     title: (show.name || q).trim(),
-    season,
-    seasonName: `Season ${season}`,
+    season: ordinal,
+    seasonName: `Season ${ordinal}`,
     seasons,
     episodes,
     source: "tvmaze",
