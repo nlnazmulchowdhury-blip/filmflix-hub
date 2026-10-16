@@ -5,7 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import MovieCard from "@/components/MovieCard";
-import VidSrcResultCard, { type VidSrcHit } from "@/components/VidSrcResultCard";
+import VidSrcResultCard, {
+  type VidSrcHit,
+} from "@/components/VidSrcResultCard";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
 import {
   browseTmdb,
@@ -24,7 +26,20 @@ import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
 import { useAction, useQuery } from "convex/react";
-import { Dices, Film, LogOut, Menu, Play, Search, ShieldCheck, Tv, X, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  Dices,
+  Film,
+  LogOut,
+  Menu,
+  Play,
+  Search,
+  ShieldCheck,
+  Tv,
+  X,
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
@@ -56,7 +71,13 @@ function searchableText(m: {
   kind?: string;
 }) {
   return normalizeText(
-    [m.title, m.description, ...movieCategoryNames(m), m.year?.toString(), m.kind]
+    [
+      m.title,
+      m.description,
+      ...movieCategoryNames(m),
+      m.year?.toString(),
+      m.kind,
+    ]
       .filter(Boolean)
       .join(" "),
   );
@@ -69,7 +90,11 @@ const MOBILE_CATEGORY_CHIPS = 4;
 type Suggestion = { title: string; note?: string };
 
 /** Prefix matches first, then substring matches, shortest title first. */
-function rankSuggestions(term: string, pool: Suggestion[], cap = 8): Suggestion[] {
+function rankSuggestions(
+  term: string,
+  pool: Suggestion[],
+  cap = 8,
+): Suggestion[] {
   const needle = normalizeText(term);
   if (!needle) return [];
   const starts: Suggestion[] = [];
@@ -80,7 +105,8 @@ function rankSuggestions(term: string, pool: Suggestion[], cap = 8): Suggestion[
     if (hay.startsWith(needle)) starts.push(s);
     else if (hay.includes(needle)) contains.push(s);
   }
-  const byLength = (a: Suggestion, b: Suggestion) => a.title.length - b.title.length;
+  const byLength = (a: Suggestion, b: Suggestion) =>
+    a.title.length - b.title.length;
   const out: Suggestion[] = [];
   const seen = new Set<string>();
   for (const s of [...starts.sort(byLength), ...contains.sort(byLength)]) {
@@ -101,13 +127,16 @@ function highlightMatch(title: string, term: string) {
   return (
     <>
       {title.slice(0, idx)}
-      <span className="font-semibold text-foreground">{title.slice(idx, end)}</span>
+      <span className="font-semibold text-foreground">
+        {title.slice(idx, end)}
+      </span>
       {title.slice(end)}
     </>
   );
 }
 
-export default function Landing() {  const { signOut, isAuthenticated } = useAuth();
+export default function Landing() {
+  const { signOut, isAuthenticated } = useAuth();
   const movies = useQuery(api.movies.list);
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -148,7 +177,10 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
   const searchExternal = useAction(api.vidsrc.search);
   /* Hits are stored with the query they were resolved for, so a slow response
      for a previous query never shows up under the current one. */
-  const [external, setExternal] = useState<{ q: string; hits: VidSrcHit[] } | null>(null);
+  const [external, setExternal] = useState<{
+    q: string;
+    hits: VidSrcHit[];
+  } | null>(null);
   const [externalLoading, setExternalLoading] = useState(false);
 
   /* -------- TMDB browse: the full IMDB-wide movie grid ------------------ */
@@ -164,7 +196,9 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
 
   /* -------- Providers band (Netflix, Prime Video, …) -------------------- */
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState<ProviderInfo | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderInfo | null>(
+    null,
+  );
   const [rowExpanded, setRowExpanded] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
 
@@ -252,7 +286,11 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
   };
 
   const loadTmdb = useCallback(
-    async (batch: number, providerId: string | null, genreId: number | null) => {
+    async (
+      batch: number,
+      providerId: string | null,
+      genreId: number | null,
+    ) => {
       setTmdbLoading(true);
       setTmdbError("");
       try {
@@ -263,7 +301,9 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
         setTmdbMore(r.hasMore && r.items.length > 0);
       } catch (err) {
         setTmdbError(
-          err instanceof Error ? err.message : "Could not load movies right now",
+          err instanceof Error
+            ? err.message
+            : "Could not load movies right now",
         );
         setTmdbMore(false);
       } finally {
@@ -368,10 +408,10 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
     posterUrl: item.posterUrl ?? undefined,
   });
 
-
   const trimmedQuery = searched;
   /* Only surface external hits that match the submitted term. */
-  const externalHits = external && external.q === trimmedQuery ? external.hits : null;
+  const externalHits =
+    external && external.q === trimmedQuery ? external.hits : null;
 
   /* Resolve the submitted title against IMDb (server-side, keyless) so titles
      outside the catalog still show up and play via Server 1. Runs on submit
@@ -444,7 +484,7 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
   /* While searching, external VidSrc hits are merged into the same grid as
      ordinary results so a title that isn't in our library still shows up (and
      plays) exactly like a catalog entry — the viewer can't tell the difference. */
-  const externalResults = trimmedQuery.length >= 2 ? externalHits ?? [] : [];
+  const externalResults = trimmedQuery.length >= 2 ? (externalHits ?? []) : [];
   const catalog = [...localResults, ...externalResults];
   /* While a search is active the grid shows those results; otherwise it
      browses the selected category/channel (or the full catalog). */
@@ -480,13 +520,19 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
             <Logo />
           </Link>
           <nav className="hidden items-center gap-6 md:flex">
-            <Link to="/" className={navLinkClass}>Home</Link>
+            <Link to="/" className={navLinkClass}>
+              Home
+            </Link>
             <button type="button" onClick={surprise} className={navLinkClass}>
               Random
             </button>
-            <a href="#providers" className={navLinkClass}>Providers</a>
+            <a href="#providers" className={navLinkClass}>
+              Providers
+            </a>
             <Link
-              to={isAuthenticated ? "/dashboard" : `/auth?returnTo=%2Fdashboard`}
+              to={
+                isAuthenticated ? "/dashboard" : `/auth?returnTo=%2Fdashboard`
+              }
               className={navLinkClass}
             >
               Library
@@ -498,78 +544,86 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
               Download
             </Link>
           </nav>
-          {/* Mobile: hamburger + slide-in menu (desktop keeps the inline nav). */}
-          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-            <SheetTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="md:hidden text-muted-foreground hover:text-foreground"
-                aria-label="Open menu"
-              >
-                <Menu className="size-5" />
-              </Button>
-            </SheetTrigger>
-            <SheetContent side="right" className="w-72">
-              <SheetHeader>
-                <SheetTitle className="font-display">Menu</SheetTitle>
-              </SheetHeader>
-              <nav className="flex flex-col gap-1 px-4 pb-6">
-                {[
-                  { label: "Home", to: "/" },
-                  { label: "Random", action: () => { setMenuOpen(false); surprise(); } },
-                  { label: "Providers", href: "#providers" },
-                  {
-                    label: "Library",
-                    to: isAuthenticated ? "/dashboard" : "/auth?returnTo=%2Fdashboard",
-                  },
-                  { label: "TV", to: "/tv" },
-                  { label: "Download", to: "/download" },
-                  ...(isAuthenticated
-                    ? [
-                        {
-                          label: "Sign out",
-                          action: () => {
-                            setMenuOpen(false);
-                            void signOut();
-                          },
-                        },
-                      ]
-                    : []),
-                ].map((item) =>
-                  item.action ? (
-                    <button
-                      key={item.label}
-                      type="button"
-                      onClick={item.action}
-                      className="rounded-lg px-3 py-2.5 text-left text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                    >
-                      {item.label}
-                    </button>
-                  ) : item.href ? (
-                    <a
-                      key={item.label}
-                      href={item.href}
-                      onClick={() => setMenuOpen(false)}
-                      className="rounded-lg px-3 py-2.5 text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                    >
-                      {item.label}
-                    </a>
-                  ) : (
-                    <Link
-                      key={item.label}
-                      to={item.to ?? "/"}
-                      onClick={() => setMenuOpen(false)}
-                      className="rounded-lg px-3 py-2.5 text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                    >
-                      {item.label}
-                    </Link>
-                  ),
-                )}
-              </nav>
-            </SheetContent>
-          </Sheet>
           <div className="flex items-center gap-0.5 sm:gap-2">
+            {/* Mobile: hamburger + slide-in menu (desktop keeps the inline nav). */}
+            <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+              <SheetTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="md:hidden text-muted-foreground hover:text-foreground"
+                  aria-label="Open menu"
+                >
+                  <Menu className="size-5" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="right" className="w-72">
+                <SheetHeader>
+                  <SheetTitle className="font-display">Menu</SheetTitle>
+                </SheetHeader>
+                <nav className="flex flex-col gap-1 px-4 pb-6">
+                  {[
+                    { label: "Home", to: "/" },
+                    {
+                      label: "Random",
+                      action: () => {
+                        setMenuOpen(false);
+                        surprise();
+                      },
+                    },
+                    { label: "Providers", href: "#providers" },
+                    {
+                      label: "Library",
+                      to: isAuthenticated
+                        ? "/dashboard"
+                        : "/auth?returnTo=%2Fdashboard",
+                    },
+                    { label: "TV", to: "/tv" },
+                    { label: "Download", to: "/download" },
+                    ...(isAuthenticated
+                      ? [
+                          {
+                            label: "Sign out",
+                            action: () => {
+                              setMenuOpen(false);
+                              void signOut();
+                            },
+                          },
+                        ]
+                      : []),
+                  ].map((item) =>
+                    item.action ? (
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={item.action}
+                        className="rounded-lg px-3 py-2.5 text-left text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                      >
+                        {item.label}
+                      </button>
+                    ) : item.href ? (
+                      <a
+                        key={item.label}
+                        href={item.href}
+                        onClick={() => setMenuOpen(false)}
+                        className="rounded-lg px-3 py-2.5 text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                      >
+                        {item.label}
+                      </a>
+                    ) : (
+                      <Link
+                        key={item.label}
+                        to={item.to ?? "/"}
+                        onClick={() => setMenuOpen(false)}
+                        className="rounded-lg px-3 py-2.5 text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                      >
+                        {item.label}
+                      </Link>
+                    ),
+                  )}
+                </nav>
+              </SheetContent>
+            </Sheet>
             {/* Random pick stays reachable on phones where the nav is hidden. */}
             <Button
               variant="ghost"
@@ -630,7 +684,9 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
                   if (!suggestOpen || suggestions.length === 0) return;
                   if (e.key === "ArrowDown") {
                     e.preventDefault();
-                    setActiveSuggest((i) => Math.min(i + 1, suggestions.length - 1));
+                    setActiveSuggest((i) =>
+                      Math.min(i + 1, suggestions.length - 1),
+                    );
                   } else if (e.key === "ArrowUp") {
                     e.preventDefault();
                     setActiveSuggest((i) => Math.max(i - 1, -1));
@@ -668,7 +724,11 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
                   className="absolute inset-x-0 top-[calc(100%+6px)] z-40 max-h-72 overflow-y-auto rounded-xl border border-border/60 bg-background/95 py-1 shadow-xl backdrop-blur"
                 >
                   {suggestions.map((s, i) => (
-                    <li key={`${s.title}-${i}`} role="option" aria-selected={i === activeSuggest}>
+                    <li
+                      key={`${s.title}-${i}`}
+                      role="option"
+                      aria-selected={i === activeSuggest}
+                    >
                       <button
                         type="button"
                         onMouseDown={(e) => e.preventDefault()}
@@ -685,7 +745,9 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
                           {highlightMatch(s.title, typed)}
                         </span>
                         {s.note && (
-                          <span className="shrink-0 text-xs opacity-70">{s.note}</span>
+                          <span className="shrink-0 text-xs opacity-70">
+                            {s.note}
+                          </span>
                         )}
                       </button>
                     </li>
@@ -889,7 +951,9 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
                   <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
                 ))}
               </div>
-            ) : catalog.length === 0 && trimmedQuery.length >= 2 && (externalLoading || !external || external.q !== trimmedQuery) ? (
+            ) : catalog.length === 0 &&
+              trimmedQuery.length >= 2 &&
+              (externalLoading || !external || external.q !== trimmedQuery) ? (
               /* Searching or waiting for external results for current query —
                  avoid flashing "nothing matched" during debounce/fetch. */
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
@@ -943,9 +1007,14 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
                 ))}
                 {/* Skeletons for the first batch, or a light tail while loading more. */}
                 {tmdbLoading &&
-                  Array.from({ length: tmdbItems.length === 0 ? 12 : 6 }).map((_, i) => (
-                    <Skeleton key={`sk-${i}`} className="aspect-[2/3] rounded-xl" />
-                  ))}
+                  Array.from({ length: tmdbItems.length === 0 ? 12 : 6 }).map(
+                    (_, i) => (
+                      <Skeleton
+                        key={`sk-${i}`}
+                        className="aspect-[2/3] rounded-xl"
+                      />
+                    ),
+                  )}
               </div>
 
               {tmdbError && tmdbItems.length === 0 && (
@@ -960,7 +1029,11 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
                     className="gap-2"
                     disabled={tmdbLoading}
                     onClick={() =>
-                      void loadTmdb(tmdbBatch + 1, selectedProvider?.id ?? null, genre?.id ?? null)
+                      void loadTmdb(
+                        tmdbBatch + 1,
+                        selectedProvider?.id ?? null,
+                        genre?.id ?? null,
+                      )
                     }
                   >
                     {tmdbLoading ? (
@@ -994,8 +1067,19 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
               <p className="text-sm text-muted-foreground">
                 Pick a time, invite the team, and watch together.
               </p>
-              <Button asChild variant="ghost" size="sm" className="mt-1 self-start px-0 text-primary hover:text-primary">
-                <Link to={isAuthenticated ? "/dashboard" : "/auth?returnTo=%2Fdashboard"}>
+              <Button
+                asChild
+                variant="ghost"
+                size="sm"
+                className="mt-1 self-start px-0 text-primary hover:text-primary"
+              >
+                <Link
+                  to={
+                    isAuthenticated
+                      ? "/dashboard"
+                      : "/auth?returnTo=%2Fdashboard"
+                  }
+                >
                   Open your library →
                 </Link>
               </Button>
@@ -1013,15 +1097,27 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
           </Card>
           <Card className="card-lift border-border/60 bg-card/70">
             <CardContent className="flex flex-col gap-2 p-5">
-              <Badge className="size-5 rounded-md bg-primary/12 p-0.5 text-primary" variant="outline">
+              <Badge
+                className="size-5 rounded-md bg-primary/12 p-0.5 text-primary"
+                variant="outline"
+              >
                 ★
               </Badge>
               <p className="font-display font-semibold">Upgrade the crew</p>
               <p className="text-sm text-muted-foreground">
                 Support the catalog and unlock the premiere plan.
               </p>
-              <Button asChild variant="ghost" size="sm" className="mt-1 self-start px-0 text-primary hover:text-primary">
-                <Link to={isAuthenticated ? "/checkout" : "/auth?returnTo=%2Fcheckout"}>
+              <Button
+                asChild
+                variant="ghost"
+                size="sm"
+                className="mt-1 self-start px-0 text-primary hover:text-primary"
+              >
+                <Link
+                  to={
+                    isAuthenticated ? "/checkout" : "/auth?returnTo=%2Fcheckout"
+                  }
+                >
                   See plans →
                 </Link>
               </Button>
@@ -1048,8 +1144,6 @@ export default function Landing() {  const { signOut, isAuthenticated } = useAut
           our internal team.
         </p>
       </footer>
-
-
     </div>
   );
 }
