@@ -646,17 +646,17 @@ export default function Landing() {
                       ? `${selectedProvider.name} Movies`
                       : "All Movies"}
               </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {inResultsMode
-                  ? `${catalog.length} ${catalog.length === 1 ? "movie" : "movies"} found for “${trimmedQuery}”`
-                  : genre
-                    ? `Browsing the ${genre.name} collection${
-                        selectedProvider ? ` on ${selectedProvider.name}` : ""
-                      } — pick a poster and press play.`
-                    : selectedProvider
-                      ? `Streaming on ${selectedProvider.name} — pick a poster and press play.`
-                      : "Fresh from the full IMDB & TMDB catalog — updated weekly. Pick a poster and press play."}
-              </p>
+              {(inResultsMode || genre || selectedProvider) && (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {inResultsMode
+                    ? `${catalog.length} ${catalog.length === 1 ? "movie" : "movies"} found for “${trimmedQuery}”`
+                    : genre
+                      ? `Browsing the ${genre.name} collection${
+                          selectedProvider ? ` on ${selectedProvider.name}` : ""
+                        } — pick a poster and press play.`
+                      : `Streaming on ${selectedProvider!.name} — pick a poster and press play.`}
+                </p>
+              )}
             </div>
           </div>
 
