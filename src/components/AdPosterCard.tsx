@@ -57,7 +57,15 @@ export default function AdPosterCard({ index = 0 }: { index?: number }) {
           >
             <AdBanner {...UNIT} />
           </div>
-          <span className="absolute left-2 top-2 z-10 rounded-full border border-white/20 bg-black/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-white/90 backdrop-blur-sm">
+          {/* Diagonal watermark + a heavy badge: the slot must never be
+              mistaken for a poster, but neither layer may eat the ad's own
+              click target, so both ignore pointer events. */}
+          <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+            <span className="select-none -rotate-[24deg] text-6xl font-black uppercase leading-none tracking-tighter text-white/30 [-webkit-text-stroke:2px_rgba(0,0,0,0.35)] drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)] sm:text-7xl">
+              Ad
+            </span>
+          </span>
+          <span className="pointer-events-none absolute left-2 top-2 z-10 rounded-lg border border-white/30 bg-black/85 px-3 py-1.5 text-xs font-black uppercase leading-none tracking-[0.25em] text-white shadow-lg sm:text-sm">
             Ad
           </span>
         </div>
