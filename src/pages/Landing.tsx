@@ -21,6 +21,7 @@ import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
 import AdContainer from "@/components/AdContainer";
 import AdEdgeRail from "@/components/AdEdgeRail";
+import AdPosterCard from "@/components/AdPosterCard";
 import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
@@ -41,7 +42,14 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
 import {
@@ -133,6 +141,22 @@ function highlightMatch(title: string, term: string) {
       {title.slice(end)}
     </>
   );
+}
+
+/** One poster-shaped ad slot per this many grid cards. */
+const AD_GRID_EVERY = 6;
+
+/** Drop an ad card into the grid every `every` posters. */
+function interleaveAds(nodes: ReactNode[], every = AD_GRID_EVERY): ReactNode[] {
+  const out: ReactNode[] = [];
+  nodes.forEach((node, i) => {
+    out.push(node);
+    /* Never trail the last poster with an ad — that reads as an ad row. */
+    if ((i + 1) % every === 0 && i + 1 < nodes.length) {
+      out.push(<AdPosterCard key={`grid-ad-${i}`} index={i} />);
+    }
+  });
+  return out;
 }
 
 export default function Landing() {
@@ -979,32 +1003,36 @@ export default function Landing() {
               </Card>
             ) : (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-                {localResults.map((m: any, i: any) => (
-                  <MovieCard key={m._id} movie={m} index={i} />
-                ))}
-                {/* External hits sit in the same grid, styled identically, so a
-                    title that isn't in our library still looks like a normal result. */}
-                {externalResults.map((h, i) => (
-                  <VidSrcResultCard
-                    key={h.imdbId}
-                    hit={h}
-                    index={localResults.length + i}
-                    onPlay={playExternal}
-                  />
-                ))}
+                {interleaveAds([
+                  ...localResults.map((m: any, i: any) => (
+                    <MovieCard key={m._id} movie={m} index={i} />
+                  )),
+                  /* External hits sit in the same grid, styled identically, so a
+                     title that isn't in our library still looks like a normal result. */
+                  ...externalResults.map((h, i) => (
+                    <VidSrcResultCard
+                      key={h.imdbId}
+                      hit={h}
+                      index={localResults.length + i}
+                      onPlay={playExternal}
+                    />
+                  )),
+                ])}
               </div>
             )
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-                {tmdbItems.map((item, i) => (
-                  <VidSrcResultCard
-                    key={`${item.kind}-${item.tmdbId}`}
-                    hit={tmdbToHit(item)}
-                    index={i % 10}
-                    onPlay={() => playTmdb(item)}
-                  />
-                ))}
+                {interleaveAds(
+                  tmdbItems.map((item, i) => (
+                    <VidSrcResultCard
+                      key={`${item.kind}-${item.tmdbId}`}
+                      hit={tmdbToHit(item)}
+                      index={i % 10}
+                      onPlay={() => playTmdb(item)}
+                    />
+                  )),
+                )}
                 {/* Skeletons for the first batch, or a light tail while loading more. */}
                 {tmdbLoading &&
                   Array.from({ length: tmdbItems.length === 0 ? 12 : 6 }).map(
