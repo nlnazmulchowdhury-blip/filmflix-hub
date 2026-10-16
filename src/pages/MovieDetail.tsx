@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import Logo from "@/components/Logo";
 import PlayerStage from "@/components/PlayerStage";
+import EpisodeList, { type EpisodeRow } from "@/components/EpisodeList";
 import VidSrcResultCard from "@/components/VidSrcResultCard";
 import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
@@ -12,7 +13,14 @@ import AdSideRail from "@/components/AdSideRail";
 import { AD_BANNERS } from "@/lib/ad-banners";
 import { useMiniPlayer } from "@/components/mini-player-context";
 import { vaplayerEmbedUrl } from "@/lib/vaplayer";
-import { listRelated, type TmdbItem } from "@/lib/tmdb";
+import { fetchTitleDownloads } from "@/lib/embed-resolver";
+import {
+  listRelated,
+  listSeason,
+  type TmdbItem,
+  type TvSeasonOption,
+  type TvSeasonPayload,
+} from "@/lib/tmdb";
 import { convexSiteUrl, downloadFileUrl } from "@/lib/video-url";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -191,28 +199,6 @@ export default function MovieDetail() {
 
   const defaultWhen = toLocalInputValue(Date.now() + 24 * 60 * 60 * 1000);
 
-  /* Playlist: main video (if any) first, then the admin-ordered episodes. */
-  const playlist = movie
-    ? [
-        ...(movie.videoUrl
-          ? [
-              {
-                key: "main",
-                title: movie.title,
-                videoUrl: movie.videoUrl,
-                durationSec: undefined as number | undefined,
-              },
-            ]
-          : []),
-        ...(movie.episodes ?? []).map((e: any, i: any) => ({
-          key: `ep-${i}`,
-          title: e.title,
-          videoUrl: e.videoUrl,
-          durationSec: e.durationSec,
-        })),
-      ]
-    : [];
-
   /* Download menu: admin-added per-quality links. Falls back to the main
      video URL when no explicit download links exist. */
   const downloadOptions = movie
@@ -291,23 +277,14 @@ export default function MovieDetail() {
     window.open(directUrl, "_blank", "noopener,noreferrer");
   };
 
-  const nowPlayingUrl = miniMovie?.videoUrl;
-  const playItem = (item: (typeof playlist)[number]) => {
-    if (!movie) return;
-    start(
-      {
-        movieId: movie._id,
-        title: item.title,
-        videoUrl: item.videoUrl,
-        posterUrl: movie.posterUrl,
-        backdropUrl: movie.backdropUrl,
-        dubs: movie.dubs ?? [],
-        qualities: movie.qualities ?? [],
-        subtitles: movie.subtitles ?? [],
-      },
-      true,
-    );
-  };
+  /* Episode the stage is on. Providers address a series episode by
+     season + episode, so this pair is what selects the stream. */
+  const [season, setSeason] = useState(() =>
+    Math.max(1, Number((location.state as any)?.season) || 1),
+  );
+  const [episode, setEpisode] = useState(() =>
+    Math.max(1, Number((location.state as any)?.episode) || 1),
+  );
 
   /* Share: native sheet on phones (WhatsApp/Messenger/etc.), clipboard
      fallback everywhere else. */
@@ -379,6 +356,187 @@ export default function MovieDetail() {
         }
       : (movie as any);
 
+  /* -------- Episodes under the player ----------------------------------- */
+  /* Two sources for one list:
+       • the admin's own episode files (D1 `episodes`) — real uploads, played
+         straight from our own CDN;
+       • otherwise the external season guide (Worker `/tmdb/tv`: TMDB when a
+         key is configured, TVMaze keyless today). Those rows carry no file:
+         picking one re-points the embed server at that season + episode. */
+  const showTitle: string = externalMovie?.title || "";
+  const seriesTmdbId: string | null =
+    vaplayerId ?? ((movie as any)?.tmdbId as string | undefined) ?? null;
+  const seriesImdbId: string | null =
+    vidsrcImdbId ?? ((movie as any)?.imdbId as string | undefined) ?? null;
+  const isSeries = externalMovie?.kind === "series";
+  const localEpisodes = ((movie as any)?.episodes ?? []) as any[];
+  const hasLocalEpisodes = localEpisodes.length > 0;
+  const useGuide = isSeries && !hasLocalEpisodes;
+
+  const [guide, setGuide] = useState<TvSeasonPayload | null>(null);
+  const [guideLoading, setGuideLoading] = useState(false);
+
+  useEffect(() => {
+    if (!useGuide || (!seriesTmdbId && !showTitle)) {
+      setGuide(null);
+      return;
+    }
+    let cancelled = false;
+    setGuideLoading(true);
+    listSeason({
+      tmdbId: seriesTmdbId,
+      title: showTitle,
+      imdbId: seriesImdbId,
+      season,
+    })
+      .then((g) => {
+        if (!cancelled) setGuide(g);
+      })
+      .catch(() => {
+        if (!cancelled) setGuide(null);
+      })
+      .finally(() => {
+        if (!cancelled) setGuideLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [useGuide, seriesTmdbId, seriesImdbId, showTitle, season]);
+
+  const seasonOptions: TvSeasonOption[] = hasLocalEpisodes
+    ? [{ season: 1, name: "Episodes", episodeCount: localEpisodes.length }]
+    : (guide?.seasons ?? []);
+
+  const episodeRows: EpisodeRow[] = hasLocalEpisodes
+    ? localEpisodes.map((e: any, i: number) => ({
+        key: `local-${i}`,
+        episode: Number(e.episode) || i + 1,
+        title: e.title || `Episode ${i + 1}`,
+        overview: e.overview ?? "",
+        stillUrl: e.stillUrl ?? null,
+        runtimeSec: e.durationSec ?? null,
+        airDate: e.airDate ?? null,
+        videoUrl: e.videoUrl ?? null,
+      }))
+    : (guide?.episodes ?? []).map((e) => ({
+        key: `s${season}e${e.episode}`,
+        episode: e.episode,
+        title: e.name,
+        overview: e.overview,
+        stillUrl: e.stillUrl ?? null,
+        runtimeSec: e.runtimeSec ?? null,
+        airDate: e.airDate ?? null,
+      }));
+
+  /* The provider page of whatever the stage is on. Changing this is what
+     swaps the episode: PlayerStage feeds it to the embed resolver and the
+     provider iframe. */
+  const episodeEmbed =
+    useGuide && seriesTmdbId
+      ? vaplayerEmbedUrl({
+          tmdbId: seriesTmdbId,
+          kind: "series",
+          season,
+          episode,
+        })
+      : "";
+
+  const activeEpisodeKey = hasLocalEpisodes
+    ? (episodeRows.find((r) => r.videoUrl && r.videoUrl === miniMovie?.videoUrl)
+        ?.key ?? null)
+    : `s${season}e${episode}`;
+
+  const activeIndex = episodeRows.findIndex((r) => r.key === activeEpisodeKey);
+  const nextEpisode =
+    activeIndex >= 0 ? episodeRows[activeIndex + 1] : episodeRows[0];
+
+  const playEpisode = (row: EpisodeRow) => {
+    if (row.videoUrl && movie) {
+      setEpisode(row.episode);
+      start(
+        {
+          movieId: movie._id,
+          title: `${showTitle} — ${row.title}`,
+          videoUrl: row.videoUrl,
+          posterUrl: movie.posterUrl,
+          backdropUrl: movie.backdropUrl,
+          dubs: movie.dubs ?? [],
+          qualities: movie.qualities ?? [],
+          subtitles: movie.subtitles ?? [],
+        } as any,
+        true,
+      );
+      return;
+    }
+    const url = vaplayerEmbedUrl({
+      tmdbId: seriesTmdbId,
+      kind: "series",
+      season,
+      episode: row.episode,
+    });
+    if (!url) {
+      toast.error("এই এপিসোডের কোনো সোর্স পাওয়া যায়নি");
+      return;
+    }
+    setEpisode(row.episode);
+    start(
+      {
+        movieId: (externalMovie as any)?._id,
+        title: `${showTitle} — S${season}E${row.episode}`,
+        videoUrl: url,
+        posterUrl: row.stillUrl ?? externalMovie?.posterUrl ?? null,
+        backdropUrl: externalMovie?.backdropUrl ?? null,
+        dubs: [],
+        qualities: [],
+        subtitles: [],
+        tmdbId: seriesTmdbId,
+        kind: "series",
+        season,
+        episode: row.episode,
+      } as any,
+      true,
+    );
+  };
+
+  /* Per-episode download: our own file when the admin uploaded one, else ask
+     the Worker to extract this episode's stream from the ad-free providers. */
+  const downloadEpisode = async (row: EpisodeRow) => {
+    if (row.videoUrl) {
+      window.location.assign(
+        downloadFileUrl(row.videoUrl, convexSiteUrl(), `${showTitle} - ${row.title}`),
+      );
+      return;
+    }
+    if (!seriesTmdbId && !seriesImdbId) {
+      toast.error("এই এপিসোডের ডাউনলোড লিংক পাওয়া যায়নি");
+      return;
+    }
+    toast("ডাউনলোড লিংক খোঁজা হচ্ছে…");
+    try {
+      const providers = await fetchTitleDownloads({
+        tmdbId: seriesTmdbId,
+        imdbId: seriesImdbId,
+        kind: "series",
+        season,
+        episode: row.episode,
+      });
+      const file = providers.flatMap((p) => p.entries).find((e) => e.url);
+      if (!file) {
+        toast.error("এই এপিসোডের ডাউনলোড লিংক পাওয়া যায়নি");
+        return;
+      }
+      window.location.assign(
+        downloadFileUrl(
+          file.url,
+          convexSiteUrl(),
+          `${showTitle} - S${season}E${row.episode} - ${file.label}`,
+        ),
+      );
+    } catch {
+      toast.error("ডাউনলোড শুরু করা গেল না");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
@@ -419,16 +577,20 @@ export default function MovieDetail() {
             {/* Persistent player stage */}
             <PlayerStage
               movieId={(externalMovie as any)._id}
-              videoUrl={(externalMovie as any).videoUrl ?? ""}
+              videoUrl={episodeEmbed || ((externalMovie as any).videoUrl ?? "")}
               title={externalMovie.title}
               posterUrl={externalMovie.posterUrl}
               backdropUrl={externalMovie.backdropUrl}
               imdbId={(isVidSrc ? vidsrcImdbId : (externalMovie as any).imdbId) || undefined}
               tmdbId={!isVidSrc ? (externalMovie as any).tmdbId : undefined}
               kind={(isVidSrc ? (externalState.kind || "movie") : (externalMovie as any).kind) as any}
+              season={season}
+              episode={episode}
               disabledServers={(externalMovie as any).disabledServers}
               defaultServer={(externalMovie as any).defaultServer}
-              providerEmbedUrl={isVidSrc ? undefined : (externalMovie as any).embedUrl}
+              providerEmbedUrl={
+                isVidSrc ? undefined : episodeEmbed || (externalMovie as any).embedUrl
+              }
             />
 
             {/* Below-player banner: leaderboard on desktop, 320×50 on phones. */}
@@ -466,65 +628,29 @@ export default function MovieDetail() {
               </section>
             )}
 
-            {/* Episode / parts playlist */}
-            {playlist.length > 1 && (
-              <section aria-label="Episodes">
-                <h2 className="font-display flex items-center gap-2 text-lg font-bold tracking-tight">
-                  <ListVideo className="size-5 text-primary" />
-                  More episodes
-                  <span className="text-sm font-medium text-muted-foreground">
-                    ({playlist.length})
-                  </span>
-                </h2>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {playlist.map((item, i) => {
-                    const isPlaying = nowPlayingUrl === item.videoUrl;
-                    return (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => playItem(item)}
-                        className={`flex items-center gap-3 rounded-xl border p-2.5 text-left transition-colors ${
-                          isPlaying
-                            ? "border-primary/60 bg-primary/10"
-                            : "border-border/50 bg-card/60 hover:border-foreground/25 hover:bg-card"
-                        }`}
-                      >
-                        <span
-                          className={`flex size-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold ${
-                            isPlaying
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-primary/12 text-primary"
-                          }`}
-                        >
-                          {isPlaying ? (
-                            <Play className="size-4 fill-current" />
-                          ) : (
-                            i + 1
-                          )}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-semibold">
-                            {item.title}
-                          </span>
-                          {item.durationSec != null && (
-                            <span className="text-xs text-muted-foreground">
-                              {Math.floor(item.durationSec / 60)}m{" "}
-                              {item.durationSec % 60}s
-                            </span>
-                          )}
-                        </span>
-                        {isPlaying && (
-                          <span className="shrink-0 text-xs font-semibold text-primary">
-                            Now playing
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
+            {/* Episodes of what you're watching */}
+            {(isSeries || hasLocalEpisodes) &&
+              (episodeRows.length > 0 || guideLoading) && (
+                <EpisodeList
+                  rows={episodeRows}
+                  seasons={seasonOptions}
+                  season={season}
+                  seasonName={guide?.seasonName}
+                  activeKey={activeEpisodeKey}
+                  loading={guideLoading && episodeRows.length === 0}
+                  canGoNext={Boolean(nextEpisode)}
+                  onSeason={(s) => {
+                    setSeason(s);
+                    setEpisode(1);
+                  }}
+                  onPlay={playEpisode}
+                  onNext={() => nextEpisode && playEpisode(nextEpisode)}
+                  /* Per-row download only for files we actually host: the
+                     embed providers still cannot yield a direct episode
+                     stream, so an icon that always failed would lie. */
+                  onDownload={hasLocalEpisodes ? (row) => void downloadEpisode(row) : undefined}
+                />
+              )}
 
             {/* Meta — catalog entries only; external (vidsrc/vaplayer) titles
                 show just the player + playlist. */}

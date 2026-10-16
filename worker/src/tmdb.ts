@@ -342,9 +342,14 @@ tmdbRoutes.get("/related", async (c) => {
 
 /** vidbox discover API — keyless paginated catalog (20 rows per page).
     `genre` is a TMDB genre id ("all" = unfiltered). */
-async function fetchDiscoverPage(watchProvider: string, p: number, genre = "all") {
+async function fetchDiscoverPage(
+  watchProvider: string,
+  p: number,
+  genre = "all",
+  type = "movie",
+) {
   const url =
-    `${VIDBOX_DISCOVER}?type=movie&page=${p}&sort=popularity` +
+    `${VIDBOX_DISCOVER}?type=${type}&page=${p}&sort=popularity` +
     `&genre=${encodeURIComponent(genre)}&year=all&watch_provider=${encodeURIComponent(watchProvider)}` +
     `&country=all&rating=all&now_playing=false&trending=false`;
   const res = await fetch(url, {
@@ -361,34 +366,65 @@ async function fetchDiscoverPage(watchProvider: string, p: number, genre = "all"
   return (await res.json()) as { results?: TmdbResult[]; total_pages?: number };
 }
 
-/** One 60-item batch from discover; null when the source is unreachable. */
+/** One batch from discover; null when the source is unreachable. */
 async function discoverBatch(
   watchProvider: string,
   batch: number,
   genre = "all",
+  type = "movie",
+  limit = BATCH_SIZE,
 ): Promise<{ items: BrowseItem[]; page: number; hasMore: boolean } | null> {
-  const offset = (batch - 1) * BATCH_SIZE;
+  const offset = (batch - 1) * limit;
   const firstPage = Math.floor(offset / PROVIDER_PAGE_SIZE) + 1;
   const rowInPage = offset % PROVIDER_PAGE_SIZE;
-  const pagesNeeded = Math.ceil((rowInPage + BATCH_SIZE) / PROVIDER_PAGE_SIZE);
+  const pagesNeeded = Math.ceil((rowInPage + limit) / PROVIDER_PAGE_SIZE);
   /* Sequential: vidbox throttles parallel requests from one IP, which would
      silently drop the second page of the batch. */
   const pages: Awaited<ReturnType<typeof fetchDiscoverPage>>[] = [];
   for (let i = 0; i < pagesNeeded; i++) {
-    pages.push(await fetchDiscoverPage(watchProvider, firstPage + i, genre));
+    pages.push(await fetchDiscoverPage(watchProvider, firstPage + i, genre, type));
   }
   const first = pages[0];
   if (!first?.results) return null;
   const rows: TmdbResult[] = [];
   for (const d of pages) if (d?.results) rows.push(...d.results);
   const items = rows
-    .slice(rowInPage, rowInPage + BATCH_SIZE)
+    .slice(rowInPage, rowInPage + limit)
     .map(toCard)
     .filter((x): x is BrowseItem => x !== null);
   const totalPages = first.total_pages ?? 1;
   const hasMore =
-    rows.length > rowInPage + BATCH_SIZE || firstPage + pagesNeeded - 1 < totalPages;
+    rows.length > rowInPage + limit || firstPage + pagesNeeded - 1 < totalPages;
   return { items, page: batch, hasMore };
+}
+
+const TV_SLOTS_EVERY = 5;
+
+/** Keyless main grid: movies carry it and series are woven in (every fifth
+    card) so TV titles — and the episode list under their player — are
+    reachable without a separate tab. Genres stay movie-only because TMDB
+    genre ids do not mean the same thing across media types. */
+async function keylessBatch(
+  batch: number,
+  genre: string,
+  type: "movie" | "tv",
+): Promise<{ items: BrowseItem[]; page: number; hasMore: boolean } | null> {
+  const movies = await discoverBatch("all", batch, genre || "all", "movie");
+  if (!movies) return null;
+  if (genre || type === "tv") return movies;
+
+  const tv = await discoverBatch("all", batch, "all", "tv", BATCH_SIZE / TV_SLOTS_EVERY);
+  const series = tv?.items ?? [];
+  if (!series.length) return movies;
+
+  const films = movies.items.slice();
+  const out: BrowseItem[] = [];
+  while (out.length < BATCH_SIZE && (films.length || series.length)) {
+    const takeSeries =
+      series.length > 0 && (out.length + 1) % TV_SLOTS_EVERY === 0 && films.length;
+    out.push((takeSeries ? series : films).shift() as BrowseItem);
+  }
+  return { items: out, page: batch, hasMore: movies.hasMore };
 }
 
 /* Keyless pad: iTunes top-movies RSS (JSON). The primary keyless scraper
@@ -452,8 +488,13 @@ tmdbRoutes.get("/browse", async (c) => {
      when discover is unreachable (unfiltered batches only — the scrape
      carries no genre info). */
   if (!key) {
+    const keylessSection = (c.req.query("section") ?? "all").toLowerCase();
     try {
-      const disc = await discoverBatch("all", batch, genre || "all");
+      const disc = await keylessBatch(
+        batch,
+        genre,
+        keylessSection === "tv" ? "tv" : "movie",
+      );
       if (disc) return c.json(disc);
     } catch (err) {
       console.error("keyless discover failed", err);
@@ -626,4 +667,257 @@ tmdbRoutes.get("/external", async (c) => {
     console.error("external ids lookup failed", err);
     return c.json({ tmdbId, imdbId: null, error: "lookup failed" }, 502);
   }
+});
+
+/* ------------------------------------------------------------------ */
+/* Series seasons + episodes                                           */
+/*                                                                     */
+/* The episode list under the player. Two tiers, same response shape:  */
+/*                                                                     */
+/*  • TMDB when an API key is configured — richest metadata.           */
+/*  • Keyless TVMaze otherwise (this deployment has no TMDB key, so    */
+/*    this is the live path). The caller already knows the show title, */
+/*    so `/search/shows` maps it to a TVMaze show without any id       */
+/*    service, and `/shows/{id}/episodes` returns every episode once   */
+/*    and is grouped into seasons locally — one upstream call per show */
+/*    per hour, not per season.                                        */
+/*                                                                     */
+/* Provider pages can't stand in for this: their SSR payload only      */
+/* carries the show object (no per-episode rows) and silently serves a */
+/* default title for ids it doesn't carry.                             */
+/* ------------------------------------------------------------------ */
+
+interface TvSeasonInfo {
+  season: number;
+  name: string;
+  episodeCount: number;
+  posterUrl: string | null;
+}
+
+interface TvEpisodeInfo {
+  episode: number;
+  name: string;
+  overview: string;
+  stillUrl: string | null;
+  runtimeSec: number | null;
+  airDate: string | null;
+}
+
+interface TvSeasonResult {
+  tmdbId: string;
+  title: string;
+  season: number;
+  seasonName: string;
+  seasons: TvSeasonInfo[];
+  episodes: TvEpisodeInfo[];
+  source: "tmdb" | "tvmaze";
+}
+
+const tvCache = new Map<string, { at: number; value: unknown }>();
+
+const tmdbGet = async (path: string, key: string) => {
+  const res = await fetch(
+    `https://api.themoviedb.org/3/${path}${path.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(key)}`,
+    { headers: { accept: "application/json" } },
+  );
+  if (!res.ok) throw new Error(`TMDB ${res.status} on ${path}`);
+  return (await res.json()) as Record<string, any>;
+};
+
+async function tmdbSeason(
+  tmdbId: string,
+  season: number,
+  key: string,
+): Promise<TvSeasonResult | null> {
+  const cacheKey = `tmdb:${tmdbId}:${season}`;
+  const hit = tvCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < SCRAPE_CACHE_MS)
+    return hit.value as TvSeasonResult;
+  try {
+    const [show, sea] = await Promise.all([
+      tmdbGet(`tv/${tmdbId}`, key),
+      tmdbGet(`tv/${tmdbId}/season/${season}`, key),
+    ]);
+    const seasons: TvSeasonInfo[] = (show.seasons ?? [])
+      .filter((s: any) => Number(s.season_number) > 0 && Number(s.episode_count) > 0)
+      .map((s: any) => ({
+        season: Number(s.season_number),
+        name: s.name || `Season ${s.season_number}`,
+        episodeCount: Number(s.episode_count) || 0,
+        posterUrl: img(s.poster_path, "w185"),
+      }));
+    const episodes: TvEpisodeInfo[] = (sea.episodes ?? []).map((e: any) => ({
+      episode: Number(e.episode_number) || 0,
+      name: e.name || `Episode ${e.episode_number}`,
+      overview: e.overview || "",
+      stillUrl: img(e.still_path, "w300"),
+      runtimeSec: Number(e.runtime) ? Number(e.runtime) * 60 : null,
+      airDate: e.air_date || null,
+    }));
+    if (!episodes.length) return null;
+    const value: TvSeasonResult = {
+      tmdbId,
+      title: show.name || "",
+      season,
+      seasonName: sea.name || `Season ${season}`,
+      seasons,
+      episodes,
+      source: "tmdb",
+    };
+    tvCache.set(cacheKey, { at: Date.now(), value });
+    return value;
+  } catch (err) {
+    console.error("tmdb season lookup failed", err);
+    return null;
+  }
+}
+
+const TVMAZE = "https://api.tvmaze.com";
+
+interface TvmazeShow {
+  id: number;
+  name?: string;
+  externals?: { imdb?: string | null };
+}
+
+interface TvmazeEpisode {
+  id?: number;
+  name?: string | null;
+  season?: number;
+  number?: number | null;
+  airdate?: string | null;
+  runtime?: number | null;
+  image?: { medium?: string | null; original?: string | null } | null;
+  summary?: { text?: string | null } | null;
+}
+
+/** TVMaze prose arrives as HTML (`<b>`, `&#39;`) — the list wants plain text. */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, "")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ")
+    .trim();
+}
+
+const normName = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+async function tvmazeJson<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${TVMAZE}${path}`, { headers: { accept: "application/json" } });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+/* Whole-series episode cache: season 2 shouldn't re-download season 1. */
+const tvmazeEpisodes = new Map<string, { at: number; list: TvmazeEpisode[] }>();
+
+async function episodesOf(showId: number): Promise<TvmazeEpisode[]> {
+  const ck = `show:${showId}`;
+  const hit = tvmazeEpisodes.get(ck);
+  if (hit && Date.now() - hit.at < SCRAPE_CACHE_MS) return hit.list;
+  const list = await tvmazeJson<TvmazeEpisode[]>(`/shows/${showId}/episodes`);
+  if (!list?.length) return hit?.list ?? [];
+  tvmazeEpisodes.set(ck, { at: Date.now(), list });
+  return list;
+}
+
+async function tvmazeSeason(
+  tmdbId: string,
+  title: string,
+  imdbId: string | null,
+  season: number,
+): Promise<TvSeasonResult | null> {
+  const q = (title || "").trim();
+  if (!q) return null;
+  const hits = await tvmazeJson<{ show?: TvmazeShow }[]>(
+    `/search/shows?q=${encodeURIComponent(q)}`,
+  );
+  const usable = (hits ?? []).filter((h) => h.show?.id);
+  if (!usable.length) return null;
+  /* Prefer the id-verified hit, then an exact name, then the best score. */
+  const picked =
+    (imdbId ? usable.find((h) => h.show?.externals?.imdb === imdbId) : null) ??
+    usable.find((h) => normName(h.show?.name ?? "") === normName(q)) ??
+    usable[0];
+  const show = picked?.show;
+  if (!show) return null;
+
+  const all = await episodesOf(show.id);
+  if (!all.length) return null;
+
+  const grouped = new Map<number, TvmazeEpisode[]>();
+  for (const e of all) {
+    const s = Number(e.season) || 0;
+    const bucket = grouped.get(s);
+    if (bucket) bucket.push(e);
+    else grouped.set(s, [e]);
+  }
+
+  const seasons: TvSeasonInfo[] = [...grouped.keys()]
+    .filter((s) => s > 0)
+    .sort((a, b) => a - b)
+    .map((s) => ({
+      season: s,
+      name: `Season ${s}`,
+      episodeCount: grouped.get(s)?.length ?? 0,
+      posterUrl: null,
+    }));
+
+  const episodes: TvEpisodeInfo[] = (grouped.get(season) ?? [])
+    .slice()
+    .sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0))
+    .map((e, i) => ({
+      episode: Number(e.number) || i + 1,
+      name: (e.name || `Episode ${e.number ?? i + 1}`).trim(),
+      overview: stripHtml(e.summary?.text ?? ""),
+      stillUrl: e.image?.original ?? e.image?.medium ?? null,
+      runtimeSec: Number(e.runtime) ? Number(e.runtime) * 60 : null,
+      airDate: e.airdate ?? null,
+    }));
+
+  if (!episodes.length) return null;
+  return {
+    tmdbId,
+    title: (show.name || q).trim(),
+    season,
+    seasonName: `Season ${season}`,
+    seasons,
+    episodes,
+    source: "tvmaze",
+  };
+}
+
+tmdbRoutes.get("/tv", async (c) => {
+  const tmdbId = (c.req.query("tmdbId") ?? "").trim();
+  const title = (c.req.query("title") ?? "").trim();
+  const imdbId = (c.req.query("imdbId") ?? "").trim() || null;
+  const season = Math.min(100, Math.max(1, Number(c.req.query("season")) || 1));
+  if (!/^\d{1,10}$/.test(tmdbId) && !title)
+    return c.json({ error: "Need tmdbId or title" }, 400);
+
+  const key = c.env.TMDB_API_KEY;
+  const fromTmdb = key ? await tmdbSeason(tmdbId, season, key) : null;
+  if (fromTmdb) return c.json(fromTmdb);
+
+  const fromTvmaze = await tvmazeSeason(tmdbId, title, imdbId, season);
+  if (fromTvmaze) return c.json(fromTvmaze);
+
+  return c.json(
+    {
+      tmdbId,
+      season,
+      seasonName: `Season ${season}`,
+      title,
+      seasons: [],
+      episodes: [],
+      error: key ? "season lookup failed" : "no episode source",
+    },
+    200,
+  );
 });

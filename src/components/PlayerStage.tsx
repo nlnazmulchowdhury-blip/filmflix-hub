@@ -244,6 +244,12 @@ export default function PlayerStage({
 
   /* -------- Episode servers: 3 = Anime (VidNest), 4 = Drama (Videasy) -------- */
   const [aeEpisode, setAeEpisode] = useState(episode ?? 1);
+  /* The episode list under the player also selects the episode, so a pick
+     there has to move this stepper instead of being overridden by it. */
+  useEffect(() => {
+    setAeEpisode(episode ?? 1);
+  }, [episode]);
+
   const usingAutoembed = server === "anime" || server === "drama";
   const autoembedUrl =
     server === "anime"

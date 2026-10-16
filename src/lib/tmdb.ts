@@ -80,3 +80,49 @@ export async function listRelated(tmdbId: string): Promise<TmdbItem[]> {
   );
   return r.items ?? [];
 }
+
+/* ------------------- series seasons + episodes ------------------------- */
+
+export interface TvSeasonOption {
+  season: number;
+  name: string;
+  episodeCount: number;
+  posterUrl?: string | null;
+}
+
+export interface TvEpisode {
+  episode: number;
+  name: string;
+  overview: string;
+  stillUrl?: string | null;
+  runtimeSec?: number | null;
+  airDate?: string | null;
+}
+
+export interface TvSeasonPayload {
+  tmdbId: string;
+  title: string;
+  season: number;
+  seasonName: string;
+  seasons: TvSeasonOption[];
+  episodes: TvEpisode[];
+  source?: "tmdb" | "tvmaze";
+  error?: string;
+}
+
+/** One season's episode guide for the list under the player. The Worker uses
+    TMDB when it has a key and TVMaze otherwise, so this works keyless.
+    `title` is what the keyless tier searches on, so always send it. */
+export async function listSeason(opts: {
+  tmdbId?: string | null;
+  title?: string | null;
+  imdbId?: string | null;
+  season?: number;
+}): Promise<TvSeasonPayload> {
+  const q = new URLSearchParams();
+  if (opts.tmdbId) q.set("tmdbId", String(opts.tmdbId));
+  if (opts.title) q.set("title", opts.title);
+  if (opts.imdbId) q.set("imdbId", opts.imdbId);
+  q.set("season", String(opts.season ?? 1));
+  return api.get<TvSeasonPayload>(`/tmdb/tv?${q.toString()}`);
+}

@@ -231,8 +231,12 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     movieRef.current = movie;
   }, [movie]);
 
-  const onPlayingPage =
-    movie != null && location.pathname === `/movie/${movie.movieId}`;
+  /* Synthetic catalog ids ("vaplayer:123") are addressed on the route with a
+     dash ("/movie/vaplayer-123"). Match the slug, otherwise an external title
+     is never "on its page" and its video gets shipped to the floating card
+     instead of staying in the stage on screen. */
+  const playingPath = `/movie/${String(movie?.movieId ?? "").replace(":", "-")}`;
+  const onPlayingPage = movie != null && location.pathname === playingPath;
 
   /* ------------------------------------------------------------ playback */
 
@@ -774,7 +778,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
               <button
                 type="button"
                 onClick={() => {
-                  navigate(`/movie/${movie.movieId}`);
+                  navigate(playingPath);
                   setModeState("inline");
                 }}
                 aria-label="Expand player"
