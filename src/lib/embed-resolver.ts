@@ -68,6 +68,47 @@ export async function resolveEmbedStream(
   );
 }
 
+export interface EmbedRaceResult {
+  /** The page that answered with a stream first, in completion order. */
+  win: { url: string; candidates: EmbedCandidate[] } | null;
+  /** Last error reported by the chains that did not answer. */
+  error: string;
+}
+
+/**
+ * Race every provider page at once and keep whichever answers first, so the
+ * viewer waits for the fastest provider instead of one chain after another.
+ * Settles as soon as a chain yields candidates; failures never hold it back,
+ * and a page whose chain is slow is simply dropped.
+ */
+export async function raceEmbedStreams(urls: string[]): Promise<EmbedRaceResult> {
+  const targets = urls.filter((u) => u && u.trim()).map((u) => u.trim());
+  if (!targets.length) return { win: null, error: "No provider to try." };
+  return new Promise<EmbedRaceResult>((resolve) => {
+    let pending = targets.length;
+    let settled = false;
+    let lastError = "";
+    for (const url of targets) {
+      resolveEmbedStream(url)
+        .then((r) => {
+          if (settled) return;
+          if (r.candidates?.length) {
+            settled = true;
+            resolve({ win: { url, candidates: r.candidates }, error: "" });
+          } else {
+            lastError = r.error || "No stream found behind this provider.";
+          }
+        })
+        .catch(() => {
+          lastError = "Resolver request failed.";
+        })
+        .finally(() => {
+          if (!settled && --pending === 0) resolve({ win: null, error: lastError });
+        });
+    }
+  });
+}
+
 /** Is this provider page actually alive?
  *
  *  Providers answer their own error pages for ids they do not carry (vidlink.pro

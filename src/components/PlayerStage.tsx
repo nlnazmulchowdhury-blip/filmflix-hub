@@ -5,7 +5,7 @@ import { vidboxEmbedUrl, vidapiEmbedUrl, nxshaEmbedUrl } from "@/lib/vaplayer";
 import {
   isEmbedUrl,
   probeEmbedPage,
-  resolveEmbedStream,
+  raceEmbedStreams,
   fetchEmbedQualities,
   fetchTitleDownloads,
   type EmbedCandidate,
@@ -273,6 +273,16 @@ export default function PlayerStage({
   const [embedLive, setEmbedLive] = useState<boolean | null>(null);
   /* Servers already found dead, so the walk never loops back onto one. */
   const deadEmbeds = useRef<Set<string>>(new Set());
+  /* The provider whose stream the race played: its tab may be selected after
+     the stream is running, and re-resolving that page would restart the film. */
+  const playedEmbedTarget = useRef<string>("");
+  /* Title+episode the provider race has already been fired for, so switching
+     servers afterwards only probes instead of racing the whole lineup again. */
+  const racedFor = useRef<string>("");
+
+  /* One race per title and episode: season/episode picks from the list under
+     the player change this, so each new episode gets every server asked again. */
+  const raceKey = `${movieId}|${season ?? 1}|${episode ?? 1}`;
 
   /* The provider iframe is visible for as long as an embed server is selected
      and no ad-free stream has been resolved — including while the resolver is
@@ -302,87 +312,137 @@ export default function PlayerStage({
   );
 
   /* A provider page is only as good as the stream we can pull out of it
-     server-side. The chain walks every ad-free source while the provider
-     player is already on screen, so a hit swaps to the clean stream and a
-     miss simply leaves the provider playing — no blank stage either way. */
-  const runEmbedResolve = useCallback(
-    async (url: string) => {
-      const target = url.trim();
-      if (!target) {
-        setEmbedStatus("failed");
-        setEmbedError("No embed URL yet — paste one above.");
-        return;
-      }
+     server-side. Every provider for the title is asked at once and whichever
+     answers first is what the viewer gets, while the provider player is
+     already on screen — a hit swaps to the clean stream, a miss leaves the
+     provider playing. A page the provider itself 500s stays hidden. */
+  const raceServers = useCallback(
+    async (
+      activeKey: string,
+      chains: { key: string; url: string }[],
+      pages: { key: string; url: string }[],
+    ) => {
       setEmbedStatus("resolving");
       setEmbedError("");
-      let lastError = "";
-      const chain = [
-        target,
-        ...[vidboxTarget, vidapiTarget, nxshaTarget].filter((u) => u && u !== target),
-      ];
-      for (const candidate of chain) {
-        try {
-          const r = await resolveEmbedStream(candidate);
-          if (r.candidates?.length) {
-            setEmbedCandidates(r.candidates);
-            setEmbedStatus("ready");
-            playEmbedCandidate(r.candidates[0]);
-            return;
-          }
-          lastError = r.error || "No stream found behind this provider.";
-        } catch {
-          lastError = "Resolver request failed.";
-        }
+
+      /* Ask for every provider's stream and check every provider page at the
+         same time: the fastest chain wins, and the page probes decide which
+         iframe to fall back on without waiting for each server in turn. */
+      const liveness = pages.map((p) =>
+        probeEmbedPage(p.url).then((live) => ({ ...p, live: live !== false })),
+      );
+
+      const race = await raceEmbedStreams(chains.map((c) => c.url));
+      if (race.win) {
+        const step = chains.find((c) => c.url === race.win?.url);
+        setEmbedCandidates(race.win.candidates);
+        setEmbedStatus("ready");
+        setEmbedLive(true);
+        /* The tab label follows the provider that actually answered. The
+           resolver effect lets that switch through without asking the same
+           page to resolve a second time, which would restart the movie. */
+        playedEmbedTarget.current = race.win.url;
+        if (step && step.key !== activeKey) setServer(step.key as typeof server);
+        playEmbedCandidate(race.win.candidates[0]);
+        return;
       }
-      /* Every ad-free chain came up empty — the provider iframe is all that is
-         left, and that is where the provider's own ads live. */
+
+      const answers = await Promise.all(liveness);
+      for (const a of answers) {
+        if (a.live) deadEmbeds.current.delete(a.key);
+        else deadEmbeds.current.add(a.key);
+      }
       setEmbedCandidates([]);
       setEmbedStatus("failed");
       setEmbedError(
-        `${lastError} No ad-free chain worked, so the provider player is shown instead.`,
+        `${race.error} No ad-free chain worked, so a provider player is shown instead.`,
       );
+
+      const mine = answers.find((a) => a.key === activeKey);
+      setEmbedLive(mine ? mine.live : true);
+      /* This provider has no page for the title — move to one that answers
+         instead of painting its error wall. */
+      if (mine && !mine.live) {
+        const next = answers.find(
+          (a) => a.live && a.key !== activeKey && !deadEmbeds.current.has(a.key),
+        );
+        if (next) setServer(next.key as typeof server);
+      }
     },
-    [playEmbedCandidate, vidboxTarget, vidapiTarget, nxshaTarget],
+    [playEmbedCandidate, server],
   );
 
-  /* An embed server (vidbox/vidapi) is showing: resolve its provider page to a
-     raw stream. Re-runs when the active server's target changes (switching
-     vidbox↔vidapi), clearing the previous server's candidates/stream first. */
+  /** The resolver panel's button: retry the page currently in the box. */
+  const runEmbedResolve = useCallback(
+    (url: string) => raceServers(server, [{ key: server, url }], [{ key: server, url }]),
+    [raceServers, server],
+  );
+
+  /* Every ad-free provider available for this title/episode, honouring the
+     servers an admin switched off. These are what the race asks in parallel —
+     the episode-only anime/drama providers are left out because their player
+     pages answer 200 for any TMDB id, so they can never be judged by a probe. */
+  const adFreeChains = () =>
+    [
+      { key: "vidbox", url: vidboxTarget },
+      { key: "vidapi", url: vidapiTarget },
+      { key: "nxsha", url: nxshaTarget },
+    ].filter((c) => c.url && !off(c.key)) as { key: string; url: string }[];
+
+  /* An embed server (vidbox/vidapi/nxsha) is showing: fire the whole provider
+     race for this title+episode. Switching servers or episodes re-runs it,
+     clearing the previous server's candidates/stream first; a server switch
+     that the race itself caused only re-probes, so it never loops. */
   useEffect(() => {
     if (!usingEmbed) return;
+    if (playedEmbedTarget.current === currentEmbedTarget) {
+      /* The race already plays a stream pulled from this provider — the label
+         moved here, the movie must not be re-resolved. */
+      playedEmbedTarget.current = "";
+      setEmbedUrl(currentEmbedTarget);
+      setEmbedLive(true);
+      return;
+    }
     setEmbedUrl(currentEmbedTarget);
-    setEmbedCandidates([]);
-    setEmbedError("");
-    setEmbedStream(null);
-    setEmbedLive(null);
     if (!currentEmbedTarget) {
       setEmbedLive(false);
       return;
     }
-    void runEmbedResolve(currentEmbedTarget);
-    /* Alongside the resolve: when the provider has no page for this title at
-       all, its iframe is an error wall, so walk on to the next server that
-       actually answers instead of painting it for the user. An unreachable
-       probe is not an answer — keep the server in that case. */
-    void probeEmbedPage(currentEmbedTarget).then((live) => {
-      if (live !== false) {
-        setEmbedLive(true);
-        return;
-      }
-      setEmbedLive(false);
-      deadEmbeds.current.add(server);
-      const next = servers
-        .map((s) => s.key)
-        .find(
-          (k) =>
-            k !== server &&
-            k !== "original" &&
-            !deadEmbeds.current.has(k),
-        );
-      if (next) setServer(next as typeof server);
-    });
+    const chains = adFreeChains();
+    const pages = [
+      ...chains,
+      ...(vidsrcUrl && !off("vidsrc") ? [{ key: "vidsrc", url: vidsrcUrl }] : []),
+    ];
+    if (racedFor.current === raceKey && !embedStream) {
+      /* Already raced for this title: only learn whether this page is up. */
+      void probeEmbedPage(currentEmbedTarget).then((live) =>
+        setEmbedLive(live !== false),
+      );
+      return;
+    }
+    racedFor.current = raceKey;
+    setEmbedCandidates([]);
+    setEmbedError("");
+    setEmbedStream(null);
+    setEmbedLive(null);
+    void raceServers(server, chains, pages);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usingEmbed, currentEmbedTarget]);
+  }, [usingEmbed, currentEmbedTarget, raceKey]);
+
+  /* An iframe-only server opened instead (VidSrc, or a server the admin
+     pinned): the ad-free providers are still worth asking, so the fastest one
+     that yields a stream takes the stage rather than leaving the viewer inside
+     a provider player that may not carry the title. A file this site hosts is
+     never disturbed — it already plays here. */
+  useEffect(() => {
+    if (usingEmbed || hasNativeSource) return;
+    if (racedFor.current === raceKey) return;
+    const chains = adFreeChains();
+    if (!chains.length) return;
+    racedFor.current = raceKey;
+    void raceServers(server, chains, chains);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usingEmbed, hasNativeSource, raceKey]);
 
   const selectServer = (key: string) => {
     const next:
@@ -869,9 +929,16 @@ export default function PlayerStage({
               type="button"
               onClick={() => setEmbedPanelOpen(true)}
               className="rounded-lg bg-black/55 px-2.5 py-1.5 text-xs text-white backdrop-blur-sm transition-colors hover:bg-black/75"
-              title="Try to play this title without the provider's ads"
+              title="Every provider is being tried at once — the first stream that answers plays here"
             >
-              Ad-free stream
+              {embedStatus === "resolving" ? (
+                <span className="flex items-center gap-1.5">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Checking all servers…
+                </span>
+              ) : (
+                "Ad-free stream"
+              )}
             </button>
             <div className="ml-auto flex items-center gap-1.5">
               <ServerSwitcher
