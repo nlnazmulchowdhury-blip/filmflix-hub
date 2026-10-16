@@ -68,6 +68,19 @@ export default function Landing() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
 
+  /* A catalog fetch that errors never resolves, and convex-react reports that
+     the same way as "still loading". After a grace period stop showing
+     skeletons so the search box still returns external hits. */
+  const [catalogStalled, setCatalogStalled] = useState(false);
+  useEffect(() => {
+    if (movies) {
+      setCatalogStalled(false);
+      return;
+    }
+    const t = setTimeout(() => setCatalogStalled(true), 8000);
+    return () => clearTimeout(t);
+  }, [movies]);
+
   /* -------- Category chips (auto-populated from the embed catalog) ------ */
   /* The embed source's own movie genres, so every chip has real movies
      behind it; picking one reloads the browse grid filtered to that genre. */
@@ -648,7 +661,7 @@ export default function Landing() {
           </div>
 
           {inResultsMode ? (
-            !movies ? (
+            !movies && !catalogStalled ? (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
                 {Array.from({ length: 16 }).map((_, i) => (
                   <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
