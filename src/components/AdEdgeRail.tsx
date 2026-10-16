@@ -2,26 +2,23 @@ import { useEffect, useState } from "react";
 import AdBanner from "@/components/AdBanner";
 import { AD_BANNERS } from "@/lib/ad-banners";
 
-/** Max units per rail — keeps the DOM bounded after many Load More clicks. */
-const MAX_UNITS = 20;
-/** Empty space left between two ads. Larger than a poster row, so only one
- *  ad per side is ever on screen and the movies keep the visual focus. */
-const SLOT_GAP = 520;
-/** Clearance below the sticky header before the first ad. */
-const TOP_OFFSET = 120;
-/** Margin that must be free beside the content before a rail is drawn. */
-const MIN_GUTTER = 176;
+/** Breathing room kept above/below the ad on short screens. */
+const VERTICAL_PADDING = 40;
 
 /**
- * Banner rails that live in the page's outer margins — beside the content
- * column, never over it. Ads are spaced a full screen apart and rendered
- * slightly faded until hovered, so they read as background furniture rather
- * than competition for the posters. The stack still spans the whole scroll
- * height, so Load More keeps filling the margins.
+ * Tall 160×600 skyscraper banners parked in the page's outer margins, beside
+ * the content column rather than over it.
+ *
+ * The rail is pinned to the vertical centre of the viewport instead of
+ * scrolling with the document: an ad that travels with the page keeps
+ * straddling the bottom edge, which reads as a half-cut poster. Centred, the
+ * whole creative is always on screen, and it scales down on short viewports
+ * so the tall art still fits end to end. It also stays faded until hovered,
+ * so the movie posters keep the viewer's attention.
  */
 export default function AdEdgeRail({ side }: { side: "left" | "right" }) {
   const [gutter, setGutter] = useState(0);
-  const [scrollH, setScrollH] = useState(0);
+  const [viewportH, setViewportH] = useState(0);
 
   useEffect(() => {
     const update = () => {
@@ -30,11 +27,11 @@ export default function AdEdgeRail({ side }: { side: "left" | "right" }) {
         const r = main.getBoundingClientRect();
         setGutter(Math.max(0, Math.min(r.left, window.innerWidth - r.right)));
       }
-      setScrollH(document.documentElement.scrollHeight);
+      setViewportH(window.innerHeight);
     };
     update();
     window.addEventListener("resize", update);
-    // Load More and lazy images change the page height; re-measure after paint.
+    // Load More reflows the page, which shifts the gutter the rails sit in.
     const obs = new ResizeObserver(update);
     obs.observe(document.body);
     return () => {
@@ -43,40 +40,33 @@ export default function AdEdgeRail({ side }: { side: "left" | "right" }) {
     };
   }, []);
 
-  const unit =
-    gutter >= AD_BANNERS.square.width + 16
-      ? AD_BANNERS.square
-      : gutter >= MIN_GUTTER
-        ? AD_BANNERS.halfpage
-        : null;
-  if (!unit) return null;
+  const unit = AD_BANNERS.skyscraper;
+  if (gutter < unit.width + 16) return null;
 
-  const slot = unit.height + SLOT_GAP;
-  const count = Math.min(
-    MAX_UNITS,
-    Math.max(1, Math.ceil((scrollH - TOP_OFFSET) / slot)),
+  // Shrink the whole card when the viewport is shorter than the unit.
+  const scale = Math.min(
+    1,
+    (viewportH - VERTICAL_PADDING) / (unit.height + 10),
   );
 
   return (
     <aside
       aria-hidden
-      className={`absolute z-30 ${side === "left" ? "left-2" : "right-2"}`}
-      style={{ top: TOP_OFFSET, width: unit.width }}
+      className={`fixed top-1/2 z-30 -translate-y-1/2 ${
+        side === "left" ? "left-2" : "right-2"
+      }`}
+      style={{ width: unit.width }}
     >
-      <div className="flex flex-col items-center" style={{ gap: SLOT_GAP }}>
-        {Array.from({ length: count }).map((_, i) => (
-          <div
-            key={i}
-            title="Advertisement"
-            className="relative rounded-xl border border-border/40 bg-card/50 opacity-70 shadow-sm transition-[opacity,filter] duration-300 hover:opacity-100 motion-reduce:transition-none"
-            style={{ width: unit.width, padding: 4 }}
-          >
-            <AdBanner {...unit} />
-            <span className="absolute -top-2 left-2 rounded-full border border-border/40 bg-background px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
-              Ad
-            </span>
-          </div>
-        ))}
+      <div style={{ transform: `scale(${scale})`, transformOrigin: "center" }}>
+        <div
+          title="Advertisement"
+          className="relative overflow-hidden rounded-2xl border border-border/40 bg-card/50 opacity-70 shadow-sm transition-opacity duration-300 hover:opacity-100 motion-reduce:transition-none"
+        >
+          <AdBanner {...unit} />
+          <span className="absolute left-2 top-2 rounded-full border border-border/40 bg-background/90 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
+            Ad
+          </span>
+        </div>
       </div>
     </aside>
   );
