@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
@@ -36,6 +36,9 @@ export interface SeasonOption {
   name: string;
   episodeCount: number;
 }
+
+/** Rows mounted per page (long-running shows list 100+ episodes per season). */
+const PAGE = 24;
 
 /** Runtime + first-air date, shown under the synopsis ("60m · 2013-09-12"). */
 function episodeMeta(row: EpisodeRow): string {
@@ -109,6 +112,9 @@ export default function EpisodeList({
   const [query, setQuery] = useState("");
   const [newest, setNewest] = useState(false);
   const [grid, setGrid] = useState(false);
+  /* Daily/talk shows come back with 100+ episodes per season; mount a page
+     of them at a time so the row list stays cheap to paint. */
+  const [limit, setLimit] = useState(PAGE);
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -119,8 +125,27 @@ export default function EpisodeList({
             r.title.toLowerCase().includes(q) ||
             (r.overview ?? "").toLowerCase().includes(q),
         );
-    return newest ? [...matched].reverse() : matched;
-  }, [rows, query, newest]);
+    const ordered = newest ? [...matched].reverse() : matched;
+    return ordered.slice(0, limit);
+  }, [rows, query, newest, limit]);
+
+  const totalMatched = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q
+      ? rows.filter(
+          (r) =>
+            r.title.toLowerCase().includes(q) ||
+            (r.overview ?? "").toLowerCase().includes(q),
+        ).length
+      : rows.length;
+  }, [rows, query]);
+
+  /* Reset paging when a different season/list arrives. Keyed on identity
+     fields, not the `rows` array itself: the parent rebuilds that array on
+     every render, which would wipe the user's "show more" as they play. */
+  useEffect(() => {
+    setLimit(PAGE);
+  }, [season, query, rows.length, rows[0]?.key]);
 
   return (
     <section aria-label="Episodes" className="space-y-3">
@@ -345,6 +370,17 @@ export default function EpisodeList({
             );
           })}
         </ul>
+      )}
+
+      {shown.length < totalMatched && (
+        <button
+          type="button"
+          onClick={() => setLimit((n) => n + PAGE)}
+          className="w-full rounded-xl border border-border/50 bg-card/60 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+        >
+          Show {Math.min(PAGE, totalMatched - shown.length)} more of {totalMatched}{" "}
+          episodes
+        </button>
       )}
     </section>
   );
