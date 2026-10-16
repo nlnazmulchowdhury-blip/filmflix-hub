@@ -62,8 +62,49 @@ function searchableText(m: {
   );
 }
 
-export default function Landing() {
-  const { signOut, isAuthenticated } = useAuth();
+/** A typeahead row: a title (or category) plus the small label beside it. */
+type Suggestion = { title: string; note?: string };
+
+/** Prefix matches first, then substring matches, shortest title first. */
+function rankSuggestions(term: string, pool: Suggestion[], cap = 8): Suggestion[] {
+  const needle = normalizeText(term);
+  if (!needle) return [];
+  const starts: Suggestion[] = [];
+  const contains: Suggestion[] = [];
+  for (const s of pool) {
+    const hay = normalizeText(s.title);
+    if (!hay) continue;
+    if (hay.startsWith(needle)) starts.push(s);
+    else if (hay.includes(needle)) contains.push(s);
+  }
+  const byLength = (a: Suggestion, b: Suggestion) => a.title.length - b.title.length;
+  const out: Suggestion[] = [];
+  const seen = new Set<string>();
+  for (const s of [...starts.sort(byLength), ...contains.sort(byLength)]) {
+    const key = normalizeText(s.title);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/** Bold the part of the suggestion the user has typed, the way YouTube does. */
+function highlightMatch(title: string, term: string) {
+  const idx = normalizeText(title).indexOf(normalizeText(term));
+  if (idx < 0 || !term.trim()) return title;
+  const end = idx + term.trim().length;
+  return (
+    <>
+      {title.slice(0, idx)}
+      <span className="font-semibold text-foreground">{title.slice(idx, end)}</span>
+      {title.slice(end)}
+    </>
+  );
+}
+
+export default function Landing() {  const { signOut, isAuthenticated } = useAuth();
   const movies = useQuery(api.movies.list);
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -75,6 +116,7 @@ export default function Landing() {
   const clearSearch = () => {
     setQuery("");
     setSearched("");
+    setSuggestOpen(false);
   };
 
   /* A catalog fetch that errors never resolves, and convex-react reports that
@@ -119,6 +161,89 @@ export default function Landing() {
   const [selectedProvider, setSelectedProvider] = useState<ProviderInfo | null>(null);
   const [rowExpanded, setRowExpanded] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
+
+  /* -------- Typeahead suggestions (YouTube-style) ---------------------- */
+  /* Titles we already have — hosted catalog, the loaded browse batch, the
+     category chips — rank instantly, then the keyless title search fills in
+     near matches the catalog doesn't hold. One lookup per typing pause, never
+     per keystroke, and none of it moves the grid: picking a row is the same as
+     typing that title and pressing Enter. */
+  const typed = query.trim();
+  const [remoteSuggests, setRemoteSuggests] = useState<Suggestion[]>([]);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [activeSuggest, setActiveSuggest] = useState(-1);
+
+  const knownSuggests = useMemo(
+    () =>
+      rankSuggestions(typed, [
+        ...(movies ?? []).map((m: any) => ({
+          title: m.title,
+          note: [m.year, m.kind === "series" ? "Series" : null]
+            .filter(Boolean)
+            .join(" · "),
+        })),
+        ...tmdbItems.map((t) => ({
+          title: t.title,
+          note: t.year ? String(t.year) : undefined,
+        })),
+        ...embedCategories.map((c) => ({ title: c.name, note: "Category" })),
+      ]),
+    [typed, movies, tmdbItems, embedCategories],
+  );
+
+  useEffect(() => {
+    /* `typed === searched` means the box holds a term that was already
+       submitted, so there is nothing being typed. */
+    if (typed.length < 2 || typed === searched) {
+      setRemoteSuggests([]);
+      setSuggestOpen(false);
+      return;
+    }
+    setSuggestOpen(true);
+    setActiveSuggest(-1);
+    let cancelled = false;
+    const t = setTimeout(() => {
+      searchExternal({ q: typed })
+        .then((hits) => {
+          if (cancelled) return;
+          setRemoteSuggests(
+            (hits ?? []).slice(0, 8).map((h: any) => ({
+              title: h.title,
+              note: h.year
+                ? `${h.year}${h.kind === "series" ? " · Series" : ""}`
+                : undefined,
+            })),
+          );
+        })
+        .catch(() => {
+          if (!cancelled) setRemoteSuggests([]);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [typed, searched, searchExternal]);
+
+  const suggestions = useMemo(() => {
+    const out: Suggestion[] = [];
+    const seen = new Set<string>();
+    for (const s of [...knownSuggests, ...remoteSuggests]) {
+      const key = normalizeText(s.title);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(s);
+      if (out.length >= 8) break;
+    }
+    return out;
+  }, [knownSuggests, remoteSuggests]);
+
+  const applySuggestion = (title: string) => {
+    setQuery(title);
+    setSearched(title);
+    setSuggestOpen(false);
+    setActiveSuggest(-1);
+  };
 
   const loadTmdb = useCallback(
     async (batch: number, providerId: string | null, genreId: number | null) => {
@@ -495,9 +620,29 @@ export default function Landing() {
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (!suggestOpen || suggestions.length === 0) return;
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setActiveSuggest((i) => Math.min(i + 1, suggestions.length - 1));
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setActiveSuggest((i) => Math.max(i - 1, -1));
+                  } else if (e.key === "Escape") {
+                    setSuggestOpen(false);
+                  } else if (e.key === "Enter" && activeSuggest >= 0) {
+                    e.preventDefault();
+                    applySuggestion(suggestions[activeSuggest].title);
+                  }
+                }}
+                onBlur={() => setSuggestOpen(false)}
                 placeholder="Search by title, category, year…"
                 className="h-11 rounded-xl bg-card/80 pl-10 pr-10 text-base"
                 aria-label="Search movies"
+                role="combobox"
+                aria-expanded={suggestOpen && suggestions.length > 0}
+                aria-controls="search-suggestions"
+                autoComplete="off"
               />
               {query && (
                 <button
@@ -508,6 +653,38 @@ export default function Landing() {
                 >
                   <X className="size-4" />
                 </button>
+              )}
+              {suggestOpen && suggestions.length > 0 && (
+                <ul
+                  id="search-suggestions"
+                  role="listbox"
+                  aria-label="Search suggestions"
+                  className="absolute inset-x-0 top-[calc(100%+6px)] z-40 max-h-72 overflow-y-auto rounded-xl border border-border/60 bg-background/95 py-1 shadow-xl backdrop-blur"
+                >
+                  {suggestions.map((s, i) => (
+                    <li key={`${s.title}-${i}`} role="option" aria-selected={i === activeSuggest}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseEnter={() => setActiveSuggest(i)}
+                        onClick={() => applySuggestion(s.title)}
+                        className={`flex w-full items-baseline gap-2.5 px-3.5 py-2 text-left text-sm transition-colors ${
+                          i === activeSuggest
+                            ? "bg-secondary text-foreground"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        <Search className="size-3.5 shrink-0 translate-y-0.5" />
+                        <span className="min-w-0 flex-1 truncate">
+                          {highlightMatch(s.title, typed)}
+                        </span>
+                        {s.note && (
+                          <span className="shrink-0 text-xs opacity-70">{s.note}</span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
             {/* Results only move on submit (Enter or this button), so typing a
