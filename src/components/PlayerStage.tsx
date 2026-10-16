@@ -239,9 +239,14 @@ export default function PlayerStage({
   >("idle");
   const [embedCandidates, setEmbedCandidates] = useState<EmbedCandidate[]>([]);
   const [embedError, setEmbedError] = useState("");
-  const [embedIframe, setEmbedIframe] = useState(false);
   const [embedStream, setEmbedStream] = useState<string | null>(null);
   const [embedPanelOpen, setEmbedPanelOpen] = useState(false);
+
+  /* The provider iframe is visible for as long as an embed server is selected
+     and no ad-free stream has been resolved — including while the resolver is
+     still running. Our own player has nothing to play in that window, and a
+     black stage with a dead play button reads as a broken site. */
+  const embedIframe = usingEmbed && !embedStream;
 
   /* -------- Download menu: this site's files + the resolved stream's
       resolutions (asked from the Worker when the menu opens). -------- */
@@ -257,15 +262,15 @@ export default function PlayerStage({
     (c: EmbedCandidate) => {
       setEmbedStream(c.url);
       setEmbedPanelOpen(false);
-      setEmbedIframe(false);
       start({ movieId, title, videoUrl: c.url, posterUrl, backdropUrl }, true);
     },
     [start, movieId, title, posterUrl, backdropUrl],
   );
 
   /* A provider page is only as good as the stream we can pull out of it
-     server-side, so a resolve walks every ad-free chain before the
-     ad-bearing provider iframe is shown. */
+     server-side. The chain walks every ad-free source while the provider
+     player is already on screen, so a hit swaps to the clean stream and a
+     miss simply leaves the provider playing — no blank stage either way. */
   const runEmbedResolve = useCallback(
     async (url: string) => {
       const target = url.trim();
@@ -276,7 +281,6 @@ export default function PlayerStage({
       }
       setEmbedStatus("resolving");
       setEmbedError("");
-      setEmbedIframe(false);
       let lastError = "";
       const chain = [target, ...[vidboxTarget, vidapiTarget].filter((u) => u && u !== target)];
       for (const candidate of chain) {
@@ -300,7 +304,6 @@ export default function PlayerStage({
       setEmbedError(
         `${lastError} No ad-free chain worked, so the provider player is shown instead.`,
       );
-      setEmbedIframe(true);
     },
     [playEmbedCandidate, vidboxTarget, vidapiTarget],
   );
@@ -313,7 +316,6 @@ export default function PlayerStage({
     setEmbedUrl(currentEmbedTarget);
     setEmbedCandidates([]);
     setEmbedError("");
-    setEmbedIframe(false);
     setEmbedStream(null);
     if (currentEmbedTarget) void runEmbedResolve(currentEmbedTarget);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -340,9 +342,9 @@ export default function PlayerStage({
       );
     }
     setServer(next);
-    /* Opening the panel is enough for the raw-stream servers; the resolve
-       effect fires when `next` changes the active embed target. */
-    if (next === "vidbox" || next === "vidapi") setEmbedPanelOpen(true);
+    /* Embed servers now show the provider player straight away and resolve an
+       ad-free stream in the background; the resolver panel stays behind the
+       "Ad-free stream" button in its top strip. */
     bumpControlsActivity();
   };
 
@@ -350,12 +352,12 @@ export default function PlayerStage({
      pause the native file so the two never output audio at once. */
   useEffect(() => {
     if (
-      (usingVidSrc || usingAutoembed || (usingEmbed && embedIframe)) &&
+      (usingVidSrc || usingAutoembed || embedIframe) &&
       playing
     )
       controls.pause();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usingVidSrc, usingAutoembed, usingEmbed, embedIframe, playing]);
+  }, [usingVidSrc, usingAutoembed, embedIframe, playing]);
 
   const isHost = isActive && mode === "inline";
 
@@ -778,9 +780,9 @@ export default function PlayerStage({
         </div>
       )}
 
-      {/* Embed resolver fallback — provider iframe (with its ads) when no
-          raw stream could be extracted server-side. */}
-      {usingEmbed && embedIframe && (embedUrl || embedSource) && (
+      {/* Embed servers: the provider player, shown from the first frame and
+          hidden again only if an ad-free raw stream was extracted. */}
+      {embedIframe && (embedUrl || embedSource) && (
         <div className="absolute inset-0 z-[60] bg-black">
           <iframe
             src={(embedUrl || embedSource) as string}
@@ -791,6 +793,14 @@ export default function PlayerStage({
             referrerPolicy="origin"
           />
           <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-1.5 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-2 pb-8 pt-2 sm:px-3">
+            <button
+              type="button"
+              onClick={() => setEmbedPanelOpen(true)}
+              className="rounded-lg bg-black/55 px-2.5 py-1.5 text-xs text-white backdrop-blur-sm transition-colors hover:bg-black/75"
+              title="Try to play this title without the provider's ads"
+            >
+              Ad-free stream
+            </button>
             <div className="ml-auto flex items-center gap-1.5">
               <ServerSwitcher
                 servers={servers}
@@ -827,7 +837,7 @@ export default function PlayerStage({
       )}
 
       {/* Embed resolver panel — paste/resolve an embed URL and pick a stream. */}
-      {usingEmbed && embedPanelOpen && !embedIframe && (
+      {usingEmbed && embedPanelOpen && (
         <div className="absolute inset-0 z-[65] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-xl border border-border/60 bg-card/95 p-4 text-sm text-card-foreground shadow-2xl">
             <div className="mb-1 flex items-center justify-between gap-2">
@@ -909,13 +919,10 @@ export default function PlayerStage({
             {(embedUrl || embedSource) && (
               <button
                 type="button"
-                onClick={() => {
-                  setEmbedIframe(true);
-                  setEmbedPanelOpen(false);
-                }}
+                onClick={() => setEmbedPanelOpen(false)}
                 className="mt-3 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
               >
-                Show provider iframe instead (has ads)
+                Back to the provider player
               </button>
             )}
           </div>

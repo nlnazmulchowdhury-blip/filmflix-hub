@@ -28,6 +28,7 @@ import {
   type PlayerRotation,
 } from "./mini-player-context";
 import { convexSiteUrl, isHlsUrl, playableVideoUrl } from "@/lib/video-url";
+import { isEmbedUrl } from "@/lib/embed-resolver";
 import {
   applyToken,
   attachTokenRefresh,
@@ -642,7 +643,14 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
         createPortal(
           <VideoSurface
             videoRef={videoRef}
-            src={playableVideoUrl(movie.videoUrl, convexSiteUrl(), movie)}
+            /* A provider player page (vidlink.pro, vidapi.ru, …) is not media —
+               loading it here only earns a decode error, and the provider's own
+               iframe is what actually plays. Keep our element empty for those. */
+            src={
+              isEmbedUrl(movie.videoUrl)
+                ? ""
+                : playableVideoUrl(movie.videoUrl, convexSiteUrl(), movie)
+            }
             onSourceChanged={destroyHls}
             subtitles={movie.subtitles ?? []}
             activeSubtitle={activeSubtitle}
