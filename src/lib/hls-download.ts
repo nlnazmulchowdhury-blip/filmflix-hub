@@ -20,8 +20,31 @@ import { API_BASE } from "@/lib/api";
  *  `Uint8Array<ArrayBufferLike>` in this TS lib configuration. */
 type Bytes = Uint8Array<ArrayBuffer>;
 
+/** One link of our own byte pipe → the upstream URL it carries, or "".
+ *  A resolver can hand back a stream that is already piped (its CDN only answers
+ *  the provider's referer), and every helper below has to see through that
+ *  wrapper instead of wrapping it a second time. */
+export function pipedTarget(url: string): string {
+  try {
+    const u = new URL(url, window.location.href);
+    if (!u.pathname.endsWith("/embed/proxy")) return "";
+    return u.searchParams.get("url") ?? "";
+  } catch {
+    return "";
+  }
+}
+
 /** Direct, header-free link: usable by the browser, by IDM, or by curl. */
 export function proxyUrl(url: string, referer?: string, name?: string): string {
+  const inner = pipedTarget(url);
+  if (inner) {
+    /* Already piped — it knows its own referer, and pointing the pipe at itself
+       would send the Worker to fetch its own hostname. */
+    if (!name) return url;
+    const u = new URL(url, window.location.href);
+    u.searchParams.set("name", name);
+    return u.toString();
+  }
   const q = new URLSearchParams({ url });
   if (referer) q.set("ref", referer);
   if (name) q.set("name", name);
@@ -325,5 +348,6 @@ export function saveBlob(blob: Blob, filename: string): void {
 }
 
 export function isHlsLink(url: string): boolean {
-  return /\.m3u8(\?|#|$)/i.test(url);
+  /* A piped stream's own URL ends in the pipe's path, so ask what it proxies. */
+  return /\.m3u8(\?|#|$)/i.test(pipedTarget(url) || url);
 }

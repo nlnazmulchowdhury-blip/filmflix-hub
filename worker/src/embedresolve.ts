@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "./index";
+import { NXSHA_HOST, nxshaStreams, type NxshaTitle } from "./nxsha";
 
 /**
  * Embed → HLS resolver ("Server 3").
@@ -292,7 +293,7 @@ function findBrand(bytes: Uint8Array, brand: string): boolean {
   return false;
 }
 
-async function probeStream(rawUrl: string): Promise<StreamProbe> {
+async function probeStream(rawUrl: string, referer?: string): Promise<StreamProbe> {
   const dead: StreamProbe = { ok: false, kind: "dead", codec: "unknown", cors: false };
   const url = safeUrl(rawUrl);
   if (!url) return dead;
@@ -304,7 +305,10 @@ async function probeStream(rawUrl: string): Promise<StreamProbe> {
       signal: ctrl.signal,
       headers: {
         "User-Agent": BROWSER_UA,
-        Referer: url.origin + "/",
+        /* A CDN that gates on the provider's page must be probed with that
+           page's referer, or it answers 403 and we write off a stream the
+           pipe would have served without trouble. */
+        Referer: referer ?? url.origin + "/",
         Origin: url.origin,
         Accept: "*/*",
         Range: `bytes=0-${PROBE_HEAD_BYTES - 1}`,
@@ -579,6 +583,71 @@ async function vixsrcPlaylist(
   return { url: playlist.href, error: "" };
 }
 
+/* ---------------- nxsha (its API only speaks an encrypted query) ------------- */
+
+/** nxsha's title page → the ids its handshake wants, or null for any other host.
+ *  Its pages are `/embed/movie/{tmdb}` and `/embed/tv/{tmdb}/{season}/{episode}`
+ *  (the `/watch/` spelling is the same player reached from the site itself). */
+function nxshaTitleOf(raw: string): NxshaTitle | null {
+  const u = safeUrl(raw);
+  if (!u || u.hostname.toLowerCase() !== NXSHA_HOST) return null;
+  const seg = u.pathname.split("/").filter(Boolean);
+  while (seg[0] === "embed" || seg[0] === "watch") seg.shift();
+  const kind = seg.shift();
+  const id = (seg.shift() ?? "").trim();
+  if (!id) return null;
+  const numeric = /^\d+$/.test(id);
+  const imdb = /^tt\d+$/i.test(id) ? id : "";
+  if (kind === "movie" && (numeric || imdb))
+    return { tmdbId: numeric ? id : "", imdbId: imdb, type: "movie" };
+  if (kind === "tv" && (numeric || imdb)) {
+    const num = (s?: string) => (s && /^\d+$/.test(s) ? Number(s) : undefined);
+    return {
+      tmdbId: numeric ? id : "",
+      imdbId: imdb,
+      type: "tv",
+      season: num(seg[0]) ?? 1,
+      episode: num(seg[1]) ?? 1,
+    };
+  }
+  return null;
+}
+
+/** A byte-pipe link to one upstream resource, rewritten on the way out. */
+function pipeUrl(target: string, referer: string, self: string): string {
+  const q = new URLSearchParams({ url: target, ref: referer, rewrite: "1" });
+  return `${self}?${q.toString()}`;
+}
+
+/** Re-wrap every URI in an HLS playlist so the viewer never has to face the
+ *  provider's CDN itself — its gate is a referer a browser on our site cannot
+ *  claim. Both the manifests and the media they name come back through us. */
+function rewritePlaylist(
+  text: string,
+  base: URL,
+  referer: string,
+  self: string,
+): string {
+  const wrap = (uri: string): string => {
+    const abs = safeUrl(new URL(uri.trim(), base).href)?.href;
+    /* Already piped, or not a fetchable resource at all: leave the line alone
+       rather than hand back a URI the player cannot resolve. */
+    if (!abs || abs.startsWith(self)) return uri;
+    return pipeUrl(abs, referer, self);
+  };
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      if (!line) return line;
+      if (line.startsWith("#"))
+        return /URI="[^"]+"/.test(line)
+          ? line.replace(/URI="([^"]+)"/g, (_m, u: string) => `URI="${wrap(u)}"`)
+          : line;
+      return wrap(line);
+    })
+    .join("\n");
+}
+
 embedResolveRoutes.get("/stream", async (c) => {
   const url = c.req.query("url") ?? "";
   if (!safeUrl(url))
@@ -600,6 +669,44 @@ embedResolveRoutes.get("/stream", async (c) => {
         error: candidates.length
           ? undefined
           : "vixsrc's stream refused this player.",
+      });
+    }
+
+    /* nxsha likewise builds its playlist URL inside an encrypted handshake, and
+       its CDN only answers requests carrying *its* referer — which a browser on
+       our site cannot send. So its sources come back piped through our own byte
+       pipe with every URI in the manifest rewritten to the same pipe: the viewer
+       gets plain HLS it can decode (dubs and all) while only we talk to it. */
+    const nxsha = nxshaTitleOf(url);
+    if (nxsha) {
+      const sources = await nxshaStreams(nxsha, fetchPage);
+      if (!sources.length)
+        return c.json({
+          candidates: [],
+          hops: [url],
+          error: "nxsha does not carry a playable stream for this title.",
+        });
+      const self = `${new URL(c.req.url).origin}/embed/proxy`;
+      /* Validate upstream, not our own pipe: a Worker may not call itself back
+         (loopback is off-limits locally, and in prod it would spend a second
+         subrequest on nothing), while the referer gate means only the real
+         upstream URL can prove the stream answers. */
+      const candidates = await rankPlayable(
+        sources.slice(0, 4).map((s) => ({
+          c: {
+            url: pipeUrl(s.url, s.referer, self),
+            via: `nxsha · ${s.provider}`,
+            quality: s.quality,
+          },
+          p: probeStream(s.url, s.referer),
+        })),
+      );
+      return c.json({
+        candidates: candidates.map((x) => ({ ...x, cors: true })),
+        hops: [url, ...sources.map((s) => s.url)],
+        error: candidates.length
+          ? undefined
+          : "nxsha's streams refused this player.",
       });
     }
 
@@ -677,31 +784,62 @@ function parseMasterPlaylist(text: string, base: URL): QualityEntry[] {
 }
 
 embedResolveRoutes.get("/qualities", async (c) => {
-  const url = c.req.query("url") ?? "";
-  if (!safeUrl(url))
-    return c.json({ kind: "empty", entries: [], error: "invalid url" }, 400);
+  const raw = c.req.query("url") ?? "";
+  /* A stream that reached the browser as one of our own byte-pipe links has to
+     be read through that pipe's *upstream*: its CDN answers only the provider's
+     referer, so fetching the pipe would mean a Worker calling itself back and
+     fetching the provider raw would forget the header. Unwrap both halves —
+     but only when the link really is our pipe, so a provider URL that merely
+     carries a `url` parameter cannot aim this fetch elsewhere — and hand the
+     resolutions back piped, so a download manager needs no headers of its own. */
+  let outer: URL | null = null;
   try {
-    const res = await fetchPage(url, new URL(url).origin);
-    const finalUrl = safeUrl(res.url)?.href ?? url;
+    outer = new URL(raw);
+  } catch {
+    return c.json({ kind: "empty", entries: [], error: "invalid url" }, 400);
+  }
+  const ours =
+    outer.pathname.endsWith("/embed/proxy") &&
+    outer.hostname === new URL(c.req.url).hostname;
+  const inner = ours ? safeUrl(outer.searchParams.get("url") ?? "") : null;
+  const target = inner?.href ?? safeUrl(raw)?.href;
+  if (!target) return c.json({ kind: "empty", entries: [], error: "invalid url" }, 400);
+  const referer = inner
+    ? outer.searchParams.get("ref") || `${inner.origin}/`
+    : `${new URL(target).origin}/`;
+  const self = `${new URL(c.req.url).origin}/embed/proxy`;
+  const wrap = (u: string) => (inner ? pipeUrl(u, referer, self) : u);
+  try {
+    const res = await fetchPage(target, referer);
+    const finalUrl = safeUrl(res.url)?.href ?? target;
     const ctype = res.headers.get("content-type") ?? "";
     const text = await res.text();
 
     if (ctype.includes("mpegurl") || text.trimStart().startsWith("#EXTM3U")) {
-      const entries = parseMasterPlaylist(text, new URL(finalUrl));
+      const entries = parseMasterPlaylist(text, new URL(finalUrl)).map((e) => ({
+        ...e,
+        url: wrap(e.url),
+      }));
       if (entries.length) return c.json({ kind: "hls", entries });
       // Media playlist — no variants, but the playlist itself is the stream.
-      return c.json({ kind: "hls", entries: [{ label: "Original", url: finalUrl }] });
+      return c.json({
+        kind: "hls",
+        entries: [{ label: "Original", url: wrap(finalUrl) }],
+      });
     }
     if (
       ctype.startsWith("video/") ||
-      /\.(mp4|mkv|webm|mov|m4v)(\?|$)/i.test(url)
+      /\.(mp4|mkv|webm|mov|m4v)(\?|$)/i.test(target)
     )
-      return c.json({ kind: "direct", entries: [{ label: "Original", url: finalUrl }] });
+      return c.json({
+        kind: "direct",
+        entries: [{ label: "Original", url: wrap(finalUrl) }],
+      });
 
     const found = extractM3u8(text, new URL(finalUrl));
     return c.json({
       kind: found.length ? "hls" : "empty",
-      entries: found.slice(0, 8).map((f) => ({ label: "Stream", url: f.url })),
+      entries: found.slice(0, 8).map((f) => ({ label: "Stream", url: wrap(f.url) })),
     });
   } catch (err) {
     console.error("quality probe failed", err);
@@ -877,23 +1015,49 @@ embedResolveRoutes.get("/proxy", async (c) => {
   const url = c.req.query("url") ?? "";
   const safe = safeUrl(url);
   if (!safe) return c.json({ error: "invalid url" }, 400);
-  const range = c.req.header("range");
+  /* `rewrite=1` turns the pipe into a playable stream: the fetched manifest has
+     every URI it names re-pointed at this same endpoint, so a provider whose
+     CDN only answers its own referer can still be watched in our player. */
+  const rewrite = c.req.query("rewrite") === "1";
+  const referer = c.req.query("ref") ?? safe.origin + "/";
+  /* A manifest is never seeked, and forwarding the player's Range probe would
+     make the upstream answer 4xx — which this route would report as a dead
+     stream — so range requests are left to media. */
+  const range = rewrite ? null : c.req.header("range");
   try {
     const res = await fetch(safe.href, {
       redirect: "follow",
       headers: {
         "User-Agent": BROWSER_UA,
-        Referer: c.req.query("ref") ?? safe.origin + "/",
+        Referer: referer,
         Origin: safe.origin,
         Accept: "*/*",
         ...(range ? { Range: range } : {}),
       },
     });
+    const ctype = (res.headers.get("content-type") ?? "").toLowerCase();
+    if (
+      rewrite &&
+      res.ok &&
+      res.body &&
+      (ctype.includes("mpegurl") || ctype.includes("mpeg"))
+    ) {
+      const text = await res.text();
+      const base = safeUrl(res.url)?.href ?? safe.href;
+      const self = `${new URL(c.req.url).origin}/embed/proxy`;
+      return new Response(rewritePlaylist(text, new URL(base), referer, self), {
+        status: 200,
+        headers: {
+          "Content-Type": res.headers.get("content-type") ?? "application/vnd.apple.mpegurl",
+          /* Its variant links carry their own short-lived tokens. */
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+        },
+      });
+    }
     if (!res.ok || !res.body)
       return new Response(null, { status: res.status || 502 });
     const headers: Record<string, string> = {
-      "Content-Type":
-        res.headers.get("content-type") ?? "application/octet-stream",
+      "Content-Type": res.headers.get("content-type") ?? "application/octet-stream",
       "Accept-Ranges": "bytes",
       "Cache-Control": "public, max-age=3600",
     };
