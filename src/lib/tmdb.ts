@@ -101,6 +101,10 @@ export interface TvEpisode {
 
 export interface TvSeasonPayload {
   tmdbId: string;
+  /** The show's other id, when the guide could name it: an IMDb-only title
+      reaches the ad-free providers through this, and a TMDB-only one through
+      `tmdbId`. */
+  imdbId?: string | null;
   title: string;
   season: number;
   seasonName: string;

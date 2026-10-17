@@ -1207,6 +1207,21 @@ export default function PlayerStage({
                 </button>
               </div>
             )}
+            {/* The provider confirmed the title, so the framed player does have
+                it — but a cross-origin iframe cannot be started from here (its
+                own autoplay is not honoured and we may not reach inside it), so
+                the viewer needs to know the play button is on that side. */}
+            {embedStatus === "failed" && embedCarried && (
+              <div className="mt-1.5">
+                <p className="inline-flex max-w-full truncate rounded-lg bg-black/55 px-2.5 py-1 text-[11px] text-white/80 backdrop-blur-sm">
+                  <span className="hidden sm:inline">
+                    {embedHost} has this title — press play inside its player to
+                    start.
+                  </span>
+                  <span className="sm:hidden">Press play inside the player.</span>
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

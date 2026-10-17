@@ -16,6 +16,8 @@
  *
  *  All three accept TMDB numeric ids for movies and TV. */
 
+import { vidsrcEmbedUrl } from "./vidsrc";
+
 const VIDBOX_BASE = "https://vidlink.pro";
 const VIXSRC_BASE = "https://vixsrc.to";
 const NXSHA_BASE = "https://web.nxsha.app";
@@ -61,6 +63,28 @@ export function vixsrcEmbedUrl(target: EmbedTarget): string {
 
 /** Back-compat alias: catalog cards still carry a vidlink.pro (vidbox) URL. */
 export const vaplayerEmbedUrl = vidboxEmbedUrl;
+
+/** The provider page for one episode, built from whichever id this title has.
+ *
+ *  vidlink.pro and vixsrc refuse an IMDb `tt…` page outright, so they only come
+ *  first when the numeric TMDB id is actually known; nxsha's tv route takes
+ *  either (the Worker reads the number back off its page), and VidSrc is the
+ *  last page that still plays the episode — ad-supported, but the alternative
+ *  is the episode pick doing nothing at all. */
+export function episodeEmbedUrl(target: EmbedTarget): string {
+  return (
+    vidboxEmbedUrl(target) ||
+    nxshaEmbedUrl(target) ||
+    vidsrcEmbedUrl({
+      imdbId: target.imdbId ?? null,
+      tmdbId: target.tmdbId == null ? null : String(target.tmdbId),
+      kind: target.kind,
+      season: target.season,
+      episode: target.episode,
+    }) ||
+    ""
+  );
+}
 
 /** nxsha server — web.nxsha.app, a multi-source player (it picks between
  *  several upstream hosts itself and embeds without frame blocking).

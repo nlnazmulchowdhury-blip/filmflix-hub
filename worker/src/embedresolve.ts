@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "./index";
-import { NXSHA_HOST, nxshaStreams, type NxshaTitle } from "./nxsha";
+import { NXSHA_HOST, nxshaStreams, nxshaTmdbOf, type NxshaTitle } from "./nxsha";
 
 /**
  * Embed → HLS resolver ("Server 3").
@@ -679,6 +679,10 @@ embedResolveRoutes.get("/stream", async (c) => {
        gets plain HLS it can decode (dubs and all) while only we talk to it. */
     const nxsha = nxshaTitleOf(url);
     if (nxsha) {
+      /* Reached by IMDb id (a VidSrc link, an admin row with no TMDB id): its
+         API needs the number, so read it back off the page it just rendered. */
+      if (!nxsha.tmdbId && nxsha.imdbId)
+        nxsha.tmdbId = await nxshaTmdbOf(url, fetchPage);
       const sources = await nxshaStreams(nxsha, fetchPage);
       if (!sources.length)
         return c.json({

@@ -15,6 +15,7 @@ import { useMiniPlayer } from "@/components/mini-player-context";
 import {
   recallExternalHint,
   rememberExternalHint,
+  episodeEmbedUrl,
   vaplayerEmbedUrl,
 } from "@/lib/vaplayer";
 import { fetchTitleDownloads } from "@/lib/embed-resolver";
@@ -376,17 +377,27 @@ export default function MovieDetail() {
          key is configured, TVMaze keyless today). Those rows carry no file:
          picking one re-points the embed server at that season + episode. */
   const showTitle: string = externalMovie?.title || "";
+
+  const [guide, setGuide] = useState<TvSeasonPayload | null>(null);
+  const [guideLoading, setGuideLoading] = useState(false);
+
+  /* The guide knows both ids for the show even when this page arrived with
+     only one (a VidSrc link, or an admin row with no tmdbId) — and the ad-free
+     providers need the numeric TMDB one, so the ids travel back out of it. */
+  const guideTmdbId = /^\d+$/.test(String(guide?.tmdbId ?? ""))
+    ? (guide?.tmdbId as string)
+    : null;
   const seriesTmdbId: string | null =
-    vaplayerId ?? ((movie as any)?.tmdbId as string | undefined) ?? null;
+    vaplayerId ?? ((movie as any)?.tmdbId as string | undefined) ?? guideTmdbId ?? null;
   const seriesImdbId: string | null =
-    vidsrcImdbId ?? ((movie as any)?.imdbId as string | undefined) ?? null;
+    vidsrcImdbId ??
+    ((movie as any)?.imdbId as string | undefined) ??
+    (guide?.imdbId as string | undefined) ??
+    null;
   const isSeries = externalMovie?.kind === "series";
   const localEpisodes = ((movie as any)?.episodes ?? []) as any[];
   const hasLocalEpisodes = localEpisodes.length > 0;
   const useGuide = isSeries && !hasLocalEpisodes;
-
-  const [guide, setGuide] = useState<TvSeasonPayload | null>(null);
-  const [guideLoading, setGuideLoading] = useState(false);
 
   useEffect(() => {
     if (!useGuide || (!seriesTmdbId && !showTitle)) {
@@ -444,9 +455,10 @@ export default function MovieDetail() {
      swaps the episode: PlayerStage feeds it to the embed resolver and the
      provider iframe. */
   const episodeEmbed =
-    useGuide && seriesTmdbId
-      ? vaplayerEmbedUrl({
+    useGuide && (seriesTmdbId || seriesImdbId)
+      ? episodeEmbedUrl({
           tmdbId: seriesTmdbId,
+          imdbId: seriesImdbId,
           kind: "series",
           season,
           episode,
@@ -480,8 +492,9 @@ export default function MovieDetail() {
       );
       return;
     }
-    const url = vaplayerEmbedUrl({
+    const url = episodeEmbedUrl({
       tmdbId: seriesTmdbId,
+      imdbId: seriesImdbId,
       kind: "series",
       season,
       episode: row.episode,
@@ -594,7 +607,10 @@ export default function MovieDetail() {
               posterUrl={externalMovie.posterUrl}
               backdropUrl={externalMovie.backdropUrl}
               imdbId={(isVidSrc ? vidsrcImdbId : (externalMovie as any).imdbId) || undefined}
-              tmdbId={!isVidSrc ? (externalMovie as any).tmdbId : undefined}
+              /* The guide's TMDB id still counts: VidSrc keeps the IMDb id it
+                 prefers, but the ad-free providers can only be asked with the
+                 numeric one, and this is where a deep link learns it. */
+              tmdbId={((externalMovie as any).tmdbId as string) || guideTmdbId || undefined}
               kind={(isVidSrc ? (externalState.kind || "movie") : (externalMovie as any).kind) as any}
               season={season}
               episode={episode}

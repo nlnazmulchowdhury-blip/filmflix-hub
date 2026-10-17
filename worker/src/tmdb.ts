@@ -705,6 +705,9 @@ interface TvEpisodeInfo {
 
 interface TvSeasonResult {
   tmdbId: string;
+  /** The other id for this show, so a guide reached by one provider id can
+   *  still be played through a provider that needs the other. */
+  imdbId?: string | null;
   title: string;
   season: number;
   seasonName: string;
@@ -757,6 +760,7 @@ async function tmdbSeason(
     if (!episodes.length) return null;
     const value: TvSeasonResult = {
       tmdbId,
+      imdbId: show.external_ids?.imdb_id ?? null,
       title: show.name || "",
       season,
       seasonName: sea.name || `Season ${season}`,
@@ -777,7 +781,7 @@ const TVMAZE = "https://api.tvmaze.com";
 interface TvmazeShow {
   id: number;
   name?: string;
-  externals?: { imdb?: string | null };
+  externals?: { imdb?: string | null; tmdb?: number | null };
 }
 
 interface TvmazeEpisode {
@@ -891,8 +895,13 @@ async function tvmazeSeason(
     }));
 
   if (!episodes.length) return null;
+  /* TVMaze carries the TMDB id in `externals`, and handing it back is what lets
+     an IMDb-only title (a VidSrc link, an admin row with no tmdbId) reach the
+     ad-free providers: vidlink.pro, vixsrc and nxsha all key off the numeric
+     TMDB id, so without it the episode list under the player has no source. */
   return {
-    tmdbId,
+    tmdbId: show.externals?.tmdb ? String(show.externals.tmdb) : tmdbId,
+    imdbId: show.externals?.imdb ?? imdbId ?? null,
     title: (show.name || q).trim(),
     season: ordinal,
     seasonName: `Season ${ordinal}`,

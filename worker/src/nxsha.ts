@@ -23,11 +23,18 @@ export const NXSHA_BASE = `https://${NXSHA_HOST}`;
 const NXSHA_PASSPHRASE =
   "f4488ab4da401203d23baa129fc546153898162524635d6776826d0c867ccaa3";
 
-/** Scrapers worth asking, best first. These are the ones verified to answer with
- *  a plain playlist; the rest of its list (`castle`, `streamflix`, `vixolity`,
- *  `rive-*`, `mbox`, `showbox-online`, …) either embeds another provider's player
- *  or needs a cookie, so asking them only spends a round trip. */
+/** Scrapers to ask first, best first: `nitro` is the one verified to answer with
+ *  plain multilingual HLS across several resolutions. The rest of its list is
+ *  still walked after these (see `nxshaStreams`) because titles do live on them
+ *  alone — `castle`, `purstream`, `vixolity` and `ophim` all answered with a
+ *  real `#EXTM3U` — while `mbox`/`imovr`/`yomovies` and the other
+ *  `web_support: false` entries are cookie-bound and answer empty. */
 const PREFERRED = ["nitro", "watchout", "stvv", "em-8"];
+
+/** Its list carries ~15 web-usable scrapers. Walking all of them for a title
+ *  nobody has would spend 15 round trips on a request the viewer is waiting on,
+ *  so the walk stops at this many asks (each one costs ~100-300 ms). */
+const MAX_SCRAPER_ASKS = 10;
 
 export interface NxshaTitle {
   tmdbId: string;
@@ -272,6 +279,44 @@ async function ask(
   }
 }
 
+/** The numeric TMDB id nxsha inlines into its own embed page.
+ *
+ *  Its routes accept an IMDb id — and its player resolves the title from that —
+ *  but its *API* is keyed on the TMDB number: `imdb_id` alone answers an empty
+ *  server list. So an `tt…` link has to be turned into the number before
+ *  `/api/servers` can be asked, and the page it already rendered for that id
+ *  carries the answer (`tmdbId":2734` inside its escaped JSON payload). */
+export async function nxshaTmdbOf(
+  pageUrl: string,
+  get: PageGetter,
+): Promise<string> {
+  try {
+    const res = await get(pageUrl, `${NXSHA_BASE}/`);
+    if (!res.ok) {
+      void res.body?.cancel().catch(() => undefined);
+      return "";
+    }
+    const reader = res.body?.getReader();
+    if (!reader) return "";
+    const decoder = new TextDecoder();
+    let head = "";
+    while (head.length < 200_000) {
+      const { value, done } = await reader.read();
+      head += decoder.decode(value, { stream: true });
+      const hit = head.match(/tmdbId\\?["']?\s*:\s*\\?["']?(\d{1,8})/);
+      if (hit) {
+        void reader.cancel().catch(() => undefined);
+        return hit[1];
+      }
+      if (done) break;
+    }
+    void reader.cancel().catch(() => undefined);
+    return "";
+  } catch {
+    return "";
+  }
+}
+
 /** One stream as its API describes it, cleaned for a viewer.
  *  Several entries arrive as `"<internal-name> | 1080P | Hindi"`; the leading
  *  lowercase slug is that scraper's own key, not something about the picture,
@@ -306,15 +351,29 @@ export async function nxshaStreams(
     ? (list!.servers as { scraper?: string; web_support?: boolean }[])
     : [];
   /* A scraper the list marks `web_support: false` is cookie-bound and answers
-     empty, so it is dropped. When the list call itself fails we still try the
-     favourites — an empty source list is indistinguishable from a title this
-     provider does not carry, and the caller falls back to its iframe. */
-  const order = servers.length
-    ? PREFERRED.filter((p) =>
-        servers.some((s) => s.scraper === p && s.web_support !== false),
-      )
-    : PREFERRED;
+     empty, so it is dropped. Favourites go first — they carry several dubs and
+     several resolutions — but the walk does not STOP at them: a title can live
+     on exactly one of the others (Dovlatov was only on `vixolity`, an episode
+     of a talk show only on `castle`/`purstream`/`ophim`), and asking only the
+     favourites made nxsha look empty for those while its own player streamed
+     them. The list call itself can fail, and an empty source list is
+     indistinguishable from a title this provider does not carry, so the caller
+     still falls back to framing its iframe. */
+  const usable = servers
+    .filter(
+      (s) => typeof s.scraper === "string" && s.web_support !== false,
+    )
+    .map((s) => s.scraper as string);
+  const order = [
+    ...(servers.length
+      ? [
+          ...PREFERRED.filter((p) => usable.includes(p)),
+          ...usable.filter((p) => !PREFERRED.includes(p)),
+        ]
+      : PREFERRED),
+  ].slice(0, MAX_SCRAPER_ASKS);
 
+  const found: NxshaSource[] = [];
   for (const scraper of order) {
     const answer = await ask(
       "/api/sources",
@@ -343,7 +402,13 @@ export async function nxshaStreams(
           referer: headers.referer || headers.Referer || `${NXSHA_BASE}/`,
         };
       });
-    if (playable.length) return playable.slice(0, 4);
+    /* Two scrapers often hand back the same CDN link under different names, and
+       the player cannot use a duplicate twice. */
+    for (const s of playable.slice(0, 4))
+      if (!found.some((f) => f.url === s.url)) found.push(s);
+    /* One scraper that really carries the title is enough to stop on — its own
+       list already spans the resolutions and the dubs. */
+    if (found.length >= 3) break;
   }
-  return [];
+  return found.slice(0, 6);
 }
