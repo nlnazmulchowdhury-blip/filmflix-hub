@@ -9,6 +9,7 @@ import VidSrcResultCard, {
   type VidSrcHit,
 } from "@/components/VidSrcResultCard";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
+import { rememberExternalHint } from "@/lib/vaplayer";
 import {
   browseTmdb,
   listCategories,
@@ -388,33 +389,33 @@ export default function Landing() {
      first and play through Server 1 (VidSrc). */
   const playTmdb = async (item: TmdbItem) => {
     if (item.embedUrl) {
-      navigate(`/movie/vaplayer-${item.tmdbId}`, {
-        state: {
-          external: "vaplayer",
-          tmdbId: item.tmdbId,
-          kind: item.kind,
-          title: item.title,
-          posterUrl: item.posterUrl ?? undefined,
-          backdropUrl: item.backdropUrl ?? undefined,
-          overview: item.overview,
-          embedUrl: item.embedUrl,
-        },
-      });
+      const state = {
+        external: "vaplayer",
+        tmdbId: item.tmdbId,
+        kind: item.kind,
+        title: item.title,
+        posterUrl: item.posterUrl ?? undefined,
+        backdropUrl: item.backdropUrl ?? undefined,
+        overview: item.overview,
+        embedUrl: item.embedUrl,
+      };
+      rememberExternalHint(item.tmdbId, state);
+      navigate(`/movie/vaplayer-${item.tmdbId}`, { state });
       return;
     }
     try {
       const hits = await searchExternal({ q: item.title });
       const hit = hits?.[0];
       if (hit) {
-        navigate(`/movie/vidsrc-${hit.imdbId}`, {
-          state: {
-            external: true,
-            imdbId: hit.imdbId,
-            kind: hit.kind,
-            title: hit.title,
-            posterUrl: hit.posterUrl,
-          },
-        });
+        const state = {
+          external: true,
+          imdbId: hit.imdbId,
+          kind: hit.kind,
+          title: hit.title,
+          posterUrl: hit.posterUrl,
+        };
+        rememberExternalHint(hit.imdbId, state);
+        navigate(`/movie/vidsrc-${hit.imdbId}`, { state });
       } else {
         toast?.error?.(`No stream found for “${item.title}”`);
       }

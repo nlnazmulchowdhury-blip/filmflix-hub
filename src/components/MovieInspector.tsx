@@ -24,7 +24,7 @@ type ServerKey = "vidsrc" | "vidbox" | "vidapi" | "nxsha" | "anime" | "drama" | 
 const SERVER_META: { key: ServerKey; name: string; provider: string; needs: string }[] = [
   { key: "vidsrc", name: "VidSrc", provider: "vidsrc.to", needs: "IMDb or TMDB id" },
   { key: "vidbox", name: "vidbox", provider: "vidlink.pro · ad-free resolve", needs: "TMDB id or embed URL" },
-  { key: "vidapi", name: "vidapi", provider: "vidapi.ru · iframe fallback", needs: "TMDB id" },
+  { key: "vidapi", name: "vixsrc", provider: "vixsrc.to · HLS player", needs: "TMDB id" },
   { key: "nxsha", name: "nxsha", provider: "web.nxsha.app · multi-source", needs: "TMDB id" },
   { key: "anime", name: "Anime · VidNest", provider: "vidnest.fun", needs: "TMDB id" },
   { key: "drama", name: "Drama · Videasy", provider: "player.videasy.to", needs: "TMDB id" },

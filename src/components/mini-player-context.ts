@@ -21,6 +21,9 @@ export interface MiniPlayerMovie {
   movieId: string;
   title: string;
   videoUrl: string;
+  /** True when the Worker read a playlist off `videoUrl` even though its path
+   *  has no .m3u8 — the player must run it through hls.js, not `video.src`. */
+  isHls?: boolean;
   posterUrl?: string | null;
   backdropUrl?: string | null;
   /** Alternate language versions; empty for original-only movies. */
@@ -104,6 +107,9 @@ export interface MiniPlayerContextValue {
   /** Active subtitle track: null = captions off. */
   activeSubtitle: string | null;
   setSubtitle: (label: string | null) => void;
+  /** Caption tracks the stream itself carries (the provider's HLS subtitle
+   *  group), offered next to this site's own subtitle files. */
+  streamSubtitleLabels: string[];
   /** Register the inline stage slot; the persistent video is portaled here. */
   registerStage: (el: HTMLElement | null) => void;
   /** Begin a movie (optionally autoplaying) on the inline stage. */
@@ -147,6 +153,7 @@ export const MiniPlayerContext = createContext<MiniPlayerContextValue>({
   setQuality: () => undefined,
   activeSubtitle: null,
   setSubtitle: () => undefined,
+  streamSubtitleLabels: [],
   registerStage: () => undefined,
   start: () => undefined,
   setMode: () => undefined,

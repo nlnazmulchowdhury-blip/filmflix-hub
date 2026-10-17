@@ -82,7 +82,10 @@ function StreamPlayer({ sources }: { sources: string[] }) {
 
     const isHls = src.includes(".m3u8");
 
-    if (isHls && Hls.isSupported() && !video.canPlayType("application/vnd.apple.mpegurl")) {
+    /* MSE decides, not canPlayType: Chrome/Firefox answer "maybe" for the HLS
+       mime without being able to play it, and a raw playlist in their element
+       fails outright. Only a browser with no MSE should get the native path. */
+    if (isHls && Hls.isSupported()) {
       hls = new Hls({ enableWorker: true });
       hls.loadSource(src);
       hls.attachMedia(video);

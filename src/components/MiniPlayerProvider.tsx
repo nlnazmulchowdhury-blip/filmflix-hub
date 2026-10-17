@@ -29,6 +29,7 @@ import {
 } from "./mini-player-context";
 import { convexSiteUrl, isHlsUrl, playableVideoUrl } from "@/lib/video-url";
 import { isEmbedUrl } from "@/lib/embed-resolver";
+import { reportPlaybackFailure } from "@/lib/playback-health";
 import {
   applyToken,
   attachTokenRefresh,
@@ -83,29 +84,55 @@ let activeHls: Hls | null = null;
 /** Token auto-refresh + loader stamping for the active IP-bound stream. */
 let activeTokenCtx: TokenContext | null = null;
 let disposeTokenRefresh: (() => void) | null = null;
+/* Where the outgoing engine had got to, tagged with the stream it came from:
+   hls.js's destroy() resets the media element, so a rebuild — provider re-race
+   or hourly token refresh — has nothing else to resume from. Keyed by
+   host+path, not by host alone, so one title's timestamp can never land on
+   another title's playlist just because they share a CDN. */
+let lastStreamAt: { key: string; at: number } | null = null;
+const streamKeyOf = (url: string) => {
+  try {
+    const u = new URL(url, location.href);
+    return u.host + u.pathname;
+  } catch {
+    return "";
+  }
+};
 
-/** Point the player's video element at a source: hls.js for .m3u8 (unless
- *  the browser plays HLS natively), plain src for MP4/everything else.
+/** Point the player's video element at a source: hls.js for .m3u8, plain src
+ *  for MP4/everything else (and for the rare browser with no MSE).
  *  `afterReady` runs on loadedmetadata (used by src swaps to restore
- *  position/speed/play state). */
+ *  position/speed/play state). `forcedHls` says the source is a playlist even
+ *  though its URL does not end in .m3u8 — providers like vixsrc sign
+ *  `/playlist/{id}?token=…`, and the extension is no part of the test. */
 function setHlsSource(
   el: HTMLVideoElement,
   src: string,
   afterReady?: () => void,
+  forcedHls = false,
 ) {
-  const nativeHls =
-    el.canPlayType("application/vnd.apple.mpegurl") !== "";
-  if (isHlsUrl(src) && Hls.isSupported() && !nativeHls) {
-    /* First HLS source for this movie: create the token context and start
-       the hourly refresh (viewer-bound tokens expire after 4h). The URL in
-       the catalog may already carry an old/foreign token — a fresh one is
-       stamped before the first request. */
+  /* MSE availability decides — not canPlayType. Chrome and Firefox answer
+     "maybe" for the HLS mime, which is a guess rather than support: hand their
+     element a raw .m3u8 and it fails with MEDIA_ERR_SRC_NOT_SUPPORTED, which is
+     exactly the black player viewers report on the embed servers. Only a browser
+     without MSE (older iOS Safari) should get the playlist natively. */
+  if ((forcedHls || isHlsUrl(src)) && Hls.isSupported()) {
     destroyHls();
-    activeTokenCtx = { token: { current: "" }, hosts: new Set() };
-    disposeTokenRefresh = attachTokenRefresh(src, activeTokenCtx, (fresh) => {
-      const live = document.querySelector("video");
-      if (live && !live.paused) buildHls(live, fresh);
-    });
+    if (isHlsUrl(src)) {
+      /* First HLS source for this movie: create the token context and start
+         the hourly refresh (viewer-bound tokens expire after 4h). The URL in
+         the catalog may already carry an old/foreign token — a fresh one is
+         stamped before the first request. */
+      activeTokenCtx = { token: { current: "" }, hosts: new Set() };
+      disposeTokenRefresh = attachTokenRefresh(src, activeTokenCtx, (fresh) => {
+        const live = document.querySelector("video");
+        if (live && !live.paused) buildHls(live, fresh);
+      });
+    }
+    /* forcedHls without a .m3u8 is a provider playlist we minted ourselves (the
+       embed resolver signs `/playlist/{id}` and its token runs for months).
+       Those hosts have no /generate.php, so asking would only put a CORS error
+       in the viewer's console on every stream. */
     if (afterReady) el.addEventListener("loadedmetadata", afterReady, { once: true });
     buildHls(el, src);
   } else {
@@ -116,12 +143,20 @@ function setHlsSource(
   }
 }
 
+/** Retire the running engine, keeping the second its stream had reached —
+ *  `hls.destroy()` resets the media element, so this is the only copy left. */
+function stopEngine() {
+  if (!activeHls) return;
+  const el = activeHls.media as HTMLVideoElement | null;
+  const key = streamKeyOf(activeHls.url || "");
+  if (key) lastStreamAt = { key, at: el?.currentTime || 0 };
+  activeHls.destroy();
+  activeHls = null;
+}
+
 /** Tear down the module-level HLS engine (surface unmount / movie close). */
 function destroyHls() {
-  if (activeHls) {
-    activeHls.destroy();
-    activeHls = null;
-  }
+  stopEngine();
   if (disposeTokenRefresh) {
     disposeTokenRefresh();
     disposeTokenRefresh = null;
@@ -133,18 +168,22 @@ function destroyHls() {
  *  resuming position/rate across (re)builds — hourly token refresh must
  *  never visibly restart the movie. */
 function buildHls(el: HTMLVideoElement, src: string) {
-  if (activeHls) {
-    activeHls.destroy();
-    activeHls = null;
-  }
-  const resumeAt = Number.isFinite(el.currentTime) ? el.currentTime : 0;
+  stopEngine();
+  const resumeAt =
+    el.currentTime > 0
+      ? el.currentTime
+      : lastStreamAt && lastStreamAt.key === streamKeyOf(src)
+        ? lastStreamAt.at
+        : 0;
+  lastStreamAt = null;
   const rate = el.playbackRate || 1;
+  /* hls.js spreads this object over its defaults, so a key present with the
+     value `undefined` still wins — and `loader: undefined` replaces the stock
+     loader with nothing, which stalls every playlist fetch with no error
+     event. The token loader is therefore added only when a context exists. */
   const hls = new Hls({
     enableWorker: true,
-    // Tokenized playlists must never come from cache: a stale manifest 403s.
-    loader: activeTokenCtx
-      ? (makeTokenLoader(activeTokenCtx) as (typeof Hls.DefaultConfig)["loader"])
-      : undefined,
+    ...(activeTokenCtx ? { loader: makeTokenLoader(activeTokenCtx) } : {}),
   });
   activeHls = hls;
   hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
@@ -158,6 +197,24 @@ function buildHls(el: HTMLVideoElement, src: string) {
   hls.on(Hls.Events.LEVEL_SWITCHED, (_evt, data) => {
     const level = hls.levels?.[data.level as number];
     if (level) reportHlsLevels(src, [level]);
+  });
+  /* Provider CDNs blip: a segment 502s, a manifest is slow, one level paints a
+     codec the element rejects. hls.js leaves all of that fatal — a stream that
+     simply stops with no message. Recover twice of each kind, then say so, so
+     the stage can fall back to the provider player instead of sitting black. */
+  let networkRetries = 0;
+  let mediaRetries = 0;
+  hls.on(Hls.Events.ERROR, (_evt, data) => {
+    if (!data.fatal) return;
+    if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries++ < 2) {
+      hls.recoverMediaError();
+      return;
+    }
+    if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRetries++ < 2) {
+      hls.startLoad();
+      return;
+    }
+    reportPlaybackFailure(src);
   });
   hls.loadSource(src);
   hls.attachMedia(el);
@@ -220,6 +277,15 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   const [playbackRate, setPlaybackRateState] = useState(1);
   const [activeQuality, setActiveQuality] = useState<string | null>(null);
   const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
+  /** Caption tracks the stream carries itself, read off the media element. */
+  const [streamSubtitleLabels, setStreamSubtitleLabels] = useState<string[]>([]);
+  const reportStreamTracks = useCallback((labels: string[]) => {
+    setStreamSubtitleLabels((prev) =>
+      prev.length === labels.length && prev.join("|") === labels.join("|")
+        ? prev
+        : [...labels],
+    );
+  }, []);
 
   /** Latest settings for callbacks/effects that must not go stale. */
   const playbackRateRef = useRef(1);
@@ -548,6 +614,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     playbackRateRef.current = 1;
     setActiveQuality(null);
     setActiveSubtitle(null);
+    setStreamSubtitleLabels([]);
   }, [movie?.movieId]);
 
   const value = useMemo(
@@ -583,6 +650,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       setQuality,
       activeSubtitle,
       setSubtitle: setActiveSubtitle,
+      streamSubtitleLabels,
       registerStage: setStageEl,
       start,
       setMode,
@@ -615,6 +683,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       activeQuality,
       setQuality,
       activeSubtitle,
+      streamSubtitleLabels,
       start,
       setMode,
       close,
@@ -647,17 +716,22 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
         createPortal(
           <VideoSurface
             videoRef={videoRef}
-            /* A provider player page (vidlink.pro, vidapi.ru, …) is not media —
+            /* A provider player page (vidlink.pro, vixsrc.to, …) is not media —
                loading it here only earns a decode error, and the provider's own
-               iframe is what actually plays. Keep our element empty for those. */
+               iframe is what actually plays. Keep our element empty for those.
+               A stream the Worker pulled out of that same host is the opposite
+               case: vixsrc signs its playlist as `/playlist/{id}` on the very
+               host listed above, so `isHls` outranks the host test. */
             src={
-              isEmbedUrl(movie.videoUrl)
+              isEmbedUrl(movie.videoUrl) && !movie.isHls
                 ? ""
                 : playableVideoUrl(movie.videoUrl, convexSiteUrl(), movie)
             }
+            isHls={movie.isHls}
             onSourceChanged={destroyHls}
             subtitles={movie.subtitles ?? []}
             activeSubtitle={activeSubtitle}
+            onStreamTracks={reportStreamTracks}
             nightMode={nightMode}
             rotation={rotation}
             loop={loop}
@@ -819,8 +893,10 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
 function VideoSurface({
   videoRef,
   src,
+  isHls,
   subtitles,
   activeSubtitle,
+  onStreamTracks,
   nightMode,
   rotation,
   loop,
@@ -845,8 +921,13 @@ function VideoSurface({
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   src: string;
+  /** The Worker read `#EXTM3U` off this source even though its path has no
+   *  .m3u8 (vixsrc signs `…/playlist/{id}?token=…`) — hls.js must take it. */
+  isHls?: boolean;
   subtitles: { label: string; url: string }[];
   activeSubtitle: string | null;
+  /** Reports the caption labels the current stream carries. */
+  onStreamTracks: (labels: string[]) => void;
   nightMode: boolean;
   rotation: PlayerRotation;
   loop: boolean;
@@ -913,7 +994,7 @@ function VideoSurface({
      track, show the movie's art behind the (invisible) media element and a
      small badge so users know playback itself is fine. */
   const [audioOnly, setAudioOnly] = useState(false);
-  const isHlsSrc = isHlsUrl(src);
+  const isHlsSrc = isHlsUrl(src) || isHls === true;
   useEffect(() => {
     setAudioOnly(false);
     const el = videoRef.current;
@@ -953,6 +1034,11 @@ function VideoSurface({
           ? "Connection problem — the video source could not be loaded."
           : "This video link cannot be played (dead link, blocked host, or unsupported format).",
       );
+      /* Tell the stage as well: a resolved embed stream that dies here has to
+         give the provider player back, not leave the viewer on this card. Report
+         the playlist we were given — under hls.js the element's own currentSrc
+         is a blob: URL, which no caller could match against its candidate list. */
+      if (src) reportPlaybackFailure(src);
     };
     el.addEventListener("error", fail);
     return () => el.removeEventListener("error", fail);
@@ -969,13 +1055,55 @@ function VideoSurface({
       /* Leaving HLS (next movie is MP4): the plain-src path must own the
          element — tear down the token loader and old engine first. */
       destroyHls();
+      /* A provider iframe is showing (no media source at all): drop whatever
+         the element still holds, otherwise the last frame stays on screen
+         behind the iframe and looks like a frozen movie. */
+      if (!src && (el.currentSrc || el.readyState > 0)) {
+        el.removeAttribute("src");
+        el.load();
+      }
       return;
     }
-    setHlsSource(el, src);
+    setHlsSource(el, src, undefined, isHls);
     return () => {
       onSourceChanged();
     };
   }, [src, isHlsSrc, videoRef, onSourceChanged]);
+
+  /* Caption tracks are ours to control, every one of them. hls.js imports the
+     provider's subtitle group and switches a FORCED track on by itself, so an
+     English film started playing Italian captions the viewer never asked for —
+     and the gear menu had no way back. Only the label chosen there shows; the
+     rest stay off, and the sweep re-runs while the stream keeps adding tracks.
+     Side effect: this is also what makes this site's own subtitle files
+     actually switch on, which nothing did before. */
+  useEffect(() => {
+    const tt = videoRef.current?.textTracks;
+    if (!tt) return undefined;
+    const apply = () => {
+      const labels: string[] = [];
+      for (let i = 0; i < tt.length; i++) {
+        const t = tt[i];
+        if (t.kind !== "subtitles" && t.kind !== "captions") continue;
+        const label = t.label || `Track ${i + 1}`;
+        labels.push(label);
+        t.mode = label === activeSubtitle ? "showing" : "disabled";
+      }
+      onStreamTracks(labels);
+    };
+    apply();
+    /* `change` matters as much as `addtrack`: hls.js picks its default/forced
+       track *after* it adds them, so the sweep has to run again when it does.
+       Re-applying identical modes fires nothing, so this settles. */
+    tt.addEventListener("addtrack", apply);
+    tt.addEventListener("removetrack", apply);
+    tt.addEventListener("change", apply);
+    return () => {
+      tt.removeEventListener("addtrack", apply);
+      tt.removeEventListener("removetrack", apply);
+      tt.removeEventListener("change", apply);
+    };
+  }, [src, isHlsSrc, activeSubtitle, videoRef, onStreamTracks]);
 
   /* Rotate: swap the box so the rotated picture stays fully visible. */
   const rotated = rotation === 90 || rotation === 270;
@@ -1367,7 +1495,10 @@ function VideoSurface({
         )}
         <video
           ref={videoRef}
-          src={isHlsSrc ? undefined : src}
+          /* undefined, never "": an empty src attribute makes the browser
+             resolve it against the current URL and refetch this very page as
+             media, which React warns about and the element then errors on. */
+          src={isHlsSrc || !src ? undefined : src}
           loop={loop}
           className="absolute inset-0 size-full object-contain"
           style={{

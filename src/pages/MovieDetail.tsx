@@ -12,7 +12,11 @@ import AdBanner from "@/components/AdBanner";
 import AdSideRail from "@/components/AdSideRail";
 import { AD_BANNERS } from "@/lib/ad-banners";
 import { useMiniPlayer } from "@/components/mini-player-context";
-import { vaplayerEmbedUrl } from "@/lib/vaplayer";
+import {
+  recallExternalHint,
+  rememberExternalHint,
+  vaplayerEmbedUrl,
+} from "@/lib/vaplayer";
 import { fetchTitleDownloads } from "@/lib/embed-resolver";
 import {
   listRelated,
@@ -67,7 +71,15 @@ export default function MovieDetail() {
   const isVaplayer = id?.startsWith("vaplayer-") ?? false;
   const vaplayerId = isVaplayer ? id?.replace("vaplayer-", "") : null;
   const isExternal = isVidSrc || isVaplayer;
-  const externalState = (location.state as any) || {};
+  const externalStateFromClick = (location.state as any) || null;
+  /* A refreshed deep link has no router state left, so fall back to what the
+     card remembered for this tab. */
+  const externalState = externalStateFromClick?.external
+    ? externalStateFromClick
+    : {
+        ...(recallExternalHint(vaplayerId ?? vidsrcImdbId) || {}),
+        ...externalStateFromClick,
+      };
   const movie = useQuery(
     api.movies.get,
     isExternal ? "skip" : { id: id as Id<"movies"> },
@@ -231,18 +243,18 @@ export default function MovieDetail() {
   }, [relatedTmdbId]);
 
   const playRelated = (item: TmdbItem) => {
-    navigate(`/movie/vaplayer-${item.tmdbId}`, {
-      state: {
-        external: "vaplayer",
-        tmdbId: item.tmdbId,
-        kind: item.kind,
-        title: item.title,
-        posterUrl: item.posterUrl ?? undefined,
-        backdropUrl: item.backdropUrl ?? undefined,
-        overview: item.overview,
-        embedUrl: item.embedUrl,
-      },
-    });
+    const state = {
+      external: "vaplayer",
+      tmdbId: item.tmdbId,
+      kind: item.kind,
+      title: item.title,
+      posterUrl: item.posterUrl ?? undefined,
+      backdropUrl: item.backdropUrl ?? undefined,
+      overview: item.overview,
+      embedUrl: item.embedUrl,
+    };
+    rememberExternalHint(item.tmdbId, state);
+    navigate(`/movie/vaplayer-${item.tmdbId}`, { state });
   };
 
   /* Clicking a quality must start a file download, not open a tab that plays

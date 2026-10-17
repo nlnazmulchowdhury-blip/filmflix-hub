@@ -1,23 +1,23 @@
-/** Catalog embed source URLs — the two ad-free "Server 2" provider chains.
+/** Catalog embed source URLs — the provider player pages behind the embed
+ *  servers, each of which also gets an ad-free resolve attempt first.
  *
- *  Formerly vaplayer.ru, which moved its player behind a Cloudflare Turnstile
- *  challenge (nextgencloudfabric.com) that cannot pass inside a cross-origin
- *  iframe — every embed showed a blank player.
+ *   • vidbox  → vidlink.pro: its own sources API answers with HEVC-only files
+ *              (probed through its real token handshake), so this player
+ *              paints a black rectangle for every browser without hardware
+ *              HEVC. Kept last in the lineup for the viewers that do decode it.
+ *   • vixsrc  → vixsrc.to. Took over the slot vidapi.ru left behind when that
+ *              provider moved its player behind a Cloudflare Turnstile
+ *              challenge (nextgencloudfabric.com), which cannot pass inside a
+ *              cross-origin iframe and showed a blank player for everyone.
+ *              vixsrc mints its playlist token server-side, embeds with no
+ *              frame blocking, and plays HLS through its own JWPlayer.
+ *   • nxsha   → web.nxsha.app: a multi-source player that picks between
+ *              several upstream hosts by itself. Iframe-only.
  *
- *  Two distinct providers are now offered as separate playback servers:
- *
- *   • vidbox  → vidlink.pro. One of the servers vidbox.wtf itself drives:
- *              plain iframe-embeddable, no frame blocking, and its player
- *              resolves to a direct signed file, so the Worker can pull raw
- *              HLS server-side (ad-free).
- *   • vidapi  → vidapi.ru. Redirects into vaplayer.ru → nextgencloudfabric.com,
- *              a Cloudflare-Turnstile chain the server-side resolver cannot
- *              follow; it falls back to the provider iframe.
- *
- *  Both endpoints accept TMDB numeric ids for movies and TV. */
+ *  All three accept TMDB numeric ids for movies and TV. */
 
 const VIDBOX_BASE = "https://vidlink.pro";
-const VIDAPI_BASE = "https://vidapi.ru";
+const VIXSRC_BASE = "https://vixsrc.to";
 const NXSHA_BASE = "https://web.nxsha.app";
 
 export interface EmbedTarget {
@@ -49,13 +49,14 @@ export function vidboxEmbedUrl(target: EmbedTarget): string {
   return providerUrl(VIDBOX_BASE, target);
 }
 
-/** vidapi server — vaplayer/nextgencloudfabric chain (iframe fallback). */
-export function vidapiEmbedUrl(target: EmbedTarget): string {
+/** vixsrc server — the provider that replaced the Turnstile-gated one.
+ *
+ *  The server key stays `vidapi` in the player and in the database (admins
+ *  switched servers off by that key), only the provider behind it changed. */
+export function vixsrcEmbedUrl(target: EmbedTarget): string {
   const t = target.id ?? target.tmdbId ?? target.imdbId;
-  if (!t) return "";
-  return target.kind === "series"
-    ? `${VIDAPI_BASE}/embed/tv/${t}/${target.season ?? 1}/${target.episode ?? 1}`
-    : `${VIDAPI_BASE}/embed/movie/${t}`;
+  if (!t || !/^\d+$/.test(String(t))) return "";
+  return providerUrl(VIXSRC_BASE, target);
 }
 
 /** Back-compat alias: catalog cards still carry a vidlink.pro (vidbox) URL. */
@@ -74,4 +75,62 @@ export function nxshaEmbedUrl(target: EmbedTarget): string {
   return target.kind === "series"
     ? `${NXSHA_BASE}/embed/tv/${t}/${target.season ?? 1}/${target.episode ?? 1}`
     : `${NXSHA_BASE}/embed/movie/${t}`;
+}
+
+/* ---------------- stateless provider deep links ---------------- */
+
+/** What the card that opened this player knew about its title.
+ *
+ *  Router state disappears on refresh, and `/movie/vaplayer-<id>` is then left
+ *  guessing: it falls back to the movie path — where providers have no such
+ *  episode and answer with their "not available" wall — shows "External" as the
+ *  title, and hides the episode guide. Keeping the card's own payload for the
+ *  tab means reloading a series plays the same show it opened. */
+export interface ExternalHint {
+  kind?: "movie" | "series";
+  title?: string;
+  posterUrl?: string;
+  backdropUrl?: string;
+  overview?: string;
+}
+
+const hintKey = (id: string) => `filmflix:external:${id}`;
+
+/* This module is also compiled by the Worker tsconfig, which has no DOM lib,
+   so the tab store is reached through globalThis rather than the global name. */
+const hintStore = () =>
+  (
+    globalThis as {
+      sessionStorage?: {
+        setItem(key: string, value: string): void;
+        getItem(key: string): string | null;
+      };
+    }
+  ).sessionStorage;
+
+export function rememberExternalHint(
+  id: string | number | null | undefined,
+  hint: ExternalHint,
+) {
+  if (id === null || id === undefined) return;
+  try {
+    hintStore()?.setItem(
+      hintKey(String(id)),
+      JSON.stringify({ ...hint, overview: hint.overview?.slice(0, 800) }),
+    );
+  } catch {
+    /* private mode or a full store — the click itself still carries its state */
+  }
+}
+
+export function recallExternalHint(
+  id: string | null | undefined,
+): ExternalHint | null {
+  if (!id) return null;
+  try {
+    const raw = hintStore()?.getItem(hintKey(id));
+    return raw ? (JSON.parse(raw) as ExternalHint) : null;
+  } catch {
+    return null;
+  }
 }
