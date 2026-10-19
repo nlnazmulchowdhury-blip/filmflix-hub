@@ -20,15 +20,17 @@ import { api } from "@/lib/api";
  * fully controllable and fully visible from the admin panel.
  */
 
-type ServerKey = "vidsrc" | "vidbox" | "vidapi" | "nxsha" | "anime" | "drama" | "original";
+type ServerKey = "vidbox" | "vidapi" | "nxsha" | "anime" | "viduki" | "drama" | "original";
+/* Same lineup order as the player menu, so an admin reading "Server 3" in the
+   viewer's screenshot finds the same row here. */
 const SERVER_META: { key: ServerKey; name: string; provider: string; needs: string }[] = [
-  { key: "vidsrc", name: "VidSrc", provider: "vidsrc.to", needs: "IMDb or TMDB id" },
-  { key: "vidbox", name: "vidbox", provider: "vidlink.pro · ad-free resolve", needs: "TMDB id or embed URL" },
-  { key: "vidapi", name: "vixsrc", provider: "vixsrc.to · HLS player", needs: "TMDB id" },
-  { key: "nxsha", name: "nxsha", provider: "web.nxsha.app · multi-source", needs: "TMDB id" },
-  { key: "anime", name: "Anime · VidNest", provider: "vidnest.fun", needs: "TMDB id" },
-  { key: "drama", name: "Drama · Videasy", provider: "player.videasy.to", needs: "TMDB id" },
   { key: "original", name: "This site's file", provider: "native <video>", needs: "stored video URL" },
+  { key: "nxsha", name: "nxsha", provider: "web.nxsha.app · multi-source", needs: "TMDB id" },
+  { key: "vidapi", name: "vixsrc", provider: "vixsrc.to · HLS player", needs: "TMDB id" },
+  { key: "anime", name: "Anime · VidNest", provider: "vidnest.fun", needs: "TMDB id" },
+  { key: "viduki", name: "viduki", provider: "play.xpass.top · ladders read server-side", needs: "TMDB id" },
+  { key: "vidbox", name: "vidbox", provider: "vidlink.pro · ours on H.264, else its player", needs: "TMDB id or embed URL" },
+  { key: "drama", name: "Drama · Videasy", provider: "player.videasy.to", needs: "TMDB id" },
 ];
 
 interface Download {
@@ -136,12 +138,13 @@ export default function MovieInspector({
      as two independent facts. */
   const derivedServers = useMemo(() => {
     if (!form) return {} as Record<ServerKey, boolean>;
-    const hasImdb = Boolean(form.imdbId), hasTmdb = Boolean(form.tmdbId);
+    const hasTmdb = Boolean(form.tmdbId);
     return {
-      vidsrc: hasImdb || hasTmdb,
       vidbox: hasTmdb || Boolean(form.embedUrl),
       vidapi: hasTmdb,
+      nxsha: hasTmdb,
       anime: hasTmdb,
+      viduki: hasTmdb,
       drama: hasTmdb,
       original: Boolean(form.videoUrl),
     } as Record<ServerKey, boolean>;
@@ -369,7 +372,7 @@ export default function MovieInspector({
                 </div>
               )}
               <p className="text-xs text-muted-foreground">
-                Picking a result fills the TMDB id, images and description, then resolves the IMDb id so Server 1 lights up.
+                Picking a result fills the TMDB id, images and description, then resolves the IMDb id for the servers that need it.
               </p>
             </section>
 

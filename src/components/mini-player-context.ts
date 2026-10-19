@@ -19,6 +19,13 @@ export interface PlayerSubtitle {
 
 export interface MiniPlayerMovie {
   movieId: string;
+  /** Which viewing this payload is: the title plus the season/episode. The
+   *  player keeps its second across a rebuild of the same viewing (another
+   *  server answering, an hourly token refresh) and starts the next one from
+   *  the top — the stream URL cannot say this, because every embed stream
+   *  arrives through one and the same `/embed/proxy` path. Defaults to
+   *  `movieId`, which is right for a movie with no episodes. */
+  resumeKey?: string;
   title: string;
   videoUrl: string;
   /** True when the Worker read a playlist off `videoUrl` even though its path

@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import type { Env } from "./index";
 import { NXSHA_HOST, nxshaStreams, nxshaTmdbOf, type NxshaTitle } from "./nxsha";
+import { vidlinkSources, vidlinkTitleOf } from "./vidlink";
+import { vidnestSources, vidnestTitleOf } from "./vidnest";
+import { xpassSources, xpassTitleOf } from "./xpass";
 
 /**
  * Embed → HLS resolver ("Server 3").
@@ -137,7 +140,12 @@ function firstIframeSrc(html: string, base: URL): string | null {
   return safeUrl(new URL(m[1], base).href)?.href ?? null;
 }
 
-async function fetchPage(url: string, referer: string): Promise<Response> {
+async function fetchPage(
+  url: string,
+  referer: string,
+  cookie = "",
+  extra?: Record<string, string>,
+): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -150,6 +158,12 @@ async function fetchPage(url: string, referer: string): Promise<Response> {
         Accept:
           "text/html,application/xhtml+xml,application/xml;q=0.9,application/vnd.apple.mpegurl;q=0.8,*/*;q=0.5",
         "Accept-Language": "en-US,en;q=0.9",
+        /* Some provider CDNs sign their playlist with a CloudFront cookie
+           instead of a URL token; without it the manifest 403s. */
+        ...(cookie ? { Cookie: cookie } : {}),
+        /* And some decide what to hand back by a header the caller has to name
+           (vidlink's playback environment), so the generic fetcher stays open. */
+        ...(extra ?? {}),
       },
     });
   } finally {
@@ -293,7 +307,11 @@ function findBrand(bytes: Uint8Array, brand: string): boolean {
   return false;
 }
 
-async function probeStream(rawUrl: string, referer?: string): Promise<StreamProbe> {
+async function probeStream(
+  rawUrl: string,
+  referer?: string,
+  cookie?: string,
+): Promise<StreamProbe> {
   const dead: StreamProbe = { ok: false, kind: "dead", codec: "unknown", cors: false };
   const url = safeUrl(rawUrl);
   if (!url) return dead;
@@ -311,6 +329,10 @@ async function probeStream(rawUrl: string, referer?: string): Promise<StreamProb
         Referer: referer ?? url.origin + "/",
         Origin: url.origin,
         Accept: "*/*",
+        /* Some CDNs sign the path into a cookie instead of the URL (vidlink's
+           CloudFront), so the probe has to carry it or it fails on a live
+           stream. */
+        ...(cookie ? { Cookie: cookie } : {}),
         Range: `bytes=0-${PROBE_HEAD_BYTES - 1}`,
       },
     });
@@ -613,27 +635,37 @@ function nxshaTitleOf(raw: string): NxshaTitle | null {
   return null;
 }
 
-/** A byte-pipe link to one upstream resource, rewritten on the way out. */
-function pipeUrl(target: string, referer: string, self: string): string {
+/** A byte-pipe link to one upstream resource, rewritten on the way out.
+ *  `cookie` carries the case where the CDN signs the path into a cookie rather
+ *  than the URL, so the pipe has to present it on every hop. */
+function pipeUrl(
+  target: string,
+  referer: string,
+  self: string,
+  cookie = "",
+): string {
   const q = new URLSearchParams({ url: target, ref: referer, rewrite: "1" });
+  if (cookie) q.set("ck", cookie);
   return `${self}?${q.toString()}`;
 }
 
 /** Re-wrap every URI in an HLS playlist so the viewer never has to face the
- *  provider's CDN itself — its gate is a referer a browser on our site cannot
- *  claim. Both the manifests and the media they name come back through us. */
+ *  provider's CDN itself — its gate is a referer (or a signed cookie) a browser
+ *  on our site cannot claim. Both the manifests and the media they name come
+ *  back through us. */
 function rewritePlaylist(
   text: string,
   base: URL,
   referer: string,
   self: string,
+  cookie = "",
 ): string {
   const wrap = (uri: string): string => {
     const abs = safeUrl(new URL(uri.trim(), base).href)?.href;
     /* Already piped, or not a fetchable resource at all: leave the line alone
        rather than hand back a URI the player cannot resolve. */
     if (!abs || abs.startsWith(self)) return uri;
-    return pipeUrl(abs, referer, self);
+    return pipeUrl(abs, referer, self, cookie);
   };
   return text
     .split(/\r?\n/)
@@ -683,7 +715,14 @@ embedResolveRoutes.get("/stream", async (c) => {
          API needs the number, so read it back off the page it just rendered. */
       if (!nxsha.tmdbId && nxsha.imdbId)
         nxsha.tmdbId = await nxshaTmdbOf(url, fetchPage);
-      const sources = await nxshaStreams(nxsha, fetchPage);
+      /* Settle on a scraper only if its CDN answers *us*: in production some of
+         these hosts refuse a Worker's connection outright (a bare 403 with no
+         body), so their links would be re-probed and thrown away by the
+         candidate step below while another scraper's stream went unasked. */
+      const sources = await nxshaStreams(nxsha, fetchPage, async (u, ref) => {
+        const p = await probeStream(u, ref);
+        return p.ok && p.codec !== "hevc";
+      });
       if (!sources.length)
         return c.json({
           candidates: [],
@@ -714,8 +753,117 @@ embedResolveRoutes.get("/stream", async (c) => {
       });
     }
 
-    const r = await resolveEmbedStream(url);
-    /* A playlist pulled out of the page still has to answer for *us*: token-bound
+    /* VidNest answers its scrapers through an encrypted envelope (see
+       vidnest.ts) and its upstreams gate on a referer a browser on our site
+       cannot claim, so — like nxsha — its sources come back piped through us
+       with every URI in the manifest re-pointed at the same pipe. That is what
+       lets this server play the provider's picture under our own controls. */
+    const vidnest = vidnestTitleOf(url);
+    if (vidnest) {
+      const sources = (await vidnestSources(vidnest, fetchPage)).slice(0, 4);
+      if (!sources.length)
+        return c.json({
+          candidates: [],
+          hops: [url],
+          error: "VidNest has no stream for this title.",
+        });
+      const self = `${new URL(c.req.url).origin}/embed/proxy`;
+      const candidates = await rankPlayable(
+        sources.map((s) => ({
+          c: {
+            url: pipeUrl(s.url, s.referer, self),
+            via: `vidnest · ${s.provider}`,
+            quality: s.quality,
+          },
+          p: probeStream(s.url, s.referer),
+        })),
+      );
+      return c.json({
+        candidates: candidates.map((x) => ({ ...x, cors: true })),
+        hops: [url, ...sources.map((s) => s.url)],
+        error: candidates.length
+          ? undefined
+          : "VidNest's streams refused this player.",
+      });
+    }
+
+    /* vidlink mints its source token inside a WASM module in the viewer's
+       browser (see vidlink.ts), so the generic walk only ever watched its shell
+       load. We mint that token here and ask for a streaming rendition: when it
+       answers H.264 HLS the chip plays under our own controls, piped like
+       nxsha's because its CDN gates on a signed CloudFront cookie. When it only
+       holds the title as HEVC, the reason comes back and the stage stays with
+       the provider's player instead of painting a black rectangle. */
+    const vidlink = vidlinkTitleOf(url);
+    if (vidlink) {
+      const { sources, reason } = await vidlinkSources(vidlink, (u, ref, headers) =>
+        fetchPage(u, ref, "", headers),
+      );
+      if (!sources.length)
+        return c.json({
+          candidates: [],
+          hops: [url],
+          error: reason || "vidlink has no stream for this title.",
+        });
+      const self = `${new URL(c.req.url).origin}/embed/proxy`;
+      const candidates = await rankPlayable(
+        sources.map((s) => ({
+          c: {
+            url: pipeUrl(s.url, s.referer, self, s.cookie),
+            via: "vidlink handshake",
+            quality: s.quality,
+          },
+          p: probeStream(s.url, s.referer, s.cookie),
+        })),
+      );
+      return c.json({
+        candidates: candidates.map((x) => ({ ...x, cors: true })),
+        hops: [url, ...sources.map((s) => s.url)],
+        error: candidates.length
+          ? undefined
+          : "vidlink's stream refused this player.",
+      });
+    }
+
+    /* viduki's fourth API hands its iframe to play.xpass.top, a player that only
+       looks locked down: its /data answer is an AES-GCM envelope whose key is a
+       label, a build stamp, the request path and the token its own page printed
+       (see xpass.ts). Open it here and every ladder's playlist.json answers with
+       the plain HLS master, so this server plays under our controls too. Its
+       CDNs gate on xpass's referer, so like nxsha the stream is piped through us
+       with every URI re-pointed at the same pipe. When the envelope will not open
+       — they rotated their build stamp, or the title is not there — the honest
+       reason comes back and the stage falls to the provider's own player. */
+    const xpass = xpassTitleOf(url);
+    if (xpass) {
+      const { sources, reason } = await xpassSources(xpass, fetchPage);
+      if (!sources.length)
+        return c.json({
+          candidates: [],
+          hops: [url],
+          error: reason || "viduki has no stream for this title.",
+        });
+      const self = `${new URL(c.req.url).origin}/embed/proxy`;
+      const candidates = await rankPlayable(
+        sources.slice(0, 4).map((s) => ({
+          c: {
+            url: pipeUrl(s.url, s.referer, self),
+            via: `viduki · ${s.quality}`,
+            quality: s.quality,
+          },
+          p: probeStream(s.url, s.referer),
+        })),
+      );
+      return c.json({
+        candidates: candidates.map((x) => ({ ...x, cors: true })),
+        hops: [url, ...sources.map((s) => s.url)],
+        error: candidates.length
+          ? undefined
+          : "viduki's streams refused this player.",
+      });
+    }
+
+    const r = await resolveEmbedStream(url);    /* A playlist pulled out of the page still has to answer for *us*: token-bound
        links 403 and HEVC-only files paint a black player, and handing those to
        the native element is what makes a working provider look broken. */
     r.candidates = await playableCandidates(r.candidates);
@@ -811,10 +959,13 @@ embedResolveRoutes.get("/qualities", async (c) => {
   const referer = inner
     ? outer.searchParams.get("ref") || `${inner.origin}/`
     : `${new URL(target).origin}/`;
+  /* The same signed cookie the stream itself was piped with, or the master
+     playlist behind that pipe answers 403 and the menu shows no resolutions. */
+  const cookie = inner ? outer.searchParams.get("ck") || "" : "";
   const self = `${new URL(c.req.url).origin}/embed/proxy`;
-  const wrap = (u: string) => (inner ? pipeUrl(u, referer, self) : u);
+  const wrap = (u: string) => (inner ? pipeUrl(u, referer, self, cookie) : u);
   try {
-    const res = await fetchPage(target, referer);
+    const res = await fetchPage(target, referer, cookie);
     const finalUrl = safeUrl(res.url)?.href ?? target;
     const ctype = res.headers.get("content-type") ?? "";
     const text = await res.text();
@@ -915,11 +1066,22 @@ const downloadExtractors: { name: string; extract: Extractor }[] = [
       ? `https://vidlink.pro/tv/${t.tmdb}/${t.season}/${t.episode}`
       : `https://vidlink.pro/movie/${t.tmdb}`,
   ),
-  pageExtractor("VidNest", (t) =>
-    t.kind === "tv"
-      ? `https://vidnest.fun/tv/${t.tmdb}/${t.season}/${t.episode}`
-      : `https://vidnest.fun/movie/${t.tmdb}`,
-  ),
+  /* Its scrapers name every resolution they hold, so this fills the Download
+     menu with real per-quality links instead of walking a page shell. */
+  {
+    name: "VidNest",
+    async extract(t) {
+      if (!t.tmdb) return [];
+      const sources = await vidnestSources(
+        { tmdbId: t.tmdb, type: t.kind, season: t.season, episode: t.episode },
+        fetchPage,
+      );
+      return sources.slice(0, 8).map((s) => ({
+        label: s.quality || (s.hls ? "Stream" : "Original"),
+        url: s.url,
+      }));
+    },
+  },
   pageExtractor("Videasy", (t) =>
     t.kind === "tv"
       ? `https://player.videasy.to/tv/${t.tmdb}/${t.season}/${t.episode}`
@@ -960,12 +1122,55 @@ embedResolveRoutes.get("/downloads", async (c) => {
 function pageCarries(host: string, title: string, body: string): boolean {
   const t = title.trim();
   if (host.endsWith("nxsha.app")) return /^watch\b/i.test(t);
+  if (host.endsWith("xpass.top"))
+    /* viduki's fourth API prints the show's own name for a title it carries and
+       an empty `<title>` for one it does not — both at HTTP 200. */
+    return t.length > 1 && !/^(player|loading|error|404)/i.test(t);
   if (host.endsWith("vidlink.pro"))
     /* Its movie pages inline the whole TMDB record (escaped inside the Next.js
        payload, hence the bare key); its TV pages are a bare shell for every id,
        carried or not, so TV can never be confirmed. */
     return body.includes("original_title");
   return false;
+}
+
+/** Videasy has no server-rendered answer about a title: its page is the same
+ *  200 shell for every TMDB id and the "We couldnt find that" wall is painted
+ *  later, in the browser, once its sources back end comes back empty. That back
+ *  end (`api.speedracelight.com`) feeds all nine of its providers and answers a
+ *  plain per-title seed handshake, so it is the only witness worth asking:
+ *  a 5xx there means videasy can play nothing for anybody right now, and a
+ *  frame of its page can only show the viewer a dead provider.
+ *
+ *  Only an unambiguous server error is reported as down. A 4xx is a refusal
+ *  aimed at *our* egress (these hosts block datacenter traffic while an
+ *  ordinary connection opens their player) and says nothing about the title, so
+ *  it comes back `null` and the caller keeps the server as it is. */
+async function videasyBackendDown(mediaId: string): Promise<boolean | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `https://api.speedracelight.com/seed?mediaId=${encodeURIComponent(mediaId)}`,
+      {
+        redirect: "manual",
+        signal: ctrl.signal,
+        headers: {
+          "User-Agent": BROWSER_UA,
+          Referer: "https://player.videasy.to/",
+          Origin: "https://player.videasy.to",
+          Accept: "application/json",
+        },
+      },
+    );
+    void res.body?.cancel().catch(() => undefined);
+    if (res.status >= 500) return true;
+    return res.ok ? false : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 embedResolveRoutes.get("/pageinfo", async (c) => {
@@ -994,6 +1199,16 @@ embedResolveRoutes.get("/pageinfo", async (c) => {
       if (res.url) host = new URL(res.url).hostname;
     } catch {
       /* keep the requested host */
+    }
+    if (host.endsWith("videasy.to")) {
+      const mediaId = /\/(?:movie|tv|anime)\/(\d{1,9})/.exec(safe.pathname)?.[1] ?? "";
+      if (mediaId && (await videasyBackendDown(mediaId)) === true)
+        return c.json({
+          live: false,
+          carried: false,
+          title: title.trim(),
+          reason: "videasy's source back end is offline",
+        });
     }
     return c.json({
       live: true,
@@ -1024,6 +1239,11 @@ embedResolveRoutes.get("/proxy", async (c) => {
      CDN only answers its own referer can still be watched in our player. */
   const rewrite = c.req.query("rewrite") === "1";
   const referer = c.req.query("ref") ?? safe.origin + "/";
+  /* A CDN that gates on a signed cookie (CloudFront, on vidlink's pipes) hands
+     it to us as a query parameter, and every manifest URI this route rewrites
+     carries the same one — so the segments stream through without the browser
+     ever seeing a header it cannot send. */
+  const cookie = c.req.query("ck") ?? "";
   /* A manifest is never seeked, and forwarding the player's Range probe would
      make the upstream answer 4xx — which this route would report as a dead
      stream — so range requests are left to media. */
@@ -1036,6 +1256,7 @@ embedResolveRoutes.get("/proxy", async (c) => {
         Referer: referer,
         Origin: safe.origin,
         Accept: "*/*",
+        ...(cookie ? { Cookie: cookie } : {}),
         ...(range ? { Range: range } : {}),
       },
     });
@@ -1049,7 +1270,7 @@ embedResolveRoutes.get("/proxy", async (c) => {
       const text = await res.text();
       const base = safeUrl(res.url)?.href ?? safe.href;
       const self = `${new URL(c.req.url).origin}/embed/proxy`;
-      return new Response(rewritePlaylist(text, new URL(base), referer, self), {
+      return new Response(rewritePlaylist(text, new URL(base), referer, self, cookie), {
         status: 200,
         headers: {
           "Content-Type": res.headers.get("content-type") ?? "application/vnd.apple.mpegurl",

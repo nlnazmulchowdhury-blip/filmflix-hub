@@ -16,6 +16,13 @@ const EMBED_HOST_SUFFIXES = [
   "vidlink.pro",
   "nxsha.app",
   "vixsrc.to",
+  /* Extracted through its own scraper API now, so its streams can join the
+     race instead of only being framed. */
+  "vidnest.fun",
+  /* Its fourth API frames play.xpass.top, whose ladder list the Worker opens
+     server-side; both hosts are player pages, never a stream. */
+  "viduki.net",
+  "xpass.top",
   "nhdapi.com",
   "vidapi.ru",
   "vaplayer.ru",
@@ -243,6 +250,9 @@ export interface EmbedPageProbe {
    *  on positive evidence — several providers serve a "not available" wall at
    *  HTTP 200, so `live` alone cannot be trusted to mean "worth framing". */
   carried: boolean;
+  /** Why a provider was judged dead, when the Worker could say more than
+   *  "no page" — shown to the viewer instead of framing a wall they cannot use. */
+  reason?: string;
 }
 
 /** Is this provider page actually alive — and really the title it was asked for?

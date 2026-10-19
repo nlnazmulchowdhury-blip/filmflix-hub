@@ -69,6 +69,24 @@ export function isHlsUrl(raw: string | null | undefined): boolean {
 }
 
 /**
+ * True for one of our own byte-pipe links (`…/embed/proxy?url=…`). `isHlsUrl`
+ * cannot tell these apart from the playlist inside them — the upstream URL
+ * rides in the query, `.m3u8` and all — so anything that would talk to the
+ * stream host directly (its `/generate.php` token endpoint) has to look at the
+ * pipe's own path first: the provider behind the pipe never answers there, and
+ * the Worker already re-signs every request with the referer it needs.
+ */
+export function isOurPipeUrl(raw: string | null | undefined): boolean {
+  try {
+    return new URL((raw ?? "").trim(), window.location.href).pathname.endsWith(
+      "/embed/proxy",
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Hosts that never serve raw video bytes to hotlinking players — they
  * redirect to expiring download pages or browser checks. Even on https they
  * are routed through the proxy so it can respond with a clear "this link

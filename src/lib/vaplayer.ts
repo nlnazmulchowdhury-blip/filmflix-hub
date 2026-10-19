@@ -1,26 +1,38 @@
 /** Catalog embed source URLs — the provider player pages behind the embed
- *  servers, each of which also gets an ad-free resolve attempt first.
+ *  servers. Most of them are read server-side, so their film runs in our own
+ *  player; the rest can only ever run on the provider's own screen.
  *
- *   • vidbox  → vidlink.pro: its own sources API answers with HEVC-only files
- *              (probed through its real token handshake), so this player
- *              paints a black rectangle for every browser without hardware
- *              HEVC. Kept last in the lineup for the viewers that do decode it.
+ *   • nxsha   → web.nxsha.app: a multi-source player that picks between
+ *              several upstream hosts by itself. Its stream is extracted
+ *              server-side and pulled through our proxy, so it plays under
+ *              our controls.
  *   • vixsrc  → vixsrc.to. Took over the slot vidapi.ru left behind when that
  *              provider moved its player behind a Cloudflare Turnstile
  *              challenge (nextgencloudfabric.com), which cannot pass inside a
  *              cross-origin iframe and showed a blank player for everyone.
  *              vixsrc mints its playlist token server-side, embeds with no
  *              frame blocking, and plays HLS through its own JWPlayer.
- *   • nxsha   → web.nxsha.app: a multi-source player that picks between
- *              several upstream hosts by itself. Iframe-only.
+ *   • vidbox  → vidlink.pro: the token for its sources API looked like it could
+ *              only be minted in the viewer's browser (a libsodium/WASM
+ *              handshake), but that handshake is a constant key, a fixed nonce
+ *              and the TMDB id, so the Worker mints it itself now — see
+ *              worker/src/vidlink.ts. Its catch is the file, not the token:
+ *              vidlink keeps most titles HEVC-only, which paints a black
+ *              rectangle for every browser without hardware HEVC, so those
+ *              titles still run on its own player. Where it has H.264 HLS, the
+ *              film plays under our controls like the servers above.
+ *   • viduki  → play.xpass.top, the player viduki.net's fourth API frames. Its
+ *              `/data` answer is an AES-GCM envelope, but the key is built from
+ *              the request path and the token printed in that page's own HTML,
+ *              so the Worker opens it without running their code — see
+ *              worker/src/xpass.ts — and its ladders are plain H.264 HLS.
  *
- *  All three accept TMDB numeric ids for movies and TV. */
-
-import { vidsrcEmbedUrl } from "./vidsrc";
+ *  All of them accept TMDB numeric ids for movies and TV. */
 
 const VIDBOX_BASE = "https://vidlink.pro";
 const VIXSRC_BASE = "https://vixsrc.to";
 const NXSHA_BASE = "https://web.nxsha.app";
+const XPASS_BASE = "https://play.xpass.top";
 
 export interface EmbedTarget {
   id?: string | null;
@@ -39,7 +51,8 @@ function providerUrl(base: string, { id, tmdbId, imdbId, kind, season = 1, episo
     : `${base}/movie/${target}`;
 }
 
-/** vidbox server — resolvable vidlink.pro chain.
+/** vidbox server — vidlink.pro, ours when it holds an H.264 stream and the
+ *  provider's own player for everything else.
  *
  *  vidlink.pro only understands TMDB numeric ids: an IMDb `tt…` id — or a
  *  number it does not carry — makes its Next.js app answer 500, and that
@@ -66,24 +79,13 @@ export const vaplayerEmbedUrl = vidboxEmbedUrl;
 
 /** The provider page for one episode, built from whichever id this title has.
  *
- *  vidlink.pro and vixsrc refuse an IMDb `tt…` page outright, so they only come
- *  first when the numeric TMDB id is actually known; nxsha's tv route takes
- *  either (the Worker reads the number back off its page), and VidSrc is the
- *  last page that still plays the episode — ad-supported, but the alternative
- *  is the episode pick doing nothing at all. */
+ *  nxsha leads: its tv route takes a TMDB *or* an IMDb id (the Worker reads the
+ *  number back off its page), and it is the chain this site resolves most
+ *  reliably, so the episode runs under our own controls. vidlink.pro refuses an
+ *  IMDb `tt…` page outright, so it only appears when a numeric TMDB id is
+ *  actually known — where it is a chain the Worker can ask directly. */
 export function episodeEmbedUrl(target: EmbedTarget): string {
-  return (
-    vidboxEmbedUrl(target) ||
-    nxshaEmbedUrl(target) ||
-    vidsrcEmbedUrl({
-      imdbId: target.imdbId ?? null,
-      tmdbId: target.tmdbId == null ? null : String(target.tmdbId),
-      kind: target.kind,
-      season: target.season,
-      episode: target.episode,
-    }) ||
-    ""
-  );
+  return nxshaEmbedUrl(target) || vidboxEmbedUrl(target) || "";
 }
 
 /** nxsha server — web.nxsha.app, a multi-source player (it picks between
@@ -99,6 +101,27 @@ export function nxshaEmbedUrl(target: EmbedTarget): string {
   return target.kind === "series"
     ? `${NXSHA_BASE}/embed/tv/${t}/${target.season ?? 1}/${target.episode ?? 1}`
     : `${NXSHA_BASE}/embed/movie/${t}`;
+}
+
+/** viduki server — the player page behind that site's fourth API.
+ *
+ *  viduki.net's own /1 and /2 pages mint their stream inside a WASM module
+ *  after an ALTCHA proof-of-work, which no resolver can follow, while /3 and /4
+ *  only frame another provider. /4 frames `play.xpass.top`, and *that* page is
+ *  readable server-side: its `/data/…` answer opens with a key built from the
+ *  path and the token printed in the HTML (see worker/src/xpass.ts), and the
+ *  ladder list it holds names plain HLS masters. So this URL is asked directly:
+ *  when the Worker opens it, the film runs under our own controls, and when it
+ *  cannot, the same page is what the framed fallback shows.
+ *
+ *  Its routes only understand TMDB numeric ids, so an IMDb-only title simply
+ *  does not get this chip. */
+export function vidukiEmbedUrl(target: EmbedTarget): string {
+  const t = target.id ?? target.tmdbId ?? target.imdbId;
+  if (!t || !/^\d+$/.test(String(t))) return "";
+  return target.kind === "series"
+    ? `${XPASS_BASE}/e/tv/${t}/${target.season ?? 1}/${target.episode ?? 1}`
+    : `${XPASS_BASE}/e/movie/${t}`;
 }
 
 /* ---------------- stateless provider deep links ---------------- */

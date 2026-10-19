@@ -27,7 +27,7 @@ import {
   type PlayerControls,
   type PlayerRotation,
 } from "./mini-player-context";
-import { convexSiteUrl, isHlsUrl, playableVideoUrl } from "@/lib/video-url";
+import { convexSiteUrl, isHlsUrl, isOurPipeUrl, playableVideoUrl } from "@/lib/video-url";
 import { isEmbedUrl } from "@/lib/embed-resolver";
 import { reportPlaybackFailure } from "@/lib/playback-health";
 import {
@@ -84,20 +84,16 @@ let activeHls: Hls | null = null;
 /** Token auto-refresh + loader stamping for the active IP-bound stream. */
 let activeTokenCtx: TokenContext | null = null;
 let disposeTokenRefresh: (() => void) | null = null;
-/* Where the outgoing engine had got to, tagged with the stream it came from:
-   hls.js's destroy() resets the media element, so a rebuild — provider re-race
-   or hourly token refresh — has nothing else to resume from. Keyed by
-   host+path, not by host alone, so one title's timestamp can never land on
-   another title's playlist just because they share a CDN. */
+/* Which viewing the running engine belongs to: the title plus its episode, never
+   the stream. `hls.destroy()` resets the media element, so a rebuild — the
+   hourly token refresh, tapping another server for the same episode — has
+   nothing else to resume from. But the next episode of a show, or a different
+   film, must start at the top even though the outgoing element was halfway
+   through, and a URL cannot say that: every embed stream now arrives as
+   `/embed/proxy?url=…`, so two different films share one path. */
+let engineScope = "";
+let pendingScope = "";
 let lastStreamAt: { key: string; at: number } | null = null;
-const streamKeyOf = (url: string) => {
-  try {
-    const u = new URL(url, location.href);
-    return u.host + u.pathname;
-  } catch {
-    return "";
-  }
-};
 
 /** Point the player's video element at a source: hls.js for .m3u8, plain src
  *  for MP4/everything else (and for the rare browser with no MSE).
@@ -118,11 +114,15 @@ function setHlsSource(
      without MSE (older iOS Safari) should get the playlist natively. */
   if ((forcedHls || isHlsUrl(src)) && Hls.isSupported()) {
     destroyHls();
-    if (isHlsUrl(src)) {
+    if (isHlsUrl(src) && !isOurPipeUrl(src)) {
       /* First HLS source for this movie: create the token context and start
          the hourly refresh (viewer-bound tokens expire after 4h). The URL in
          the catalog may already carry an old/foreign token — a fresh one is
-         stamped before the first request. */
+         stamped before the first request.
+         A stream already pulled through our own pipe is excluded: `/generate.php`
+         belongs to the provider behind it, not to the pipe's host, and the pipe
+         re-signs every request itself, so asking would only put a failed fetch
+         in the viewer's console on every embed server. */
       activeTokenCtx = { token: { current: "" }, hosts: new Set() };
       disposeTokenRefresh = attachTokenRefresh(src, activeTokenCtx, (fresh) => {
         const live = document.querySelector("video");
@@ -148,8 +148,9 @@ function setHlsSource(
 function stopEngine() {
   if (!activeHls) return;
   const el = activeHls.media as HTMLVideoElement | null;
-  const key = streamKeyOf(activeHls.url || "");
-  if (key) lastStreamAt = { key, at: el?.currentTime || 0 };
+  /* Tagged with the viewing this engine was serving, so the next build can tell
+     a rebuild of the same episode from the start of another one. */
+  if (engineScope) lastStreamAt = { key: engineScope, at: el?.currentTime || 0 };
   activeHls.destroy();
   activeHls = null;
 }
@@ -164,18 +165,29 @@ function destroyHls() {
   activeTokenCtx = null;
 }
 
+/** The viewer closed the film: its half-watched position must not follow the
+ *  next one just because the engine is rebuilt before it starts. */
+function forgetPosition() {
+  lastStreamAt = null;
+  engineScope = "";
+  pendingScope = "";
+}
+
 /** Wire one HLS URL into the engine, stamping tokenized requests and
  *  resuming position/rate across (re)builds — hourly token refresh must
  *  never visibly restart the movie. */
 function buildHls(el: HTMLVideoElement, src: string) {
   stopEngine();
-  const resumeAt =
-    el.currentTime > 0
-      ? el.currentTime
-      : lastStreamAt && lastStreamAt.key === streamKeyOf(src)
-        ? lastStreamAt.at
-        : 0;
+  /* Only the same viewing inherits a position: a rebuild of this episode — the
+     hourly token refresh, tapping another server that answers with another
+     ladder — is what `lastStreamAt` exists for. The next episode, or another
+     film, starts at the top even though the outgoing element was halfway
+     through, which is why the media element's own time is not the first test. */
+  engineScope = pendingScope || engineScope;
+  const outgoing = lastStreamAt;
   lastStreamAt = null;
+  const resumeAt =
+    outgoing && outgoing.key === engineScope ? (el.currentTime || outgoing.at) : 0;
   const rate = el.playbackRate || 1;
   /* hls.js spreads this object over its defaults, so a key present with the
      value `undefined` still wins — and `loader: undefined` replaces the stock
@@ -321,8 +333,12 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
 
   const start = useCallback(
     (m: MiniPlayerMovie, autoplay = true) => {
+      /* Tell the engine which viewing this is before its stream is wired in:
+         a rebuild of the same episode keeps its second, the next episode or
+         another film starts from the top. */
+      pendingScope = m.resumeKey || m.movieId;
       setMovie((prev) => {
-        if (prev?.movieId !== m.movieId) {
+        if (prev?.movieId !== m.movieId || prev?.resumeKey !== m.resumeKey) {
           setHasStarted(false);
           setCurrentTime(0);
           setDuration(0);
@@ -391,6 +407,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   const close = useCallback(() => {
     videoRef.current?.pause();
     destroyHls();
+    forgetPosition();
     setMovie(null);
     setModeState("inline");
     setHasStarted(false);

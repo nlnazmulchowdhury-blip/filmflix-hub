@@ -1,7 +1,6 @@
 import { useMiniPlayer } from "@/components/mini-player-context";
-import { vidsrcEmbedUrl } from "@/lib/vidsrc";
 import { animeEmbedUrl, dramaEmbedUrl } from "@/lib/autoembed";
-import { vidboxEmbedUrl, vixsrcEmbedUrl, nxshaEmbedUrl } from "@/lib/vaplayer";
+import { vidboxEmbedUrl, vixsrcEmbedUrl, nxshaEmbedUrl, vidukiEmbedUrl } from "@/lib/vaplayer";
 import {
   isEmbedUrl,
   probeEmbedPage,
@@ -45,7 +44,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
 
@@ -61,6 +60,10 @@ function formatTime(sec: number) {
  * Registers its slot with the MiniPlayerProvider; the provider portals the
  * single video element in here. In mini mode it shows a bring-back panel.
  */
+
+/** Extra times a title's provider race is re-asked before our stage gives up. */
+const MAX_RACE_TRIES = 2;
+
 export default function PlayerStage({
   movieId,
   videoUrl,
@@ -81,7 +84,7 @@ export default function PlayerStage({
   title: string;
   posterUrl?: string | null;
   backdropUrl?: string | null;
-  /** External IDs used to build the VidSrc "Server 1" embed URL. */
+  /** External ids the provider servers build their embed URLs from. */
   imdbId?: string | null;
   tmdbId?: string | null;
   kind?: "movie" | "series" | null;
@@ -155,8 +158,7 @@ export default function PlayerStage({
   const qualities = movie?.qualities ?? [];
   const subtitles = movie?.subtitles ?? [];
 
-  /* -------- Playback server: stored file vs VidSrc "Server 1" -------- */
-  const vidsrcUrl = vidsrcEmbedUrl({ imdbId, tmdbId, kind, season, episode });
+  /* -------- Playback server: stored file vs the provider servers -------- */
   /* A stored URL that is actually a provider player page (vidlink.pro,
      vixsrc.to, …) — it goes through the embed resolver, never to <video>.
      An admin can also pin an explicit provider page (embed_url). */
@@ -164,22 +166,38 @@ export default function PlayerStage({
   const hasNativeSource =
     (Boolean(videoUrl) && !embedSource) || dubs.length > 0 || qualities.length > 0;
 
-  /* The two ad-free provider chains, each its own selectable server:
-     vidbox  → vidlink.pro (server-side resolvable; an admin-pinned embedSource
-               is a vidlink.pro page, so it belongs to the vidbox server).
+  /* The provider chains, each its own selectable server:
+     nxsha   → web.nxsha.app: a multi-source player whose upstream HLS is read
+               server-side, so its film runs inside our own player.
      vidapi  → vixsrc.to. The key is what it replaced: admin rows store their
                server choices by key, not by provider.
-     nxsha   → web.nxsha.app: a multi-source player that switches upstream hosts
-               by itself. Iframe-only (its stream is fetched by client JS). */
+     vidbox  → vidlink.pro, the provider-pinned embedSource: its stream token
+               is minted server-side now, so an H.264 title runs in our player
+               and only a title vidlink holds as HEVC stays on its own screen.
+     viduki  → play.xpass.top, the player viduki.net's fourth API frames: its
+               answer is an AES-GCM envelope whose key is built from the path and
+               the token printed in its own page, so the Worker opens it and the
+               film runs here too. */
   const vidboxTarget =
     embedSource || vidboxEmbedUrl({ tmdbId, imdbId, kind, season, episode });
   const vixsrcTarget = vixsrcEmbedUrl({ tmdbId, imdbId, kind, season, episode });
   const nxshaTarget = nxshaEmbedUrl({ tmdbId, imdbId, kind, season, episode });
+  const vidukiTarget = vidukiEmbedUrl({ tmdbId, imdbId, kind, season, episode });
 
-  /* vidlink.pro ships HEVC-only files, and a browser without hardware HEVC
-     shows a permanent black rectangle for them — for those viewers that
-     provider stays off the opening pick (see baseDefault). */
+  /* vidlink.pro ships most titles as HEVC-only files, and a browser without
+     hardware HEVC shows a permanent black rectangle for them. Our resolver only
+     ever takes an H.264 answer from it, so this gate is about its *own* player:
+     for a viewer who cannot decode HEVC, that provider stays off the opening
+     pick (see baseDefault). */
   const hevc = browserDecodesHevc();
+
+  /* Videasy paints its "We couldnt find that" wall in the browser, after its
+     sources back end answers empty, so the page it hands our iframe always
+     looks fine — status 200, for every title, dead provider or not. The Worker
+     asks the service behind that wall instead, and answers `live: false` only
+     when it is verifiably offline. A tab the viewer can only ever be punished
+     by is not a tab: it leaves the list, and comes back with the provider. */
+  const [dramaLive, setDramaLive] = useState<boolean | null>(null);
 
   /* Numbered server list — 1, 2, 3… in menu order. `off()` drops any server the
      admin disabled for this title; each server still keys off the ids it
@@ -195,66 +213,72 @@ export default function PlayerStage({
       label: `Server ${++serverNo}`,
       sub: "This site's file · no ads",
     });
-  if (vidboxTarget && !off("vidbox"))
-    servers.push({
-      key: "vidbox",
-      label: `Server ${++serverNo}`,
-      sub: hevc ? "vidbox · ad-free" : "vidbox · needs HEVC",
-    });
-  if (vixsrcTarget && !off("vidapi"))
-    servers.push({ key: "vidapi", label: `Server ${++serverNo}`, sub: "vixsrc · HLS player" });
+  /* nxsha leads the providers: its upstream is read server-side, so its film
+     runs under our own play/volume/progress bar instead of behind an iframe. */
   if (nxshaTarget && !off("nxsha"))
     servers.push({
       key: "nxsha",
       label: `Server ${++serverNo}`,
       sub: "nxsha · multi-source",
     });
-  if (vidsrcUrl && !off("vidsrc"))
-    servers.push({ key: "vidsrc", label: `Server ${++serverNo}`, sub: "VidSrc · has ads" });
-  /* Anime/Drama episode servers key off the TMDB id — only offer them when
-     the current title actually has one. */
+  if (vixsrcTarget && !off("vidapi"))
+    servers.push({ key: "vidapi", label: `Server ${++serverNo}`, sub: "vixsrc · HLS player" });
+  /* The anime episode server keys off the TMDB id — only offer it when the
+     current title actually has one. */
   if (tmdbId && !off("anime"))
-    servers.push({ key: "anime", label: `Server ${++serverNo}`, sub: "Anime · VidNest · has ads" });
-  if (tmdbId && !off("drama"))
+    servers.push({ key: "anime", label: `Server ${++serverNo}`, sub: "VidNest · anime + dubs" });
+  /* viduki's fourth API: its envelope opens server-side and every ladder it
+     lists is plain H.264 HLS, so this one runs under our controls too. Keys off
+     the TMDB number because its routes understand nothing else. */
+  if (vidukiTarget && !off("viduki"))
+    servers.push({
+      key: "viduki",
+      label: `Server ${++serverNo}`,
+      sub: "viduki · xpass ladders",
+    });
+  /* VidBox second to last: its page used to mint the stream token inside a
+     libsodium/WASM handshake in the viewer's browser, which no server-side
+     resolver could reproduce — so it could only ever run on the provider's own
+     screen. That token is minted here now, so an H.264 title plays under our
+     controls; a title vidlink only holds as HEVC still needs its player, which
+     is why this chip stays below the ones that always answer with a stream. */  if (vidboxTarget && !off("vidbox"))
+    servers.push({
+      key: "vidbox",
+      label: `Server ${++serverNo}`,
+      sub: "VidBox · vidlink.pro",
+    });
+  /* Drama last, always: its chip leaves the list when the probe finds the back
+     end offline, and a chip vanishing mid-watch must never renumber the server
+     the viewer just tapped. */
+  if (tmdbId && !off("drama") && dramaLive !== false)
     servers.push({ key: "drama", label: `Server ${++serverNo}`, sub: "Drama · Videasy · has ads" });
 
   /* Default to Server 1 only when there is no stored file to play — so the
      API-backed embed auto-plays for catalog entries without a local source,
      while existing files keep their native player (quality/dub/subtitles).
      An admin-set default wins, but only when that server is actually shown;
-     otherwise fall back to the same heuristic, then to the first live server. */
+     otherwise fall back to the same heuristic, then to the first live server.
+     A server that can only frame its provider never opens by choice — only
+     when the title has nothing else. */
   const baseDefault = hasNativeSource
     ? "original"
-    : vidboxTarget && hevc
-      ? "vidbox"
-      : nxshaTarget
-        ? "nxsha"
-        : vixsrcTarget
-          ? "vidapi"
-          : vidsrcUrl && !videoUrl
-            ? "vidsrc"
-            : "original";
+    : nxshaTarget
+      ? "nxsha"
+      : vixsrcTarget
+        ? "vidapi"
+        : vidboxTarget && hevc
+          ? "vidbox"
+          : "original";
   const usableKeys = servers.map((s) => s.key);
   const wanted =
     defaultServer && usableKeys.includes(defaultServer) ? defaultServer : baseDefault;
   const initialServer = usableKeys.includes(wanted) ? wanted : (usableKeys[0] ?? baseDefault);
   const [server, setServer] = useState<
-    "original" | "vidsrc" | "vidbox" | "vidapi" | "nxsha" | "anime" | "drama"
+    "original" | "vidbox" | "vidapi" | "nxsha" | "anime" | "viduki" | "drama"
   >(initialServer as any);
   const [serverOpen, setServerOpen] = useState(false);
-  const usingVidSrc = server === "vidsrc" && Boolean(vidsrcUrl);
-  /* The provider-page servers: each shows that provider's own iframe, and each
-     gets a server-side ad-free resolve attempt before it. */
-  const usingEmbed =
-    server === "vidbox" || server === "vidapi" || server === "nxsha";
-  const currentEmbedTarget =
-    server === "vidapi"
-      ? vixsrcTarget
-      : server === "nxsha"
-        ? nxshaTarget
-        : vidboxTarget;
 
-  /* -------- Episode servers: 3 = Anime (VidNest), 4 = Drama (Videasy) -------- */
+  /* -------- Episode servers: Anime (VidNest) and Drama (Videasy) -------- */
   const [aeEpisode, setAeEpisode] = useState(episode ?? 1);
   /* The episode list under the player also selects the episode, so a pick
      there has to move this stepper instead of being overridden by it. */
@@ -262,15 +286,57 @@ export default function PlayerStage({
     setAeEpisode(episode ?? 1);
   }, [episode]);
 
-  const usingAutoembed = server === "anime" || server === "drama";
+  /* Drama is still iframe-only (its back end answers nobody), so its provider
+     player keeps the whole stage with only a strip of ours above it. */
+  const usingAutoembed = server === "drama";
+  /* Read once, up here: below, `iframeOnlyServer` narrows `server` along the
+     provider-framing path and a second `server === "anime"` looks impossible. */
+  const animeServer = server === "anime";
   const autoembedUrl =
     server === "anime"
       ? animeEmbedUrl({ tmdbId, kind, season, episode: aeEpisode })
       : server === "drama"
         ? dramaEmbedUrl({ tmdbId, kind, season, episode: aeEpisode })
         : "";
-  /* The URL of whichever full-cover iframe server is active ("" = none). */
-  const iframeServerUrl = (usingVidSrc ? vidsrcUrl : autoembedUrl) ?? "";
+
+  /* The provider-page servers: each shows that provider's own iframe, and each
+     gets a server-side ad-free resolve attempt before it. Anime is one of them
+     now that its scraper API is read server-side, so a stream it holds plays
+     under our own controls instead of only showing a strip above its player. */
+  const usingEmbed =
+    server === "vidbox" ||
+    server === "vidapi" ||
+    server === "nxsha" ||
+    server === "anime" ||
+    server === "viduki";
+  const currentEmbedTarget =
+    server === "vidapi"
+      ? vixsrcTarget
+      : server === "nxsha"
+        ? nxshaTarget
+        : server === "anime"
+          ? autoembedUrl
+          : server === "viduki"
+            ? vidukiTarget
+            : vidboxTarget;
+
+  useEffect(() => {
+    const target = dramaEmbedUrl({ tmdbId, kind, season: 1, episode: 1 });
+    if (!target || off("drama")) {
+      setDramaLive(null);
+      return;
+    }
+    let cancelled = false;
+    void probeEmbedPage(target).then((r) => {
+      if (!cancelled) setDramaLive(r ? r.live : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tmdbId, kind]);
+  /* The URL of the full-cover iframe server when it is active ("" = none). */
+  const iframeServerUrl = autoembedUrl ?? "";
 
   /* -------- Embed resolver ("Server 2"): provider page → raw HLS stream ---- */
   const [embedUrl, setEmbedUrl] = useState(embedSource);
@@ -304,6 +370,13 @@ export default function PlayerStage({
      tap would otherwise read as one of those moves and the film would keep
      playing on a provider nobody chose. */
   const tappedServer = useRef<string>("");
+  /* The same tap, kept after the race above has spent `tappedServer`, so a race
+     that was already running when the viewer chose a server can see that choice
+     and stand down instead of arriving late and taking the film back. It also
+     carries the title, because picking the next episode of a server the viewer
+     chose must stay on that server, not hand the film to whoever answers the
+     lineup fastest. */
+  const lastTap = useRef<{ movieId: string; raceKey: string; key: string } | null>(null);
   /* Resolved streams this title already died on in the player. They stay black
      if the race hands them back, so the next pick skips them. */
   const deadStreams = useRef<Set<string>>(new Set());
@@ -312,13 +385,86 @@ export default function PlayerStage({
      the player change this, so each new episode gets every server asked again. */
   const raceKey = `${movieId}|${season ?? 1}|${episode ?? 1}`;
 
-  /* The provider iframe is visible for as long as an embed server is selected
-     and no ad-free stream has been resolved — including while the resolver is
-     still running. Our own player has nothing to play in that window, and a
-     black stage with a dead play button reads as a broken site. A page the
-     provider itself 500s stays hidden: its error wall is not a player. */
-  const embedIframe = usingEmbed && !embedStream && embedLive !== false;
+  /* Our player is what loads first on every embed server, and for the servers
+     that can hand us a stream it is what *stays*: their provider page is never
+     framed here. VidBox and Drama are the two chips that often have nothing of
+     ours to play — vidlink keeps most titles as HEVC its own player decodes, and
+     Videasy answers nobody — so for them the box goes to the provider once we
+     stop asking. The moment VidBox does resolve an H.264 stream, `embedStream`
+     supersedes its frame and the viewer is back under our controls. A page the
+     provider itself 500s stays hidden either way: its error wall is not a
+     player. */
+  const iframeOnlyServer = server === "vidbox" || server === "drama";
+  const [providerDue, setProviderDue] = useState(false);
+  const providerFramed =
+    iframeOnlyServer && (embedStatus === "failed" || providerDue);
+  const embedIframe = usingEmbed && !embedStream && embedLive !== false && providerFramed;
   const embedDead = usingEmbed && !embedStream && embedLive === false;
+  /* The stage still belongs to us: a provider server is picked, nothing plays
+     yet, and its player has not been handed the box. */
+  const awaitingPlayer =
+    !embedDead && !embedStream && (usingEmbed || usingAutoembed) && !providerFramed;
+  /* The race is spent on a chip that can feed our own player. Its cover stays
+     up — the provider page is not framed behind the viewer's back — with the
+     spinner stopped, the reason in amber, and Try again beside it. */
+  const raceSpent = awaitingPlayer && usingEmbed && embedStatus === "failed";
+
+  /* A new title, episode or chip is a clean slate: our stage holds the box
+     again, so a provider page left over from the previous one never leaks into
+     it. Kept off `embedStatus` on purpose — a race that fails and re-arms must
+     not yank away a page already on screen. */
+  useEffect(() => {
+    setProviderDue(false);
+  }, [server, raceKey]);
+
+  useEffect(() => {
+    if (!awaitingPlayer || !iframeOnlyServer) return;
+    /* Drama only ever frames a page, so it needn't keep the viewer staring at a
+       spinner. VidBox is being asked with a real handshake now, and a page that
+       flashes into the iframe and straight back out again is worse than waiting
+       a few seconds under our own cover — so it gets long enough to answer. */
+    const t = setTimeout(() => setProviderDue(true), server === "vidbox" ? 6_000 : 1_500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server, raceKey, embedStream, usingEmbed, usingAutoembed, embedStatus]);
+
+  /* Provider scrapers rotate: a chain that answered empty a moment ago often
+     has a live link seconds later, so a miss is retried before the stage gives
+     up. `raceNonce` is what re-arms the resolver effect for the same title. */
+  const [raceNonce, setRaceNonce] = useState(0);
+  const raceTries = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armRaceRetry = useCallback(() => {
+    if (retryTimer.current || raceTries.current >= MAX_RACE_TRIES) return false;
+    raceTries.current += 1;
+    retryTimer.current = setTimeout(() => {
+      retryTimer.current = null;
+      racedFor.current = "";
+      streamedFor.current = "";
+      setRaceNonce((n) => n + 1);
+    }, 2_500);
+    return true;
+  }, []);
+  useEffect(
+    () => () => {
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+    },
+    [],
+  );
+  /** The cover's "Try again": the viewer's word that this chip is worth
+   *  asking once more, so the retry budget is refilled and spent immediately. */
+  const retryRace = useCallback(() => {
+    if (retryTimer.current) {
+      clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
+    raceTries.current = 0;
+    racedFor.current = "";
+    streamedFor.current = "";
+    setEmbedStatus("resolving");
+    setEmbedError("");
+    setRaceNonce((n) => n + 1);
+  }, [setEmbedStatus, setEmbedError, setRaceNonce]);
 
   /* -------- Download menu: this site's files + the resolved stream's
       resolutions (asked from the Worker when the menu opens). -------- */
@@ -341,6 +487,22 @@ export default function PlayerStage({
     }
   })();
 
+  /* A provider's own page is what is on screen. Our design still sits above it:
+     those framed blocks are z-[60], so the band this state swaps in for the
+     native bar is layered over them, and the picture stays click-through so the
+     provider's play button keeps working underneath. It goes at the TOP edge on
+     purpose: every provider puts its play, seek and volume along the bottom, so
+     a bar down there would cover the very controls this state sends the viewer
+     to use. VidNest keys its pages per episode, so its stepper rides along. */
+  const providerMode =
+    embedIframe ||
+    usingAutoembed && Boolean(iframeServerUrl) && providerFramed;
+  const framedEpisodeStepper = providerMode && (usingAutoembed || animeServer);
+  const providerUrl = (embedUrl || embedSource || iframeServerUrl || "") as string;
+  const providerName =
+    (embedIframe ? embedHost : servers.find((s) => s.key === server)?.sub?.split(" · ")[0]) ||
+    "Provider";
+
   const playEmbedCandidate = useCallback(
     (c: EmbedCandidate) => {
       setEmbedStream(c.url);
@@ -351,6 +513,7 @@ export default function PlayerStage({
       start(
         {
           movieId,
+          resumeKey: raceKey,
           title,
           videoUrl: c.url,
           isHls: c.kind === "hls",
@@ -360,15 +523,14 @@ export default function PlayerStage({
         true,
       );
     },
-    [start, movieId, title, posterUrl, backdropUrl],
+    [start, movieId, raceKey, title, posterUrl, backdropUrl],
   );
 
   /* A provider page is only as good as the stream we can pull out of it
-     server-side. Every provider for the title is asked at once and whichever
-     answers first is what the viewer gets, while the provider player is
-     already on screen — a hit swaps to the clean stream, a miss leaves the
-     provider playing. A page the provider itself 500s stays hidden.
-     `only` narrows the ask to the one provider the viewer tapped. */
+     server-side. Every provider for the title is asked at once, and our own
+     stage stays up while it waits: a hit plays the clean stream here, a miss
+     hands the box to that provider's player. A page the provider itself 500s
+     stays hidden. `only` narrows the ask to the one provider the viewer tapped. */
   const raceServers = useCallback(
     async (
       activeKey: string,
@@ -391,10 +553,12 @@ export default function PlayerStage({
         })),
       );
 
-      /* Nothing ad-free worked (or what worked later died in the player), so a
-         provider player takes the stage. Its page probes decide which one:
-         a provider with no page for this title is skipped instead of framed. */
-      const showProviders = async (why: string) => {
+      /* Nothing ad-free worked (or what worked later died in the player). For a
+         server that can only ever show its provider, that provider's player
+         takes the stage and its page probes decide which one — a provider with
+         no page for this title is skipped instead of framed. For a server that
+         can hand us a stream, our own stage keeps the box and says so. */
+      const showProviders = async (why: string, frame: boolean) => {
         const answers = await Promise.all(liveness);
         for (const a of answers) {
           if (a.live) deadEmbeds.current.delete(a.key);
@@ -402,7 +566,7 @@ export default function PlayerStage({
         }
         setEmbedCandidates([]);
         setEmbedStatus("failed");
-        setEmbedError(`${why} A provider player is shown instead.`);
+        setEmbedError(frame ? `${why} A provider player is shown instead.` : why);
 
         const mine = answers.find((a) => a.key === activeKey);
         setEmbedLive(mine ? mine.live : true);
@@ -411,7 +575,7 @@ export default function PlayerStage({
            have this" wall at HTTP 200, so staying put would leave the viewer
            staring at it while another server plays the film. */
         const next =
-          !mine || mine.carried
+          !frame || !mine || mine.carried
             ? undefined
             : answers.find(
                 (a) =>
@@ -436,6 +600,19 @@ export default function PlayerStage({
           ? { tmdbId: null }
           : { tmdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? 1) },
       );
+      /* A chip the viewer tapped outranks any race they did not ask for. That
+         one asks the whole lineup, so when it lands it would move the label and
+         swap the film out from under the server they just chose — which reads
+         as "this server does not work" — and it does the same thing one
+         episode late: the lineup race for the next episode can pick a different
+         provider and slide the tab sideways even though the tapped server was
+         playing fine. So a tap holds for the rest of the title. */
+      if (
+        !solo &&
+        lastTap.current?.movieId === movieId &&
+        lastTap.current.key !== activeKey
+      )
+        return;
       if (race.win) {
         const step = chains.find((c) => c.url === race.win?.url);
         /* Skip links this title already failed on, and — for a viewer without
@@ -444,6 +621,7 @@ export default function PlayerStage({
           (c) => !deadStreams.current.has(c.url) && (hevc || c.codec !== "hevc"),
         );
         if (pool.length) {
+          raceTries.current = 0;
           setEmbedCandidates(race.win.candidates);
           setEmbedStatus("ready");
           setEmbedLive(true);
@@ -465,11 +643,27 @@ export default function PlayerStage({
         }
       }
 
-      await showProviders(race.win
+      const why = race.win
         ? "Every stream it offered died in this player."
-        : race.error || "No ad-free chain worked.");
+        : race.error || "No ad-free chain worked.";
+      /* A chip that can feed our own player keeps the stage and asks again —
+         the providers rotate their scrapers, so the second or third pass often
+         answers when the first was empty. VidBox is in that group now: its
+         handshake is a fresh ask every pass, so it retries before its own screen
+         takes the box. Only Drama, which answers nobody ad-free, gives up
+         straight away. */
+      const retryable = activeKey !== "drama";
+      if (retryable && armRaceRetry()) {
+        setEmbedStatus("resolving");
+        setEmbedError(why);
+        return;
+      }
+      /* Whose screen takes the box when we do stop asking: Drama always, VidBox
+         for the titles vidlink holds only as HEVC — a provider page at least
+         plays there, while our player would paint black. */
+      await showProviders(why, activeKey === "vidbox" || activeKey === "drama");
     },
-    [playEmbedCandidate, server, tmdbId, kind, season, episode, aeEpisode, hevc, raceKey],
+    [playEmbedCandidate, armRaceRetry, server, movieId, tmdbId, kind, season, episode, aeEpisode, hevc, raceKey],
   );
 
   /** The resolver panel's button: retry the page currently in the box. */
@@ -479,14 +673,18 @@ export default function PlayerStage({
   );
 
   /* Every ad-free provider available for this title/episode, honouring the
-     servers an admin switched off. These are what the race asks in parallel —
-     the episode-only anime/drama providers are left out because their player
-     pages answer 200 for any TMDB id, so they can never be judged by a probe. */
+     servers an admin switched off. These are what the race asks in parallel.
+     Drama is left out: nothing ad-free can be pulled from it while its back end
+     is down, so it would only ever report a miss. */
   const adFreeChains = () =>
     [
-      { key: "vidbox", url: vidboxTarget },
-      { key: "vidapi", url: vixsrcTarget },
+      /* Menu order: the chains that can run in our own player are also the ones
+         preferred when the race has to pick a provider page to frame. */
       { key: "nxsha", url: nxshaTarget },
+      { key: "vidapi", url: vixsrcTarget },
+      { key: "anime", url: autoembedUrl },
+      { key: "viduki", url: vidukiTarget },
+      { key: "vidbox", url: vidboxTarget },
     ].filter((c) => c.url && !off(c.key)) as { key: string; url: string }[];
 
   /* An embed server (vidbox/vidapi/nxsha) is showing: fire the whole provider
@@ -495,6 +693,10 @@ export default function PlayerStage({
      that the race itself caused only re-probes, so it never loops. */
   useEffect(() => {
     if (!usingEmbed) return;
+    /* A retry is armed by disarming it first: the effect re-runs for the title,
+       chip or manual ask that supersedes the queued pass, and the timer is
+       spent the moment it fires. Clearing it here unconditionally cancelled the
+       very pass that re-ran this effect, so a failed race never asked twice. */
     if (playedEmbedTarget.current === currentEmbedTarget) {
       /* The race already plays a stream pulled from this provider — the label
          moved here, the movie must not be re-resolved. */
@@ -509,13 +711,15 @@ export default function PlayerStage({
       return;
     }
     const chains = adFreeChains();
-    const pages = [
-      ...chains,
-      ...(vidsrcUrl && !off("vidsrc") ? [{ key: "vidsrc", url: vidsrcUrl }] : []),
-    ];
-    /* A tap on this title's chip outranks the stream already on screen. */
+    /* A tap on this title's chip outranks the stream already on screen — and it
+       keeps outranking it for the rest of this title, so the next episode is
+       asked from the server the viewer chose instead of from the whole lineup,
+       which would hand the film to whoever answers first and move the tab. */
     const tapped =
-      tappedServer.current === `${raceKey}|${server}` ? currentEmbedTarget : "";
+      tappedServer.current === `${raceKey}|${server}` ||
+      (lastTap.current?.movieId === movieId && lastTap.current.key === server)
+        ? currentEmbedTarget
+        : "";
     if (!tapped && (streamedFor.current === raceKey || (racedFor.current === raceKey && !embedStream))) {
       /* Already raced for this title — and if its stream is on screen, this is
          just the viewer moving between server chips, which must never restart
@@ -534,34 +738,9 @@ export default function PlayerStage({
     setEmbedStream(null);
     setEmbedLive(null);
     setEmbedCarried(false);
-    void raceServers(server, chains, pages, tapped);
+    void raceServers(server, chains, chains, tapped);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usingEmbed, currentEmbedTarget, raceKey]);
-
-  /* An iframe-only server opened instead (VidSrc, or a server the admin
-     pinned): the ad-free providers are still worth asking, so the fastest one
-     that yields a stream takes the stage rather than leaving the viewer inside
-     a provider player that may not carry the title. A file this site hosts is
-     never disturbed — it already plays here. */
-  useEffect(() => {
-    if (usingEmbed || hasNativeSource) return;
-    /* Anime/drama are deliberately outside the race — their pages answer 200
-       for any TMDB id, so a probe cannot judge them and they would hijack the
-       winner onto a wrong show. Only VidSrc asks here. */
-    if (server !== "vidsrc") return;
-    if (tappedServer.current === `${raceKey}|${server}`) {
-      /* The viewer asked for this provider's own player, so its iframe keeps the
-         stage — pulling an ad-free stream out from under them would put back
-         the server they just moved away from. */
-      return;
-    }
-    if (racedFor.current === raceKey) return;
-    const chains = adFreeChains();
-    if (!chains.length) return;
-    racedFor.current = raceKey;
-    void raceServers(server, chains, chains);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usingEmbed, hasNativeSource, raceKey, server]);
+  }, [usingEmbed, currentEmbedTarget, raceKey, raceNonce]);
 
   /* A stream the resolver handed over can still die in the player: the CDN
      answers Cloudflare but refuses the viewer, the token expires mid-load, or
@@ -587,11 +766,11 @@ export default function PlayerStage({
       const page = currentEmbedTarget || embedSource;
       if (page)
         start(
-          { movieId, title, videoUrl: page, posterUrl, backdropUrl },
+          { movieId, resumeKey: raceKey, title, videoUrl: page, posterUrl, backdropUrl },
           true,
         );
     },
-    [embedStream, currentEmbedTarget, embedSource, start, movieId, title, posterUrl, backdropUrl],
+    [embedStream, currentEmbedTarget, embedSource, start, movieId, raceKey, title, posterUrl, backdropUrl],
   );
 
   useEffect(
@@ -617,14 +796,41 @@ export default function PlayerStage({
     return () => clearTimeout(t);
   }, [embedStream, playing, currentTime, bufferedEnd, handBackToProvider]);
 
+  /* A stream the resolver handed over still has to produce its first frame, and
+     the cover comes down the moment the URL arrives. That gap is a black
+     rectangle with our bar on it — which is exactly what reads as "this server
+     is empty". So watch the media element itself: our mark stays up until it has
+     a picture, and comes back if the picture stalls mid-film. */
+  const [pictureUp, setPictureUp] = useState(false);
+  useEffect(() => {
+    const el = containerRef.current?.querySelector("video");
+    if (!el) return;
+    /* `loadstart` is the reset: a new source drops readyState to 0, so the mark
+       comes back on its own without a second effect. */
+    const mark = () => setPictureUp(el.readyState >= 3);
+    const events = [
+      "loadstart",
+      "loadeddata",
+      "canplay",
+      "playing",
+      "timeupdate",
+      "waiting",
+      "stalled",
+    ] as const;
+    events.forEach((e) => el.addEventListener(e, mark));
+    mark();
+    return () => events.forEach((e) => el.removeEventListener(e, mark));
+  }, [embedStream, mode]);
+  const streamWarming = Boolean(embedStream) && !pictureUp;
+
   const selectServer = (key: string) => {
     const next:
       | "original"
-      | "vidsrc"
       | "vidbox"
       | "vidapi"
       | "nxsha"
       | "anime"
+      | "viduki"
       | "drama" =
       key === "vidbox"
         ? "vidbox"
@@ -632,25 +838,33 @@ export default function PlayerStage({
           ? "vidapi"
           : key === "nxsha"
             ? "nxsha"
-            : key === "vidsrc"
-              ? "vidsrc"
-              : key === "anime"
-                ? "anime"
+            : key === "anime"
+              ? "anime"
+              : key === "viduki"
+                ? "viduki"
                 : key === "drama"
                   ? "drama"
                   : "original";
     /* Remember the choice for this title: the resolvers answer that server
        alone instead of leaving the race's winner on screen under a new name. */
     tappedServer.current = next === server ? "" : `${raceKey}|${next}`;
+    lastTap.current = { movieId, raceKey, key: next };
     if (next === "original" && embedStream) {
       setEmbedStream(null);
       streamedFor.current = "";
       start(
-        { movieId, title, videoUrl: embedSource ? "" : videoUrl, posterUrl, backdropUrl },
+        {
+          movieId,
+          resumeKey: raceKey,
+          title,
+          videoUrl: embedSource ? "" : videoUrl,
+          posterUrl,
+          backdropUrl,
+        },
         true,
       );
     }
-    if ((next === "vidsrc" || next === "anime" || next === "drama") && embedStream) {
+    if ((next === "anime" || next === "drama") && embedStream) {
       /* That provider's own player was asked for, so it takes the stage rather
          than keeping a stream pulled from somewhere else. */
       setEmbedStream(null);
@@ -658,13 +872,12 @@ export default function PlayerStage({
       start(
         {
           movieId,
+          resumeKey: raceKey,
           title,
           videoUrl:
-            next === "vidsrc"
-              ? (vidsrcUrl ?? "")
-              : next === "anime"
-                ? animeEmbedUrl({ tmdbId, kind, season, episode: aeEpisode })
-                : dramaEmbedUrl({ tmdbId, kind, season, episode: aeEpisode }),
+            next === "anime"
+              ? animeEmbedUrl({ tmdbId, kind, season, episode: aeEpisode })
+              : dramaEmbedUrl({ tmdbId, kind, season, episode: aeEpisode }),
           posterUrl,
           backdropUrl,
         },
@@ -672,22 +885,33 @@ export default function PlayerStage({
       );
     }
     setServer(next);
-    /* Embed servers now show the provider player straight away and resolve an
-       ad-free stream in the background; the resolver panel stays behind the
-       "Ad-free stream" button in its top strip. */
+    /* Our stage takes the box and the providers are raced behind it; the
+       resolver panel stays behind the "Ad-free stream" button in the strip
+       shown once a provider player is framed. */
     bumpControlsActivity();
   };
 
-  /* When an iframe server (VidSrc / autoembed / embed fallback) takes over,
-     pause the native file so the two never output audio at once. */
+  /* A viewer can reach Server 6 in the moment before the probe answers. Once it
+     says the provider is offline, that tab has already left the list — leaving
+     them inside it would keep them watching a wall, so hand them to the next
+     server on offer and say why. */
   useEffect(() => {
-    if (
-      (usingVidSrc || usingAutoembed || embedIframe) &&
-      playing
-    )
+    if (dramaLive !== false || server !== "drama") return;
+    const next = servers.find((s) => s.key !== "drama");
+    if (!next) return;
+    toast.info(`Videasy is offline right now — using ${next.label} instead.`);
+    selectServer(next.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dramaLive, server]);
+
+  /* When an iframe server (autoembed / embed fallback) takes over,
+     pause the native file so the two never output audio at once. Our own stage
+     covers the box while a race runs, so the file waits for it too. */
+  useEffect(() => {
+    if ((usingAutoembed || embedIframe || awaitingPlayer) && playing)
       controls.pause();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usingVidSrc, usingAutoembed, embedIframe, playing]);
+  }, [usingAutoembed, embedIframe, awaitingPlayer, playing]);
 
   const isHost = isActive && mode === "inline";
 
@@ -717,8 +941,27 @@ export default function PlayerStage({
   /* Auto-hide lives in the provider (shared with the mini card). Here we
      only hold it open while a menu is open. */
   useEffect(() => {
-    setControlsHold(langOpen || settingsOpen || serverOpen);
-  }, [langOpen, settingsOpen, serverOpen, setControlsHold]);
+    setControlsHold(langOpen || settingsOpen || serverOpen || downloadOpen);
+  }, [langOpen, settingsOpen, serverOpen, downloadOpen, setControlsHold]);
+
+  /* Dismiss a player menu from anywhere. The box's own capture handler cannot
+     see taps on the picture: the video and its tap-zones are mounted by the
+     provider into a slot of their own, so on a phone — where the only way out
+     of a menu is a tap — an open menu used to stay open forever. */
+  useEffect(() => {
+    if (!langOpen && !settingsOpen && !serverOpen && !downloadOpen) return;
+    const onDown = (e: Event) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.("[data-player-menu]")) return;
+      setLangOpen(false);
+      setSettingsOpen(false);
+      setServerOpen(false);
+      setDownloadOpen(false);
+      setSettingsView("main");
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [langOpen, settingsOpen, serverOpen, downloadOpen]);
 
   /* Native pointerleave on the whole player box (video + control bar):
      when the mouse leaves the player, hide the controls immediately.
@@ -743,6 +986,10 @@ export default function PlayerStage({
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      /* Over a framed provider page only fullscreen is ours to key; play, seek
+         and volume belong to that page, and driving our hidden video instead
+         would fight whoever is actually running the film. */
+      if (providerMode && e.key !== "f" && e.key !== "F") return;
       switch (e.key) {
         case " ":
         case "k":
@@ -786,7 +1033,7 @@ export default function PlayerStage({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHost, controls, volume, bumpControlsActivity]);
+  }, [isHost, controls, volume, providerMode, bumpControlsActivity]);
 
   /* While a movie is actually playing, leaving the page (closing the tab,
      reloading, an ad-script redirect) kills the show. Ask first — the
@@ -910,6 +1157,7 @@ export default function PlayerStage({
             start(
               {
                 movieId,
+                resumeKey: raceKey,
                 title,
                 videoUrl: embedSource ? "" : videoUrl,
                 posterUrl,
@@ -973,7 +1221,7 @@ export default function PlayerStage({
       className={`group/player relative w-full overflow-hidden bg-black shadow-[0_24px_80px_-24px_rgba(0,0,0,0.9)] ${
         fullscreen
           ? "fixed inset-0 z-[80] rounded-none border-0"
-          : "aspect-video w-full rounded-xl border border-border/60"
+          : "aspect-video max-sm:aspect-[4/3] w-full rounded-xl border border-border/60"
       }`}
       onPointerMove={(e) => {
         if (e.pointerType !== "mouse") return;
@@ -1023,95 +1271,109 @@ export default function PlayerStage({
         </button>
       )}
 
-      {/* Full-cover iframe servers — VidSrc "Server 1" and the AutoEmbed
-          episode players "Server 3" (anime) / "Server 4" (drama). */}
-      {(usingVidSrc || usingAutoembed) && iframeServerUrl && (
+      {/* Our design comes up first on every embed server: the poster, our play
+          affordance and the server picker hold the box while the providers are
+          asked. A provider's own page only ever appears on a chip that cannot
+          feed our player at all. */}
+      {awaitingPlayer && (
+        <div className="absolute inset-0 z-[62] flex flex-col items-center justify-center gap-3 bg-black">
+          {movie.backdropUrl || movie.posterUrl ? (
+            <img
+              src={(movie.backdropUrl ?? movie.posterUrl) as string}
+              alt=""
+              className="absolute inset-0 size-full object-cover opacity-45"
+            />
+          ) : null}
+          <LoadingOrbit paused={raceSpent} className="relative z-10 text-[5.5rem] sm:text-[7rem]" />
+          <span className="relative z-10 max-w-[86vw] truncate rounded-full bg-black/60 px-4 py-1.5 font-display text-sm font-semibold text-white backdrop-blur-sm">
+            {title}
+          </span>
+          {/* While the race runs the orbit is the whole message. A line is only
+              worth its space when something actually went wrong. */}
+          {raceSpent || !usingEmbed ? (
+            <p
+              className={`relative z-10 max-w-[86vw] text-center text-xs ${
+                raceSpent ? "text-amber-200/90" : "text-white/70"
+              }`}
+            >
+              {raceSpent
+                ? embedError || "No server answered with a stream this player can run."
+                : "Loading this server's player…"}
+            </p>
+          ) : null}
+          <div className="relative z-10 mt-1 flex items-center gap-2">
+            <ServerSwitcher
+              servers={servers}
+              activeKey={server}
+              onSelect={selectServer}
+              open={serverOpen}
+              setOpen={setServerOpen}
+              align="left"
+              drop="up"
+            />
+            {raceSpent && (
+              <button
+                type="button"
+                onClick={retryRace}
+                className="flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white backdrop-blur-sm transition-colors hover:bg-white/25"
+                title="Ask every provider for this server again"
+              >
+                <RotateCcw className="size-3.5" />
+                Try again
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* The hand-off gap: the race is over, a stream is attached, and the
+          element has not painted a frame yet. Clicks pass straight through, so
+          the viewer can still press play while the first segment downloads. */}
+      {streamWarming && (
+        <div className="pointer-events-none absolute inset-0 z-[62] flex flex-col items-center justify-center gap-2.5">
+          <LoadingOrbit className="text-[4.25rem] sm:text-[5.25rem]" />
+          <p className="rounded-full bg-black/55 px-3 py-1 text-xs text-white/80 backdrop-blur-sm">
+            {`Loading the first frame from ${providerName}…`}
+          </p>
+        </div>
+      )}
+
+      {/* Same beat on a chip that can only show the provider's own page: its
+          first paint is silent to us, so our mark opens the box for a few
+          seconds and then fades out — click-through the whole time, so the
+          provider's play button is pressable under it. */}
+      {providerMode && (
+        <div
+          key={providerUrl}
+          className="ff-warm pointer-events-none absolute inset-0 z-[62] flex flex-col items-center justify-center gap-2.5"
+        >
+          <LoadingOrbit className="text-[4.25rem] sm:text-[5.25rem]" />
+          <p className="rounded-full bg-black/55 px-3 py-1 text-xs text-white/80 backdrop-blur-sm">
+            {`Waiting for ${providerName}…`}
+          </p>
+        </div>
+      )}
+
+      {/* The Videasy drama player: iframe-only, so it keeps the whole stage.
+          Our chrome lives in one top band for every framed provider — see the
+          `providerMode` block below — because a provider's own play, seek and
+          volume always sit along its bottom edge. */}
+      {usingAutoembed && iframeServerUrl && providerFramed && (
         <div className="absolute inset-0 z-[60] bg-black">
           <iframe
             key={iframeServerUrl}
             src={iframeServerUrl}
-            title={`${title} — ${usingVidSrc ? "Server 1" : server === "anime" ? "Server 3 · Anime" : "Server 4 · Drama"}`}
+            title={`${title} — Drama`}
             className="absolute inset-0 size-full border-0"
             allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
             allowFullScreen
             referrerPolicy="origin"
           />
-          {/* Floating top strip — the iframe covers the native control bar,
-              so Server switch + fullscreen live here. */}
-          <div className="absolute inset-x-0 top-0 z-10 flex flex-wrap items-center gap-1.5 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-2 pb-8 pt-2 sm:px-3">
-            {usingAutoembed && (
-              <>
-                {/* Episode stepper — the anime/drama providers are per-episode
-                    for series (VidNest / Videasy `tv/{id}/{season}/{ep}`). */}
-                <div className="flex items-center gap-0.5 rounded-lg bg-black/55 text-white backdrop-blur-sm">
-                  <button
-                    type="button"
-                    onClick={() => setAeEpisode((e) => Math.max(1, e - 1))}
-                    className="rounded-lg p-1.5 transition-colors hover:bg-white/15"
-                    aria-label="Previous episode"
-                  >
-                    <ChevronLeft className="size-4" />
-                  </button>
-                  <span className="min-w-[64px] text-center text-xs font-semibold tabular-nums">
-                    Ep {aeEpisode}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setAeEpisode((e) => e + 1)}
-                    className="rounded-lg p-1.5 transition-colors hover:bg-white/15"
-                    aria-label="Next episode"
-                  >
-                    <ChevronRight className="size-4" />
-                  </button>
-                </div>
-                <a
-                  href={iframeServerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-lg bg-black/55 px-2.5 py-1.5 text-xs text-white backdrop-blur-sm transition-colors hover:bg-black/75"
-                  title="If the player stays blank, open the provider directly"
-                >
-                  Open ↗
-                </a>
-              </>
-            )}
-            <div className="ml-auto flex items-center gap-1.5">
-              <ServerSwitcher
-                servers={servers}
-                activeKey={server}
-                onSelect={selectServer}
-                open={serverOpen}
-                setOpen={setServerOpen}
-                align="right"
-                drop="down"
-              />
-              <DownloadMenu
-                files={downloadFiles}
-                streamUrl={streamProbeUrl} referer={embedUrl || embedSource || iframeServerUrl}
-                iframeUrl={iframeServerUrl}
-                ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
-                title={title}
-                open={downloadOpen}
-                setOpen={setDownloadOpen}
-                align="right"
-                drop="down"
-              />
-              <button
-                type="button"
-                onClick={toggleFullscreen}
-                className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-                aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-                title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-              >
-                {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
-      {/* Embed servers: the provider player, shown from the first frame and
-          hidden again only if an ad-free raw stream was extracted. */}
+      {/* Embed servers that ended up framing their own player: only reached once
+          the race failed or the viewer asked for it, so our stage was up first. */}
       {embedIframe && (embedUrl || embedSource) && (
         <div className="absolute inset-0 z-[60] bg-black">
           <iframe
@@ -1125,36 +1387,79 @@ export default function PlayerStage({
           {/* The provider's own wall ("we don't have this episode") is served at
               HTTP 200, so no probe can tell it from a working player. Say out
               loud which host is showing and where to go instead — that is the
-              one case where a framed provider page reads as a broken site. */}
-          <div className="absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-2 pb-2 pt-2 sm:px-3">
-            <div className="flex items-center gap-1.5">
+              one case where a framed provider page reads as a broken site. It
+              is said from the top band, so this page keeps its bottom edge. */}
+        </div>
+      )}
+
+      {/* Our design over a provider's own player, along the TOP edge. It keeps
+          the native bar's gradient and buttons, but only the ones that really
+          act on a framed page: server, download, open-the-provider, fullscreen.
+          A scrubber or volume slider would be decoration here — this site
+          cannot seek, mute or read the time of a cross-origin player — and the
+          band ignores clicks except on its buttons, which leaves the provider's
+          own play/seek/volume along its bottom edge completely usable. */}
+      {providerMode && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-[61] bg-gradient-to-b from-black/90 via-black/55 to-transparent px-2 pb-9 pt-2 max-sm:pb-6 max-sm:pt-1.5 sm:px-4">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 sm:gap-x-2.5">
+            {/* Stepper + status travel together: on a phone they share the row
+                under the buttons, since a stepper, two labels and two icons need
+                width the player does not have. `contents` at sm+ folds them back
+                into the single desktop row. The status line says what this state
+                is and why, and opens the resolver log when tapped. */}
+            <div className="flex min-w-0 items-center gap-x-1.5 max-sm:order-last max-sm:basis-full sm:contents">
+              {framedEpisodeStepper && (
+                <EpisodeStepper episode={aeEpisode} onChange={setAeEpisode} />
+              )}
               <button
                 type="button"
                 onClick={() => setEmbedPanelOpen(true)}
-                className={`rounded-lg bg-black/55 px-2.5 py-1.5 text-xs backdrop-blur-sm transition-colors hover:bg-black/75 ${
-                  embedStatus === "failed" && !embedCarried
-                    ? "text-amber-200"
-                    : "text-white"
+                className={`pointer-events-auto min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-white/10 ${
+                  embedStatus === "failed" && !embedCarried ? "text-amber-200" : "text-white/70"
                 }`}
                 title={
                   embedStatus === "failed"
-                    ? "No provider gave a stream this page could play, so the provider's own player is shown"
+                    ? "No provider gave a stream this site could play, so the provider's own player is shown"
                     : "Every provider is being tried at once — the first stream that answers plays here"
                 }
               >
-                {embedStatus === "resolving" ? (
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 className="size-3.5 animate-spin" />
-                    <span className="hidden sm:inline">Checking all servers…</span>
-                    <span className="sm:hidden">Checking…</span>
-                  </span>
-                ) : embedStatus === "failed" ? (
-                  "Provider player"
-                ) : (
-                  "Ad-free stream"
-                )}
+                <span className="hidden font-semibold text-white sm:inline">{title} · </span>
+                {embedStatus === "resolving"
+                  ? (
+                      <>
+                        <span className="sm:hidden">Trying every server for a stream…</span>
+                        <span className="hidden sm:inline">
+                          Trying every server for an ad-free stream…
+                        </span>
+                      </>
+                    )
+                  : embedStatus === "failed" && !embedCarried
+                    ? (
+                        <>
+                          <span className="sm:hidden">
+                            {providerName} — may not carry this
+                          </span>
+                          <span className="hidden sm:inline">
+                            {providerName} may not carry this title — try another server
+                          </span>
+                        </>
+                      )
+                    : embedStatus === "failed"
+                      ? (
+                          <>
+                            <span className="sm:hidden">
+                              {providerName} — press play on its screen
+                            </span>
+                            <span className="hidden sm:inline">
+                              {providerName} has this title — press play on its screen; seek and
+                              volume stay there
+                            </span>
+                          </>
+                        )
+                      : `${providerName} is running the film`}
               </button>
-              <div className="ml-auto flex items-center gap-1.5">
+            </div>
+            <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-1">
               <ServerSwitcher
                 servers={servers}
                 activeKey={server}
@@ -1166,15 +1471,32 @@ export default function PlayerStage({
               />
               <DownloadMenu
                 files={downloadFiles}
-                streamUrl={streamProbeUrl} referer={embedUrl || embedSource || iframeServerUrl}
-                iframeUrl={(embedUrl || embedSource) as string}
-                ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
+                streamUrl={streamProbeUrl}
+                referer={providerUrl}
+                iframeUrl={providerUrl}
+                ids={{
+                  tmdbId,
+                  imdbId,
+                  kind,
+                  season,
+                  episode: usingAutoembed || animeServer ? aeEpisode : (episode ?? aeEpisode),
+                }}
                 title={title}
                 open={downloadOpen}
                 setOpen={setDownloadOpen}
                 align="right"
                 drop="down"
               />
+              <a
+                href={providerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+                aria-label="Open the provider directly"
+                title="If the player stays blank, open the provider directly"
+              >
+                <ExternalLink className="size-5" />
+              </a>
               <button
                 type="button"
                 onClick={toggleFullscreen}
@@ -1184,44 +1506,7 @@ export default function PlayerStage({
               >
                 {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
               </button>
-              </div>
             </div>
-            {/* Naming the host and the way out: on a failed race the framed page
-                is the provider's, and unless it confirmed the title it can just
-                as well be showing its own "we don't have this" wall. */}
-            {embedStatus === "failed" && !embedCarried && (
-              <div className="mt-1.5 flex items-center gap-2">
-                <p className="min-w-0 flex-1 truncate rounded-lg bg-black/55 px-2.5 py-1 text-[11px] text-amber-200/90 backdrop-blur-sm">
-                  <span className="hidden sm:inline">
-                    {embedHost} answered with no stream we can play, so its own
-                    player is showing — it may not carry this title.
-                  </span>
-                  <span className="sm:hidden">{embedHost} may not have this title.</span>
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setServerOpen(true)}
-                  className="shrink-0 rounded-lg bg-white/15 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-sm transition-colors hover:bg-white/25"
-                >
-                  Try another server
-                </button>
-              </div>
-            )}
-            {/* The provider confirmed the title, so the framed player does have
-                it — but a cross-origin iframe cannot be started from here (its
-                own autoplay is not honoured and we may not reach inside it), so
-                the viewer needs to know the play button is on that side. */}
-            {embedStatus === "failed" && embedCarried && (
-              <div className="mt-1.5">
-                <p className="inline-flex max-w-full truncate rounded-lg bg-black/55 px-2.5 py-1 text-[11px] text-white/80 backdrop-blur-sm">
-                  <span className="hidden sm:inline">
-                    {embedHost} has this title — press play inside its player to
-                    start.
-                  </span>
-                  <span className="sm:hidden">Press play inside the player.</span>
-                </p>
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -1356,14 +1641,17 @@ export default function PlayerStage({
         </div>
       )}
 
-      {/* Controls — float up from the bottom edge on hover/tap. */}
+      {/* Controls — float up from the bottom edge on hover/tap. Hidden while a
+          provider page holds the box; our bar above it takes the edge instead. */}
       <div
         onMouseEnter={() => setHoveringControls(true)}
         onMouseLeave={() => setHoveringControls(false)}
-        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2 pb-2.5 pt-10 transition-all duration-300 ease-out sm:px-4 ${
-          controlsVisible || !playing
-            ? "translate-y-0 opacity-100"
-            : "pointer-events-none translate-y-3 opacity-0"
+        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2 pb-2.5 pt-10 transition-all duration-300 ease-out max-sm:pt-6 sm:px-4 ${
+          providerMode
+            ? "hidden"
+            : controlsVisible || !playing
+              ? "translate-y-0 opacity-100"
+              : "pointer-events-none translate-y-3 opacity-0"
         }`}
       >
         {/* Progress / seek bar — click to jump, drag to scrub. */}
@@ -1426,8 +1714,8 @@ export default function PlayerStage({
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2.5">
-          <span className="w-10 text-[11px] font-medium tabular-nums text-white/80">
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 sm:gap-x-2.5">
+          <span className="w-10 shrink-0 text-[11px] font-medium tabular-nums text-white/80">
             {formatTime(currentTime)}
           </span>
           <button
@@ -1513,13 +1801,19 @@ export default function PlayerStage({
             <Share2 className="size-5" />
           </button>
 
-          <span className="w-10 text-[11px] font-medium tabular-nums text-white/80">
+          <span className="w-10 shrink-0 text-[11px] font-medium tabular-nums text-white/80">
             {formatTime(duration)}
           </span>
 
+          {/* Twelve controls never fit across a phone — the row used to walk off
+              the right edge and take the gear, PiP and fullscreen with it. This
+              spacer gives the provider cluster its own line until there is room
+              for one row (a landscape phone is still narrower than a laptop). */}
+          <span aria-hidden className="hidden basis-full shrink-0 max-[820px]:block" />
+
           {/* Language switch — original + admin-added dubs. */}
           {dubs.length > 0 && (
-            <div className="relative" data-player-menu>
+            <div className="relative shrink-0" data-player-menu>
               <button
                 type="button"
                 onClick={() => setLangOpen((v) => !v)}
@@ -1528,7 +1822,7 @@ export default function PlayerStage({
                 title="Audio language"
               >
                 <Languages className="size-5" />
-                <span className="hidden text-xs font-semibold min-[420px]:inline">
+                <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">
                   {activeDub ?? "Original"}
                 </span>
               </button>
@@ -1571,8 +1865,8 @@ export default function PlayerStage({
             </div>
           )}
 
-          {/* Playback server — switch between this site's file, VidSrc, and the
-              embed resolver. Shown whenever more than one server is available. */}
+          {/* Playback server — switch between this site's file and the embed
+              servers. Shown whenever more than one server is available. */}
           {servers.length > 1 && (
             <ServerSwitcher
               servers={servers}
@@ -1595,7 +1889,7 @@ export default function PlayerStage({
           />
 
           {/* Settings gear: night mode, loop, rotate, captions, speed, quality. */}
-          <div className="relative ml-auto" data-player-menu>
+          <div className="relative ml-auto shrink-0" data-player-menu>
             <button
               type="button"
               onClick={() => {
@@ -1791,8 +2085,102 @@ export default function PlayerStage({
 
 /* ------------------------- Server switcher ------------------------- */
 
-/** Dropdown that picks the playback server (VidSrc "Server 1" vs the site's
- *  own file). Shared by the native control bar and the VidSrc overlay strip. */
+/** Episode stepper for the providers keyed per episode (`tv/{id}/{season}/{ep}`).
+ *  Shared by the full-cover iframe strip and the embed server's top strip. */
+function EpisodeStepper({
+  episode,
+  onChange,
+}: {
+  episode: number;
+  onChange: (episode: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-0.5 rounded-lg bg-black/55 text-white backdrop-blur-sm">
+      <button
+        type="button"
+        onClick={() => onChange(Math.max(1, episode - 1))}
+        className="rounded-lg p-1.5 transition-colors hover:bg-white/15"
+        aria-label="Previous episode"
+      >
+        <ChevronLeft className="size-4" />
+      </button>
+      <span className="min-w-[64px] text-center text-xs font-semibold tabular-nums">
+        Ep {episode}
+      </span>
+      <button
+        type="button"
+        onClick={() => onChange(episode + 1)}
+        className="rounded-lg p-1.5 transition-colors hover:bg-white/15"
+        aria-label="Next episode"
+      >
+        <ChevronRight className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+/** The player's loading mark: embers orbiting a centre, collapsing through it
+ *  and streaming back out. Everything is sized in `em`, so the caller picks the
+ *  whole size with one font-size class. */
+const ORBIT_DOTS = [
+  { d: 0.15, r: 0.4 },
+  { d: 0.07, r: 0.3 },
+  { d: 0.12, r: 0.44 },
+  { d: 0.06, r: 0.26 },
+  { d: 0.16, r: 0.36 },
+  { d: 0.09, r: 0.46 },
+  { d: 0.11, r: 0.28 },
+  { d: 0.06, r: 0.42 },
+  { d: 0.14, r: 0.33 },
+  { d: 0.08, r: 0.45 },
+  { d: 0.1, r: 0.3 },
+];
+/* Tone follows size: the near, big embers catch the light, the small far ones
+   sink into shadow — depth in one red instead of three colours. */
+const orbitTone = (d: number) =>
+  d >= 0.14
+    ? "var(--ff-orbit-bright)"
+    : d >= 0.09
+      ? "var(--ff-orbit-red)"
+      : "var(--ff-orbit-deep)";
+
+function LoadingOrbit({
+  className = "",
+  paused = false,
+}: {
+  className?: string;
+  /** Freeze the orbit where it stands — the stage is waiting for a tap, not
+   *  for a server that already answered. */
+  paused?: boolean;
+}) {
+  return (
+    <span aria-hidden className={`ff-orbit ${paused ? "ff-orbit--paused" : ""} ${className}`}>
+      {ORBIT_DOTS.map((dot, i) => (
+        <span
+          key={i}
+          className="ff-orbit__spoke"
+          style={{ transform: `rotate(${(i / ORBIT_DOTS.length) * 360}deg)` }}
+        >
+          <span
+            className="ff-orbit__dot"
+            style={
+              {
+                "--ff-dot": `${dot.d}em`,
+                "--ff-r": `${dot.r}em`,
+                "--ff-c": orbitTone(dot.d),
+                animationDelay: `${(-i / ORBIT_DOTS.length) * 1.4}s`,
+              } as CSSProperties
+            }
+          />
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** Dropdown that picks the playback server (this site's file vs a provider).
+ *  Shared by the native control bar, our bar over a framed provider, and the
+ *  awaiting-player cover. */
 function ServerSwitcher({
   servers,
   activeKey,
@@ -1815,27 +2203,23 @@ function ServerSwitcher({
 }) {
   const active = servers.find((s) => s.key === activeKey);
   return (
-    <div
-      className="relative"
-      data-player-menu
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
+    <div className="relative shrink-0" data-player-menu>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => setOpen(!open)}
         className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15"
         aria-label="Playback server"
+        aria-expanded={open}
         title="Server"
       >
-        <Server className="size-5" />
-        <span className="hidden text-xs font-semibold min-[420px]:inline">
+        <Server className="size-5 shrink-0" />
+        <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">
           {active?.label ?? "Server"}
         </span>
       </button>
       {open && (
         <div
-          className={`absolute z-30 min-w-[220px] overflow-hidden rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur ${
+          className={`absolute z-30 min-w-[220px] max-w-[86vw] overflow-hidden rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur ${
             drop === "down" ? "top-full mt-2" : "bottom-full mb-2"
           } ${align === "right" ? "right-0" : "left-0"}`}
         >
@@ -2106,7 +2490,7 @@ function DownloadMenu({
 
   return (
     <div
-      className="relative"
+      className="relative shrink-0"
       data-player-menu
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
@@ -2118,12 +2502,12 @@ function DownloadMenu({
         aria-label="Download"
         title="Download"
       >
-        <Download className="size-5" />
-        <span className="hidden text-xs font-semibold min-[420px]:inline">Download</span>
+        <Download className="size-5 shrink-0" />
+        <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">Download</span>
       </button>
       {open && (
         <div
-          className={`absolute z-30 min-w-[220px] max-h-[60vh] overflow-y-auto rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur ${
+          className={`absolute z-30 min-w-[220px] max-w-[86vw] max-h-[60vh] overflow-y-auto rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur ${
             drop === "down" ? "top-full mt-2" : "bottom-full mb-2"
           } ${align === "right" ? "right-0" : "left-0"}`}
         >

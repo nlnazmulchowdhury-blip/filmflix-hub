@@ -24,7 +24,9 @@ const NXSHA_PASSPHRASE =
   "f4488ab4da401203d23baa129fc546153898162524635d6776826d0c867ccaa3";
 
 /** Scrapers to ask first, best first: `nitro` is the one verified to answer with
- *  plain multilingual HLS across several resolutions. The rest of its list is
+ *  plain multilingual HLS across several resolutions — when its CDN answers us at
+ *  all (see `StreamFetchable`: from a Worker's connection it often does not).
+ *  The rest of its list is
  *  still walked after these (see `nxshaStreams`) because titles do live on them
  *  alone — `castle`, `purstream`, `vixolity` and `ophim` all answered with a
  *  real `#EXTM3U` — while `mbox`/`imovr`/`yomovies` and the other
@@ -35,6 +37,20 @@ const PREFERRED = ["nitro", "watchout", "stvv", "em-8"];
  *  nobody has would spend 15 round trips on a request the viewer is waiting on,
  *  so the walk stops at this many asks (each one costs ~100-300 ms). */
 const MAX_SCRAPER_ASKS = 10;
+
+/** The walk stops as soon as it has a scraper whose links *we* can pull. A
+ *  scraper that hands back nothing fetchable costs one probe per ask, so the
+ *  whole search gives up rather than keep the viewer waiting. */
+const WALK_BUDGET_MS = 9000;
+
+/** "Can this runtime actually fetch that playlist?"
+ *
+ *  A provider can gate on more than the referer: `nitro`'s CDN answered every
+ *  request from a home connection and refused all of a Worker's (a bare 403
+ *  with no body), while `castle`'s answered both. That is invisible in local
+ *  dev and looks like broken extraction in production, so the walk asks this
+ *  before settling on a scraper instead of trusting its links to be pullable. */
+export type StreamFetchable = (url: string, referer: string) => Promise<boolean>;
 
 export interface NxshaTitle {
   tmdbId: string;
@@ -332,10 +348,15 @@ function sourceLabel(raw: unknown, scraper: string): string {
  *
  *  The server list is only a routing table (and the guard against scraping one
  *  that needs a cookie), so a title with no usable entry simply returns an
- *  empty list — the caller then falls back to framing its iframe. */
+ *  empty list — the caller then falls back to framing its iframe.
+ *
+ *  With `fetchable`, the walk also ignores a scraper whose CDN refuses us, and
+ *  keeps looking through the rest of the list; without it (a caller that cannot
+ *  probe) it settles on the first scraper that answers at all. */
 export async function nxshaStreams(
   title: NxshaTitle,
   get: PageGetter,
+  fetchable?: StreamFetchable,
 ): Promise<NxshaSource[]> {
   const core = {
     tmdbId: title.tmdbId,
@@ -374,6 +395,7 @@ export async function nxshaStreams(
   ].slice(0, MAX_SCRAPER_ASKS);
 
   const found: NxshaSource[] = [];
+  const started = Date.now();
   for (const scraper of order) {
     const answer = await ask(
       "/api/sources",
@@ -402,13 +424,24 @@ export async function nxshaStreams(
           referer: headers.referer || headers.Referer || `${NXSHA_BASE}/`,
         };
       });
+    if (!playable.length) continue;
     /* Two scrapers often hand back the same CDN link under different names, and
        the player cannot use a duplicate twice. */
     for (const s of playable.slice(0, 4))
       if (!found.some((f) => f.url === s.url)) found.push(s);
-    /* One scraper that really carries the title is enough to stop on — its own
-       list already spans the resolutions and the dubs. */
-    if (found.length >= 3) break;
+    if (!fetchable) {
+      /* One scraper that really carries the title is enough to stop on — its
+         own list already spans the resolutions and the dubs. */
+      if (found.length >= 3) break;
+      continue;
+    }
+    /* A link costs one request to test, and a scraper is blocked as a whole
+       rather than link by link, so two of its list says whether to keep it. */
+    const checks = await Promise.all(
+      playable.slice(0, 2).map((s) => fetchable(s.url, s.referer)),
+    );
+    if (checks.some(Boolean)) return playable.slice(0, 4);
+    if (Date.now() - started > WALK_BUDGET_MS) break;
   }
   return found.slice(0, 6);
 }

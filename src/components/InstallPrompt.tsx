@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router";
 import { Download, Share, Plus, X } from "lucide-react";
 import Logo from "@/components/Logo";
 
@@ -14,6 +15,7 @@ export default function InstallPrompt() {
   const [visible, setVisible] = useState(false);
   const [deferred, setDeferred] = useState<any>(null);
   const [isIOS, setIsIOS] = useState(false);
+  const { pathname } = useLocation();
 
   useEffect(() => {
     // Desktop or already-installed: stay quiet.
@@ -59,7 +61,10 @@ export default function InstallPrompt() {
     };
   }, []);
 
-  if (!visible) return null;
+  /* The watch page keeps its server/download/fullscreen controls along the top
+     edge of the player and this card sits exactly there — on a phone it would
+     cover them, so it stays out of the movie page. */
+  if (!visible || pathname.startsWith("/movie/")) return null;
 
   const dismiss = () => {
     setVisible(false);

@@ -290,4 +290,113 @@ html:not(.dark) {
       transform: translateX(320%);
     }
   }
+
+  /* Player loading: a swarm of embers that orbits the centre and collapses
+     back through it, like a projector lamp catching dust. Sizes are `em` so
+     one font-size scales the whole thing — see <LoadingOrbit />. */
+  .ff-orbit {
+    /* One red, three tones: FilmFlix's own hue, held at a deep shadow, the
+       brand value, and a lit edge. Monochrome reads as deliberate; a mixed
+       warm palette read as decoration. */
+    --ff-orbit-red: oklch(0.62 0.24 25);
+    --ff-orbit-deep: oklch(0.47 0.2 27);
+    --ff-orbit-bright: oklch(0.73 0.21 20);
+    position: relative;
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    animation: ff-orbit-spin 4.6s linear infinite;
+  }
+  .ff-orbit::before {
+    content: "";
+    position: absolute;
+    inset: -22%;
+    border-radius: 999px;
+    background: radial-gradient(
+      circle,
+      color-mix(in oklch, var(--ff-orbit-red) 34%, transparent) 0%,
+      transparent 62%
+    );
+    animation: ff-orbit-halo 1.4s ease-in-out infinite;
+  }
+  .ff-orbit__spoke {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+  }
+  .ff-orbit__dot {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: var(--ff-dot);
+    height: var(--ff-dot);
+    border-radius: 999px;
+    background: var(--ff-c);
+    box-shadow: 0 0 0.11em var(--ff-c);
+    animation: ff-orbit-swarm 1.4s ease-in-out infinite;
+  }
+  /* A spent race is not a wait: freeze the swarm where it stands rather than
+     promise a stream that already refused to come. */
+  .ff-orbit--paused,
+  .ff-orbit--paused::before,
+  .ff-orbit--paused .ff-orbit__dot {
+    animation-play-state: paused;
+  }
+  /* A freshly framed provider paints nothing until its own page loads, and a
+     cross-origin frame will not tell us when that happens. So the mark holds
+     the box on a timer of its own and steps aside; the key on the element is
+     what restarts it when a different page is framed. */
+  .ff-warm {
+    animation: ff-warm-hold 5s ease-out forwards;
+  }
+  @keyframes ff-warm-hold {
+    0%,
+    58% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+      visibility: hidden;
+    }
+  }
+  @keyframes ff-orbit-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes ff-orbit-halo {
+    0%,
+    100% {
+      opacity: 0.85;
+      transform: scale(1);
+    }
+    45% {
+      opacity: 0.35;
+      transform: scale(0.55);
+    }
+  }
+  @keyframes ff-orbit-swarm {
+    0%,
+    100% {
+      transform: translate(-50%, -50%) translateX(var(--ff-r)) scale(1);
+      opacity: 0.95;
+    }
+    45% {
+      transform: translate(-50%, -50%) translateX(calc(var(--ff-r) * 0.16)) scale(0.5);
+      opacity: 0.45;
+    }
+    72% {
+      transform: translate(-50%, -50%) translateX(calc(var(--ff-r) * 0.62)) scale(0.8);
+      opacity: 0.8;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ff-orbit,
+    .ff-orbit::before,
+    .ff-orbit__dot {
+      animation: none;
+    }
+  }
 }

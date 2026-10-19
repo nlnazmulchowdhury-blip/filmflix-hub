@@ -611,11 +611,11 @@ app.get("/movies/:mid/inspect", async (c) => {
     /* Which player servers this title can currently reach, derived from the
        stored ids so the inspector's availability matrix matches the player. */
     servers: {
-      vidsrc: !!(m.imdbId || m.tmdbId),
       vidbox: !!(m.tmdbId || m.embedUrl),
       vidapi: !!m.tmdbId,
       nxsha: !!m.tmdbId,
       anime: !!m.tmdbId,
+      viduki: !!m.tmdbId,
       drama: !!m.tmdbId,
       original: !!m.videoUrl,
     },
