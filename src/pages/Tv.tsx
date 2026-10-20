@@ -3,7 +3,6 @@ import { Input } from "@/components/ui/input";
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
-import AdSideRail from "@/components/AdSideRail";
 import { AD_BANNERS } from "@/lib/ad-banners";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
@@ -212,9 +211,6 @@ export default function TvPage() {
           </nav>
         </div>
       </header>
-
-      <AdSideRail side="left" />
-      <AdSideRail side="right" />
 
       <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-3 pb-4 pt-4 sm:px-6">
         {/* Top banner: leaderboard on desktop, 320×50 on phones. */}

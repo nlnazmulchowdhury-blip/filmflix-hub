@@ -8,9 +8,6 @@ import PlayerStage from "@/components/PlayerStage";
 import EpisodeList, { type EpisodeRow } from "@/components/EpisodeList";
 import VidSrcResultCard from "@/components/VidSrcResultCard";
 import ThemeToggle from "@/components/ThemeToggle";
-import AdBanner from "@/components/AdBanner";
-import AdSideRail from "@/components/AdSideRail";
-import { AD_BANNERS } from "@/lib/ad-banners";
 import { useMiniPlayer } from "@/components/mini-player-context";
 import {
   recallExternalHint,
@@ -39,6 +36,7 @@ import {
   Loader2,
   Play,
   Star,
+  Search,
   Share2,
   Calendar,
   Heart,
@@ -86,6 +84,11 @@ export default function MovieDetail() {
     api.movies.get,
     isExternal ? "skip" : { id: id as Id<"movies"> },
   );
+
+  /* The header search only collects a term — the catalog, the suggestions and
+     the external lookup all live on Landing, so submitting hands the term over
+     as `?q=` instead of rebuilding a second search here. */
+  const [headerQuery, setHeaderQuery] = useState("");
 
 
   const scheduleScreening = useMutation(api.screenings.schedule);
@@ -601,16 +604,56 @@ export default function MovieDetail() {
         <div className="absolute left-1/2 top-[-20%] h-[420px] w-[700px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
       </div>
 
-      {/* Fixed side rails (160×600 skyscraper) — wide screens only. */}
-      <AdSideRail side="left" />
-      <AdSideRail side="right" />
-
       <header className="sticky top-0 z-40 glass-panel border-b">
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-2 px-3 sm:px-6">
           <Link to="/" aria-label="FilmFlix home" className="shrink-0">
             <Logo />
           </Link>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const q = headerQuery.trim();
+              if (q) navigate(`/?q=${encodeURIComponent(q)}`);
+            }}
+            className="hidden min-w-0 flex-1 items-center gap-2 px-2 md:flex"
+          >
+            <div className="relative min-w-0 max-w-md flex-1">
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={headerQuery}
+                onChange={(e) => setHeaderQuery(e.target.value)}
+                placeholder="Search movies…"
+                aria-label="Search movies"
+                autoComplete="off"
+                className="h-9 rounded-xl bg-card/70 pl-9"
+              />
+            </div>
+            <Button
+              type="submit"
+              variant="ghost"
+              size="sm"
+              className="shrink-0 gap-1.5 px-3 text-muted-foreground hover:text-foreground"
+              aria-label="Search"
+            >
+              <Search className="size-4" />
+              <span className="hidden lg:inline">Search</span>
+            </Button>
+          </form>
           <div className="flex items-center gap-1 sm:gap-2">
+            {/* Phones keep every control in this cluster, so the search is an
+                icon here that focuses Landing's own box. */}
+            <Button
+              asChild
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground md:hidden"
+              aria-label="Search"
+              title="Search"
+            >
+              <Link to="/?focus=search">
+                <Search className="size-4" />
+              </Link>
+            </Button>
             <Button asChild variant="outline" size="sm" className="gap-2">
               <Link to="/">
                 <ArrowLeft className="size-4" />
@@ -655,12 +698,6 @@ export default function MovieDetail() {
               saved={isSaved}
               onToggleSave={toggleSave}
             />
-
-            {/* Below-player banner: leaderboard on desktop, 320×50 on phones. */}
-            <section className="flex justify-center">
-              <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
-              <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
-            </section>
 
             {/* More videos — titles related to this one from the embed catalog. */}
             {related.length > 0 && (

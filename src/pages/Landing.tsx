@@ -19,7 +19,6 @@ import {
   type TmdbItem,
 } from "@/lib/tmdb";
 import ThemeToggle from "@/components/ThemeToggle";
-import AdEdgeRail from "@/components/AdEdgeRail";
 import AdVideoBanner from "@/components/AdVideoBanner";
 import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
@@ -47,7 +46,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import {
   Sheet,
@@ -144,17 +143,28 @@ export default function Landing() {
   const { signOut, isAuthenticated } = useAuth();
   const movies = useQuery(api.movies.list);
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
+  const [searchParams] = useSearchParams();
+  /* A term handed over by the watch page's header search (`/?q=…`) starts the
+     search exactly as if it had been typed and submitted here. */
+  const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   /* Typing must not search: every keystroke used to fire another catalog
      lookup. The grid only follows the term the user submitted with Enter or
      the Search button. */
-  const [searched, setSearched] = useState("");
+  const [searched, setSearched] = useState(
+    () => searchParams.get("q")?.trim() ?? "",
+  );
   const runSearch = () => setSearched(query.trim());
   const clearSearch = () => {
     setQuery("");
     setSearched("");
     setSuggestOpen(false);
   };
+  /* The watch page keeps every phone control in its corner cluster, so its
+     search icon arrives with `?focus=search` and this box takes the caret. */
+  const searchBoxRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (searchParams.get("focus") === "search") searchBoxRef.current?.focus();
+  }, [searchParams]);
 
   /* A catalog fetch that errors never resolves, and convex-react reports that
      the same way as "still loading". After a grace period stop showing
@@ -507,10 +517,6 @@ export default function Landing() {
 
   return (
     <div className="relative min-h-screen bg-background text-foreground">
-      {/* Banner rails in the outer page margins (beside the content column). */}
-      <AdEdgeRail side="left" />
-      <AdEdgeRail side="right" />
-
       {/* Ambient background */}
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-[-20%] h-[520px] w-[820px] -translate-x-1/2 rounded-full bg-primary/14 blur-[140px]" />
@@ -683,6 +689,7 @@ export default function Landing() {
             <div className="relative min-w-0 flex-1">
               <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
+                ref={searchBoxRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
