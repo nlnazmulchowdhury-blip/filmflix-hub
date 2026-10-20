@@ -19,6 +19,7 @@ import {
   vaplayerEmbedUrl,
 } from "@/lib/vaplayer";
 import { fetchTitleDownloads } from "@/lib/embed-resolver";
+import { isSavedTitle, toggleSavedTitle } from "@/lib/saved-titles";
 import {
   listRelated,
   listSeason,
@@ -51,7 +52,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -369,6 +370,38 @@ export default function MovieDetail() {
         }
       : (movie as any);
 
+  /* -------- The Save chip under the player ------------------------------- */
+  /* A catalog row goes to the real, server-side watchlist. A provider title has
+     no row to hang a save on — the watchlist query joins `movies` and would
+     silently drop it — so that one keeps its list on this device. */
+  const [savedBump, setSavedBump] = useState(0);
+  const saveKey = ((externalMovie as any)?._id as string) ?? "";
+  const isSaved = useMemo(
+    () =>
+      movie
+        ? Boolean(inWatchlist)
+        : saveKey
+          ? isSavedTitle(saveKey)
+          : false,
+    [movie, inWatchlist, saveKey, savedBump],
+  );
+  const toggleSave = () => {
+    if (movie) {
+      void toggleWatchlist();
+      return;
+    }
+    if (!saveKey || !externalMovie) return;
+    const now = toggleSavedTitle({
+      key: saveKey,
+      title: externalMovie.title,
+      posterUrl: externalMovie.posterUrl ?? null,
+      kind: externalMovie.kind === "series" ? "series" : "movie",
+      tmdbId: ((externalMovie as any).tmdbId as string) ?? null,
+    });
+    setSavedBump((n) => n + 1);
+    toast.success(now ? "Saved — find it under your saved titles" : "Removed from saved");
+  };
+
   /* -------- Episodes under the player ----------------------------------- */
   /* Two sources for one list:
        • the admin's own episode files (D1 `episodes`) — real uploads, played
@@ -619,6 +652,8 @@ export default function MovieDetail() {
               providerEmbedUrl={
                 isVidSrc ? undefined : episodeEmbed || (externalMovie as any).embedUrl
               }
+              saved={isSaved}
+              onToggleSave={toggleSave}
             />
 
             {/* Below-player banner: leaderboard on desktop, 320×50 on phones. */}

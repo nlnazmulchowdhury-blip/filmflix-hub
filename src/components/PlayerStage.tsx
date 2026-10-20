@@ -1,4 +1,8 @@
-import { useMiniPlayer } from "@/components/mini-player-context";
+import {
+  useMiniPlayer,
+  type PlayerAudioTrack,
+  type PlayerDub,
+} from "@/components/mini-player-context";
 import { animeEmbedUrl, dramaEmbedUrl } from "@/lib/autoembed";
 import { vidboxEmbedUrl, vixsrcEmbedUrl, nxshaEmbedUrl, vidukiEmbedUrl } from "@/lib/vaplayer";
 import {
@@ -8,16 +12,31 @@ import {
   fetchEmbedQualities,
   fetchTitleDownloads,
   type EmbedCandidate,
+  type EmbedRaceResult,
   type TitleDownloadProvider,
 } from "@/lib/embed-resolver";
-import { downloadHls, proxyUrl, saveBlob, isHlsLink } from "@/lib/hls-download";
+import {
+  downloadHls,
+  hlsByContent,
+  isHlsLink,
+  pipedTarget,
+  proxyUrl,
+  saveBlob,
+} from "@/lib/hls-download";
+import {
+  audioKeyOf,
+  fetchServerAudio,
+  type ServerAudio,
+} from "@/lib/embed-languages";
 import { browserDecodesHevc, onPlaybackFailure } from "@/lib/playback-health";
 import {
+  refererFor,
   setSnifferReferer,
   useSniffedStreams,
   type SniffedStream,
 } from "@/lib/media-sniffer";
 import {
+  Bookmark,
   Captions,
   ChevronLeft,
   ChevronRight,
@@ -30,6 +49,7 @@ import {
   Maximize,
   Minimize,
   Moon,
+  MoreHorizontal,
   Pause,
   PictureInPicture2,
   Play,
@@ -64,6 +84,12 @@ function formatTime(sec: number) {
 /** Extra times a title's provider race is re-asked before our stage gives up. */
 const MAX_RACE_TRIES = 2;
 
+/** One pill in the row under the stage box. The bar is white-on-black because
+ *  it floats over the film; these sit on the page, so they wear the page's own
+ *  colors and follow the theme toggle. */
+const CHIP =
+  "flex items-center gap-1.5 rounded-full border border-border/60 bg-card px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-muted";
+
 export default function PlayerStage({
   movieId,
   videoUrl,
@@ -78,6 +104,8 @@ export default function PlayerStage({
   disabledServers,
   defaultServer,
   providerEmbedUrl,
+  saved,
+  onToggleSave,
 }: {
   movieId: string;
   videoUrl: string;
@@ -97,6 +125,10 @@ export default function PlayerStage({
   defaultServer?: string;
   /** Explicit provider embed page an admin stored (feeds the vidbox server). */
   providerEmbedUrl?: string | null;
+  /** Is this title in the viewer's list — drives the Save chip under the box. */
+  saved?: boolean;
+  /** Omitted = no Save chip (a page that cannot save anything). */
+  onToggleSave?: () => void;
 }) {
   const {
     movie,
@@ -115,6 +147,9 @@ export default function PlayerStage({
     bumpControlsActivity,
     activeDub,
     setDub,
+    audioTracks,
+    activeAudioTrack,
+    setAudioTrack,
     nightMode,
     setNightMode,
     loop,
@@ -353,6 +388,10 @@ export default function PlayerStage({
      server-rendered word counts, so this stays false for the hosts that give
      no signal — the notice then tells the viewer the page may not have it. */
   const [embedCarried, setEmbedCarried] = useState(false);
+  /* The last miss was a provider refusing our Worker, not a provider with
+     nothing to offer: its own page plays for the viewer, so the stage says
+     that instead of "no server for this title" and offers their player. */
+  const [embedBlocked, setEmbedBlocked] = useState(false);
   /* Servers already found dead, so the walk never loops back onto one. */
   const deadEmbeds = useRef<Set<string>>(new Set());
   /* The provider whose stream the race played: its tab may be selected after
@@ -380,6 +419,17 @@ export default function PlayerStage({
   /* Resolved streams this title already died on in the player. They stay black
      if the race hands them back, so the next pick skips them. */
   const deadStreams = useRef<Set<string>>(new Set());
+  /* Every server the lineup race loaded for THIS title and episode, keyed by the
+     provider page the links came from. One chain answering does not stop the
+     others, so when the viewer opens a different server chip its stream is
+     already in hand here — the film starts from this map instead of waiting out
+     a second resolve of that page. A provider signs its playlist for its own
+     session, so this lives only as long as the title it was pulled for. */
+  const racedStreams = useRef<Map<string, EmbedCandidate[]>>(new Map());
+  /* The title+episode `racedStreams` belongs to, and the one the background
+     warm-up has already been asked for, so it never re-fires on a re-render. */
+  const warmFor = useRef<string>("");
+  const warmedFor = useRef<string>("");
 
   /* One race per title and episode: season/episode picks from the list under
      the player change this, so each new episode gets every server asked again. */
@@ -396,8 +446,15 @@ export default function PlayerStage({
      player. */
   const iframeOnlyServer = server === "vidbox" || server === "drama";
   const [providerDue, setProviderDue] = useState(false);
-  const providerFramed =
-    iframeOnlyServer && (embedStatus === "failed" || providerDue);
+  /* The provider's page is ready to be shown, but the box stays ours until the
+     viewer presses our own play button. Their player starts by itself once
+     framed (verified: vidlink.pro autoplays inside our iframe), so that press
+     is what opens the film — no provider skin ever paints first. A chip that
+     can feed our player never hands its box over: if the race misses there, our
+     cover stays up and the viewer picks another server. */
+  const providerReady = iframeOnlyServer && (embedStatus === "failed" || providerDue);
+  const [providerOpen, setProviderOpen] = useState(false);
+  const providerFramed = providerReady && providerOpen;
   const embedIframe = usingEmbed && !embedStream && embedLive !== false && providerFramed;
   const embedDead = usingEmbed && !embedStream && embedLive === false;
   /* The stage still belongs to us: a provider server is picked, nothing plays
@@ -415,6 +472,7 @@ export default function PlayerStage({
      not yank away a page already on screen. */
   useEffect(() => {
     setProviderDue(false);
+    setProviderOpen(false);
   }, [server, raceKey]);
 
   useEffect(() => {
@@ -422,8 +480,12 @@ export default function PlayerStage({
     /* Drama only ever frames a page, so it needn't keep the viewer staring at a
        spinner. VidBox is being asked with a real handshake now, and a page that
        flashes into the iframe and straight back out again is worse than waiting
-       a few seconds under our own cover — so it gets long enough to answer. */
-    const t = setTimeout(() => setProviderDue(true), server === "vidbox" ? 6_000 : 1_500);
+       a few seconds under our own cover — so it gets long enough to answer.
+       On a machine that decodes HEVC its file answer is playable for us too,
+       so the handshake gets longer still rather than having its box taken away
+       mid-flight by the provider's own player. */
+    const wait = server === "vidbox" ? (hevc ? 14_000 : 6_000) : 1_500;
+    const t = setTimeout(() => setProviderDue(true), wait);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [server, raceKey, embedStream, usingEmbed, usingAutoembed, embedStatus]);
@@ -452,7 +514,9 @@ export default function PlayerStage({
     [],
   );
   /** The cover's "Try again": the viewer's word that this chip is worth
-   *  asking once more, so the retry budget is refilled and spent immediately. */
+   *  asking once more, so the retry budget is refilled and spent immediately.
+   *  It also takes the box back from a provider page the viewer had agreed to
+   *  frame — asking again means wanting our own player. */
   const retryRace = useCallback(() => {
     if (retryTimer.current) {
       clearTimeout(retryTimer.current);
@@ -463,8 +527,9 @@ export default function PlayerStage({
     streamedFor.current = "";
     setEmbedStatus("resolving");
     setEmbedError("");
+    setProviderOpen(false);
     setRaceNonce((n) => n + 1);
-  }, [setEmbedStatus, setEmbedError, setRaceNonce]);
+  }, [setEmbedStatus, setEmbedError, setProviderOpen, setRaceNonce]);
 
   /* -------- Download menu: this site's files + the resolved stream's
       resolutions (asked from the Worker when the menu opens). -------- */
@@ -503,6 +568,41 @@ export default function PlayerStage({
     (embedIframe ? embedHost : servers.find((s) => s.key === server)?.sub?.split(" · ")[0]) ||
     "Provider";
 
+  /* Every ad-free provider available for this title/episode, honouring the
+     servers an admin switched off. These are what the race asks in parallel.
+     Drama is left out: nothing ad-free can be pulled from it while its back end
+     is down, so it would only ever report a miss.
+
+     Menu order: the chains that can run in our own player are also the ones
+     preferred when the race has to pick a provider page to frame. */
+  const adFreeChains = () =>
+    [
+      { key: "nxsha", url: nxshaTarget },
+      { key: "vidapi", url: vixsrcTarget },
+      { key: "anime", url: autoembedUrl },
+      { key: "viduki", url: vidukiTarget },
+      { key: "vidbox", url: vidboxTarget },
+    ].filter((c) => c.url && !off(c.key)) as { key: string; url: string }[];
+
+  /** Keep a chain's playable links as soon as it answers, win or not. */
+  const rememberRaced = useCallback(
+    (ready: { url: string; candidates: EmbedCandidate[] }) => {
+      racedStreams.current.set(ready.url, ready.candidates);
+    },
+    [],
+  );
+
+  /* Ask every ad-free chain for this title in parallel and keep whatever they
+     answer. Nothing plays from this pass — it is for the title whose own file
+     is already on screen: no provider can load faster than that, so the race's
+     prize here is only that the server chips are ready when opened. */
+  const warmAdFree = useCallback(() => {
+    const chains = adFreeChains();
+    if (chains.length)
+      void raceEmbedStreams(chains.map((c) => c.url), null, rememberRaced);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rememberRaced]);
+
   const playEmbedCandidate = useCallback(
     (c: EmbedCandidate) => {
       setEmbedStream(c.url);
@@ -540,6 +640,7 @@ export default function PlayerStage({
     ) => {
       setEmbedStatus("resolving");
       setEmbedError("");
+      setEmbedBlocked(false);
 
       /* Ask for every provider's stream and check every provider page at the
          same time: the fastest chain wins, and the page probes decide which
@@ -550,6 +651,10 @@ export default function PlayerStage({
           /* A probe that never answered is not evidence the provider is down. */
           live: r ? r.live : true,
           carried: r?.carried ?? false,
+          /* The provider answered its visitor fine but refused *our* Worker —
+             the honest reason for a miss, and the reason framing helps. */
+          blocked: Boolean(r?.blocked),
+          reason: r?.reason ?? "",
         })),
       );
 
@@ -564,11 +669,24 @@ export default function PlayerStage({
           if (a.live) deadEmbeds.current.delete(a.key);
           else deadEmbeds.current.add(a.key);
         }
+        const mine = answers.find((a) => a.key === activeKey);
+        /* Say *who* refused rather than "no server has this title": vixsrc
+           403s Cloudflare while the same URL plays fine in the viewer's own
+           browser, and Videasy's back end is offline for everyone. Both are
+           the provider's news, and the probe carries it. */
+        const honest =
+          mine && mine.reason && (mine.blocked || !mine.live) ? mine.reason : why;
+        const framedLive = frame && (mine ? mine.live : true);
         setEmbedCandidates([]);
         setEmbedStatus("failed");
-        setEmbedError(frame ? `${why} A provider player is shown instead.` : why);
+        setEmbedBlocked(Boolean(mine && mine.blocked));
+        setEmbedError(
+          framedLive ? honest
+            : mine && mine.blocked
+              ? `${honest}. Its page may still play this title in your browser.`
+              : honest,
+        );
 
-        const mine = answers.find((a) => a.key === activeKey);
         setEmbedLive(mine ? mine.live : true);
         /* Whose player gets framed: one that says it carries this title beats
            one that merely answers. Several providers serve their own "we don't
@@ -594,12 +712,23 @@ export default function PlayerStage({
          direct-API detour, which belongs to no provider and would leave the
          viewer watching a stream from somewhere else under the name they chose. */
       const solo = Boolean(only) && chains.some((c) => c.url === only);
-      const race = await raceEmbedStreams(
-        solo ? chains.filter((c) => c.url === only).map((c) => c.url) : chains.map((c) => c.url),
-        solo
-          ? { tmdbId: null }
-          : { tmdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? 1) },
-      );
+      /* A tapped chip is a cold start only if the lineup race has not already
+         pulled its links. Every chain keeps resolving after one of them wins, so
+         the server the viewer opens next usually has a playable ladder waiting
+         here, and the film starts from it instead of after a second trip through
+         that provider's page. */
+      const warm = solo ? racedStreams.current.get(only) : undefined;
+      const race: EmbedRaceResult = warm?.length
+        ? { win: { url: only, candidates: warm }, error: "" }
+        : await raceEmbedStreams(
+            solo
+              ? chains.filter((c) => c.url === only).map((c) => c.url)
+              : chains.map((c) => c.url),
+            solo
+              ? { tmdbId: null }
+              : { tmdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? 1) },
+            rememberRaced,
+          );
       /* A chip the viewer tapped outranks any race they did not ask for. That
          one asks the whole lineup, so when it lands it would move the label and
          swap the film out from under the server they just chose — which reads
@@ -646,6 +775,11 @@ export default function PlayerStage({
       const why = race.win
         ? "Every stream it offered died in this player."
         : race.error || "No ad-free chain worked.";
+      /* This page's own answers are what just failed, so drop them: the next
+         pass — the armed retry or the cover's Try again — has to ask that
+         provider again instead of replaying the same links out of the warm map.
+         The other servers keep theirs; they are still waiting to be opened. */
+      racedStreams.current.delete(only || chains.find((c) => c.key === activeKey)?.url || "");
       /* A chip that can feed our own player keeps the stage and asks again —
          the providers rotate their scrapers, so the second or third pass often
          answers when the first was empty. VidBox is in that group now: its
@@ -663,36 +797,42 @@ export default function PlayerStage({
          plays there, while our player would paint black. */
       await showProviders(why, activeKey === "vidbox" || activeKey === "drama");
     },
-    [playEmbedCandidate, armRaceRetry, server, movieId, tmdbId, kind, season, episode, aeEpisode, hevc, raceKey],
+    [playEmbedCandidate, armRaceRetry, server, movieId, tmdbId, kind, season, episode, aeEpisode, hevc, raceKey, rememberRaced],
   );
 
   /** The resolver panel's button: retry the page currently in the box. */
   const runEmbedResolve = useCallback(
-    (url: string) => raceServers(server, [{ key: server, url }], [{ key: server, url }]),
+    (url: string) => {
+      /* Asking again means not replaying what this page already handed us. */
+      racedStreams.current.delete(url);
+      return raceServers(server, [{ key: server, url }], [{ key: server, url }]);
+    },
     [raceServers, server],
   );
-
-  /* Every ad-free provider available for this title/episode, honouring the
-     servers an admin switched off. These are what the race asks in parallel.
-     Drama is left out: nothing ad-free can be pulled from it while its back end
-     is down, so it would only ever report a miss. */
-  const adFreeChains = () =>
-    [
-      /* Menu order: the chains that can run in our own player are also the ones
-         preferred when the race has to pick a provider page to frame. */
-      { key: "nxsha", url: nxshaTarget },
-      { key: "vidapi", url: vixsrcTarget },
-      { key: "anime", url: autoembedUrl },
-      { key: "viduki", url: vidukiTarget },
-      { key: "vidbox", url: vidboxTarget },
-    ].filter((c) => c.url && !off(c.key)) as { key: string; url: string }[];
 
   /* An embed server (vidbox/vidapi/nxsha) is showing: fire the whole provider
      race for this title+episode. Switching servers or episodes re-runs it,
      clearing the previous server's candidates/stream first; a server switch
      that the race itself caused only re-probes, so it never loops. */
   useEffect(() => {
-    if (!usingEmbed) return;
+    /* What the race loaded is signed for the session that minted it, so it only
+       belongs to this title and episode. */
+    if (warmFor.current !== raceKey) {
+      warmFor.current = raceKey;
+      racedStreams.current.clear();
+      warmedFor.current = "";
+    }
+    if (!usingEmbed) {
+      /* Server 1 has the film on our own server and Server 6 answers nobody
+         ad-free, so neither has a race to win — but every other server is still
+         asked for it in the background, which is what makes opening a chip here
+         instant instead of another wait through that provider's page. */
+      if (warmedFor.current !== raceKey) {
+        warmedFor.current = raceKey;
+        warmAdFree();
+      }
+      return;
+    }
     /* A retry is armed by disarming it first: the effect re-runs for the title,
        chip or manual ask that supersedes the queued pass, and the timer is
        spent the moment it fires. Clearing it here unconditionally cancelled the
@@ -824,6 +964,10 @@ export default function PlayerStage({
   const streamWarming = Boolean(embedStream) && !pictureUp;
 
   const selectServer = (key: string) => {
+    /* Tapping a server is the viewer changing their mind about a language
+       hand-off, so an unfinished one must not fire on the stream they just
+       asked for. (handOffLanguage calls this and then re-arms its intent.) */
+    clearPendingLang();
     const next:
       | "original"
       | "vidbox"
@@ -903,6 +1047,148 @@ export default function PlayerStage({
     selectServer(next.key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dramaLive, server]);
+
+  /* -------- Every server's languages, for one language pick -------- */
+  /* A playlist is the only honest witness for how many voices a film has, and
+     every server holds its own. So opening the language menu asks each server
+     on offer for its master playlist and reads its audio renditions; a pick
+     that lives on another server becomes a hand-off — change server, and when
+     that stream parses, land on the language. */
+  const [sweep, setSweep] = useState<{
+    key: string;
+    status: "idle" | "loading" | "done";
+    map: Record<string, ServerAudio[]>;
+  }>({ key: "", status: "idle", map: {} });
+  const sweepStartedFor = useRef("");
+  const pendingLang = useRef<{
+    key: string;
+    label: string;
+    server: string;
+    dubLabel?: string | null;
+    /** The language list in play at the moment of the tap — a hand-off must
+     *  not apply itself to it, or it would set a track id on the *previous*
+     *  server's stream. */
+    stale: PlayerAudioTrack[];
+  } | null>(null);
+  const pendingLangTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const embedTargets: Record<string, string> = {
+    nxsha: nxshaTarget || "",
+    vidapi: vixsrcTarget || "",
+    viduki: vidukiTarget || "",
+    vidbox: vidboxTarget || "",
+    anime: tmdbId ? animeEmbedUrl({ tmdbId, kind, season, episode: aeEpisode }) : "",
+  };
+  const audioSweepKey = `${raceKey}|${aeEpisode}`;
+
+  useEffect(() => {
+    if (!langOpen || sweepStartedFor.current === audioSweepKey) return;
+    sweepStartedFor.current = audioSweepKey;
+    const targets = servers
+      .map((s) => [s.key, embedTargets[s.key] ?? ""] as const)
+      .filter(([key, url]) => key !== "original" && Boolean(url));
+    if (!targets.length) {
+      setSweep({ key: audioSweepKey, status: "idle", map: {} });
+      return;
+    }
+    setSweep({ key: audioSweepKey, status: "loading", map: {} });
+    /* Each server lands in the menu as it answers rather than all at once at
+       the end: a provider that takes twenty seconds shouldn't hold the ones
+       that already replied behind a spinner. */
+    let settled = 0;
+    targets.forEach(([key, url]) => {
+      void fetchServerAudio(url).then((list) => {
+        if (list.length > 0)
+          setSweep((prev) =>
+            prev.key === audioSweepKey
+              ? { ...prev, map: { ...prev.map, [key]: list } }
+              : prev,
+          );
+        if (++settled === targets.length)
+          setSweep((prev) =>
+            prev.key === audioSweepKey ? { ...prev, status: "done" } : prev,
+          );
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [langOpen, audioSweepKey]);
+
+  /* Results belong to the title they were asked for, so a new film never shows
+     the last one's voices. */
+  const serverAudio = sweep.key === audioSweepKey ? sweep.map : {};
+  const audioProbe = sweep.key === audioSweepKey ? sweep.status : "idle";
+
+  /* Land the language once its server is playing. The list in state is refused
+     until it is a *new* one, so a pick made against Server 2 can never set a
+     track id on Server 3's stream by mistake; a hand-off whose provider only
+     frames its own page (so no list ever arrives) is given up on by the timeout
+     below, which says so instead of hanging. */
+  const clearPendingLang = () => {
+    pendingLang.current = null;
+    if (pendingLangTimer.current) {
+      clearTimeout(pendingLangTimer.current);
+      pendingLangTimer.current = null;
+    }
+  };
+
+  useEffect(() => {
+    const intent = pendingLang.current;
+    if (!intent || intent.server !== server) return;
+    if (intent.dubLabel !== undefined) {
+      if (dubs.length === 0) return;
+      clearPendingLang();
+      if (activeDub !== intent.dubLabel) setDub(intent.dubLabel);
+      return;
+    }
+    /* An empty list is not an answer: hls.js reports the renditions it has
+       parsed, so the first report for a new stream can arrive before its audio
+       group is read. Wait for a real list — the timeout below still gives up on
+       a server that never produces one. */
+    if (audioTracks === intent.stale || audioTracks.length === 0) return;
+    const hit = audioTracks.find(
+      (t) => audioKeyOf({ name: t.name, lang: t.lang }) === intent.key,
+    );
+    /* A miss is not a verdict: a provider's first report can name fewer
+       renditions than its playlist really carries, and the sources rotate
+       between two asks. So the intent stays until either a report names the
+       language or the timeout above has heard every report it is going to get. */
+    if (!hit) return;
+    clearPendingLang();
+    if (hit.id !== activeAudioTrack) setAudioTrack(hit.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioTracks, server, dubs, activeDub]);
+
+  const serverName = (key: string) =>
+    servers.find((s) => s.key === key)?.label ?? "Server 1";
+
+  /* The tap that starts a hand-off. The toast names the server it went to, so
+     the viewer knows why the picture changed underneath them, and the panel
+     closes because the answer is no longer in it. */
+  const handOffLanguage = (intent: {
+    key: string;
+    label: string;
+    server: string;
+    dubLabel?: string | null;
+  }) => {
+    /* The list this stream reported is the one the new server must replace, so
+       take it before the switch clears it. */
+    const stale = audioTracks;
+    selectServer(intent.server);
+    pendingLang.current = { ...intent, stale };
+    if (pendingLangTimer.current) clearTimeout(pendingLangTimer.current);
+    pendingLangTimer.current = setTimeout(() => {
+      if (pendingLang.current?.label !== intent.label) return;
+      clearPendingLang();
+      toast.info(`${serverName(intent.server)} does not answer with ${intent.label}.`);
+    }, 25000);
+    toast.info(`Playing ${intent.label} from ${serverName(intent.server)}.`);
+    setLangOpen(false);
+  };
+
+  /* A new episode, another title or leaving the player cancels a language that
+     never landed — its toast would arrive over a film nobody asked it of. */
+  useEffect(() => clearPendingLang, // eslint-disable-next-line react-hooks/exhaustive-deps
+    [audioSweepKey]);
 
   /* When an iframe server (autoembed / embed fallback) takes over,
      pause the native file so the two never output audio at once. Our own stage
@@ -1216,314 +1502,108 @@ export default function PlayerStage({
 
   /* -------- Inline host of the persistent video -------------------------- */
   return (
-    <div
-      ref={containerCallback}
-      className={`group/player relative w-full overflow-hidden bg-black shadow-[0_24px_80px_-24px_rgba(0,0,0,0.9)] ${
-        fullscreen
-          ? "fixed inset-0 z-[80] rounded-none border-0"
-          : "aspect-video max-sm:aspect-[4/3] w-full rounded-xl border border-border/60"
-      }`}
-      onPointerMove={(e) => {
-        if (e.pointerType !== "mouse") return;
-        bumpControlsActivity();
-      }}
-      onClickCapture={(e) => {
-        bumpControlsActivity();
-        // Clicking anywhere outside an open player menu closes it.
-        if (!(e.target as HTMLElement).closest("[data-player-menu]")) {
-          setLangOpen(false);
-          setSettingsOpen(false);
-          setServerOpen(false);
-          setSettingsView("main");
-        }
-      }}
-      onDoubleClick={toggleFullscreen}
-    >
-      {/* Portal target — the persistent video mounts here. */}
-      <div data-slot="stage-slot" className="absolute inset-0" />
+    /* Two children now: the stage box, and the row of things to do with it. */
+    <div className="w-full">
+      <div
+        ref={containerCallback}
+        className={`group/player relative w-full overflow-hidden bg-black shadow-[0_24px_80px_-24px_rgba(0,0,0,0.9)] ${
+          fullscreen
+            ? "fixed inset-0 z-[80] rounded-none border-0"
+            : "aspect-video max-sm:aspect-[4/3] w-full rounded-xl border border-border/60"
+        }`}
+        onPointerMove={(e) => {
+          if (e.pointerType !== "mouse") return;
+          bumpControlsActivity();
+        }}
+        onClickCapture={(e) => {
+          bumpControlsActivity();
+          // Clicking anywhere outside an open player menu closes it.
+          if (!(e.target as HTMLElement).closest("[data-player-menu]")) {
+            setLangOpen(false);
+            setSettingsOpen(false);
+            setServerOpen(false);
+            setSettingsView("main");
+          }
+        }}
+        onDoubleClick={toggleFullscreen}
+      >
+        {/* Portal target — the persistent video mounts here. */}
+        <div data-slot="stage-slot" className="absolute inset-0" />
 
-      {/* Poster overlay until playback begins. `playing` is also checked:
-          if the video is already running (any start path), the banner must
-          never keep covering it. */}
-      {!hasStarted && !playing && (
-        <button
-          type="button"
-          aria-label={`Play ${movie.title}`}
-          onClick={() => controls.play()}
-          /* z-[15]: above the video's tap-zone layer (z-10, later in DOM so
-             it wins ties — real clicks on this button were landing on the
-             tap zones and doing nothing) but below the control bar (z-20). */
-          className="absolute inset-0 z-[15] flex flex-col items-center justify-center gap-4 bg-black"
-        >
-          {movie.backdropUrl || movie.posterUrl ? (
-            <img
-              src={(movie.backdropUrl ?? movie.posterUrl) as string}
-              alt=""
-              className="absolute inset-0 size-full object-cover opacity-60"
-            />
-          ) : null}
-          <span className="relative z-10 flex size-16 items-center justify-center rounded-full bg-primary/95 text-primary-foreground shadow-[0_8px_40px_-8px_var(--primary)] transition-transform hover:scale-105 sm:size-20">
-            <Play className="ml-1 size-8 fill-current" />
-          </span>
-          <span className="relative z-10 rounded-full bg-black/60 px-4 py-1.5 font-display text-sm font-semibold text-white backdrop-blur-sm">
-            {movie.title}
-          </span>
-        </button>
-      )}
+        {/* Poster overlay until playback begins. `playing` is also checked:
+            if the video is already running (any start path), the banner must
+            never keep covering it. */}
+        {!hasStarted && !playing && (
+          <button
+            type="button"
+            aria-label={`Play ${movie.title}`}
+            onClick={() => controls.play()}
+            /* z-[15]: above the video's tap-zone layer (z-10, later in DOM so
+               it wins ties — real clicks on this button were landing on the
+               tap zones and doing nothing) but below the control bar (z-20). */
+            className="absolute inset-0 z-[15] flex flex-col items-center justify-center gap-4 bg-black"
+          >
+            {movie.backdropUrl || movie.posterUrl ? (
+              <img
+                src={(movie.backdropUrl ?? movie.posterUrl) as string}
+                alt=""
+                className="absolute inset-0 size-full object-cover opacity-60"
+              />
+            ) : null}
+            <span className="relative z-10 flex size-16 items-center justify-center rounded-full bg-primary/95 text-primary-foreground shadow-[0_8px_40px_-8px_var(--primary)] transition-transform hover:scale-105 sm:size-20">
+              <Play className="ml-1 size-8 fill-current" />
+            </span>
+            <span className="relative z-10 rounded-full bg-black/60 px-4 py-1.5 font-display text-sm font-semibold text-white backdrop-blur-sm">
+              {movie.title}
+            </span>
+          </button>
+        )}
 
-      {/* Our design comes up first on every embed server: the poster, our play
-          affordance and the server picker hold the box while the providers are
-          asked. A provider's own page only ever appears on a chip that cannot
-          feed our player at all. */}
-      {awaitingPlayer && (
-        <div className="absolute inset-0 z-[62] flex flex-col items-center justify-center gap-3 bg-black">
-          {movie.backdropUrl || movie.posterUrl ? (
-            <img
-              src={(movie.backdropUrl ?? movie.posterUrl) as string}
-              alt=""
-              className="absolute inset-0 size-full object-cover opacity-45"
-            />
-          ) : null}
-          <LoadingOrbit paused={raceSpent} className="relative z-10 text-[5.5rem] sm:text-[7rem]" />
-          <span className="relative z-10 max-w-[86vw] truncate rounded-full bg-black/60 px-4 py-1.5 font-display text-sm font-semibold text-white backdrop-blur-sm">
-            {title}
-          </span>
-          {/* While the race runs the orbit is the whole message. A line is only
-              worth its space when something actually went wrong. */}
-          {raceSpent || !usingEmbed ? (
-            <p
-              className={`relative z-10 max-w-[86vw] text-center text-xs ${
-                raceSpent ? "text-amber-200/90" : "text-white/70"
-              }`}
-            >
-              {raceSpent
-                ? embedError || "No server answered with a stream this player can run."
-                : "Loading this server's player…"}
-            </p>
-          ) : null}
-          <div className="relative z-10 mt-1 flex items-center gap-2">
-            <ServerSwitcher
-              servers={servers}
-              activeKey={server}
-              onSelect={selectServer}
-              open={serverOpen}
-              setOpen={setServerOpen}
-              align="left"
-              drop="up"
-            />
-            {raceSpent && (
+        {/* Our design comes up first on every embed server: the poster, our play
+            affordance and the server picker hold the box while the providers are
+            asked. A provider's own page only ever appears on a chip that cannot
+            feed our player at all. */}
+        {awaitingPlayer && (
+          <div className="absolute inset-0 z-[62] flex flex-col items-center justify-center gap-3 bg-black">
+            {movie.backdropUrl || movie.posterUrl ? (
+              <img
+                src={(movie.backdropUrl ?? movie.posterUrl) as string}
+                alt=""
+                className="absolute inset-0 size-full object-cover opacity-45"
+              />
+            ) : null}
+            {providerReady && !providerOpen ? (
+              /* Our play button, our size, our design — and it is the press that
+                 opens the provider's film. The box only becomes theirs after this. */
               <button
                 type="button"
-                onClick={retryRace}
-                className="flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white backdrop-blur-sm transition-colors hover:bg-white/25"
-                title="Ask every provider for this server again"
+                onClick={() => setProviderOpen(true)}
+                className="relative z-10 grid size-20 place-items-center rounded-full bg-white/15 text-white backdrop-blur-sm transition-colors hover:bg-white/25 sm:size-24"
+                title={`Play this title on ${providerName}'s player`}
+                aria-label={`Play on ${providerName}`}
               >
-                <RotateCcw className="size-3.5" />
-                Try again
+                <Play className="size-9 fill-current sm:size-11" />
               </button>
+            ) : (
+              <LoadingOrbit paused={raceSpent} className="relative z-10 text-[5.5rem] sm:text-[7rem]" />
             )}
-          </div>
-        </div>
-      )}
-
-      {/* The hand-off gap: the race is over, a stream is attached, and the
-          element has not painted a frame yet. Clicks pass straight through, so
-          the viewer can still press play while the first segment downloads. */}
-      {streamWarming && (
-        <div className="pointer-events-none absolute inset-0 z-[62] flex flex-col items-center justify-center gap-2.5">
-          <LoadingOrbit className="text-[4.25rem] sm:text-[5.25rem]" />
-          <p className="rounded-full bg-black/55 px-3 py-1 text-xs text-white/80 backdrop-blur-sm">
-            {`Loading the first frame from ${providerName}…`}
-          </p>
-        </div>
-      )}
-
-      {/* Same beat on a chip that can only show the provider's own page: its
-          first paint is silent to us, so our mark opens the box for a few
-          seconds and then fades out — click-through the whole time, so the
-          provider's play button is pressable under it. */}
-      {providerMode && (
-        <div
-          key={providerUrl}
-          className="ff-warm pointer-events-none absolute inset-0 z-[62] flex flex-col items-center justify-center gap-2.5"
-        >
-          <LoadingOrbit className="text-[4.25rem] sm:text-[5.25rem]" />
-          <p className="rounded-full bg-black/55 px-3 py-1 text-xs text-white/80 backdrop-blur-sm">
-            {`Waiting for ${providerName}…`}
-          </p>
-        </div>
-      )}
-
-      {/* The Videasy drama player: iframe-only, so it keeps the whole stage.
-          Our chrome lives in one top band for every framed provider — see the
-          `providerMode` block below — because a provider's own play, seek and
-          volume always sit along its bottom edge. */}
-      {usingAutoembed && iframeServerUrl && providerFramed && (
-        <div className="absolute inset-0 z-[60] bg-black">
-          <iframe
-            key={iframeServerUrl}
-            src={iframeServerUrl}
-            title={`${title} — Drama`}
-            className="absolute inset-0 size-full border-0"
-            allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
-            allowFullScreen
-            referrerPolicy="origin"
-          />
-        </div>
-      )}
-
-      {/* Embed servers that ended up framing their own player: only reached once
-          the race failed or the viewer asked for it, so our stage was up first. */}
-      {embedIframe && (embedUrl || embedSource) && (
-        <div className="absolute inset-0 z-[60] bg-black">
-          <iframe
-            src={(embedUrl || embedSource) as string}
-            title={`${title} — Embed`}
-            className="absolute inset-0 size-full border-0"
-            allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
-            allowFullScreen
-            referrerPolicy="origin"
-          />
-          {/* The provider's own wall ("we don't have this episode") is served at
-              HTTP 200, so no probe can tell it from a working player. Say out
-              loud which host is showing and where to go instead — that is the
-              one case where a framed provider page reads as a broken site. It
-              is said from the top band, so this page keeps its bottom edge. */}
-        </div>
-      )}
-
-      {/* Our design over a provider's own player, along the TOP edge. It keeps
-          the native bar's gradient and buttons, but only the ones that really
-          act on a framed page: server, download, open-the-provider, fullscreen.
-          A scrubber or volume slider would be decoration here — this site
-          cannot seek, mute or read the time of a cross-origin player — and the
-          band ignores clicks except on its buttons, which leaves the provider's
-          own play/seek/volume along its bottom edge completely usable. */}
-      {providerMode && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-[61] bg-gradient-to-b from-black/90 via-black/55 to-transparent px-2 pb-9 pt-2 max-sm:pb-6 max-sm:pt-1.5 sm:px-4">
-          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 sm:gap-x-2.5">
-            {/* Stepper + status travel together: on a phone they share the row
-                under the buttons, since a stepper, two labels and two icons need
-                width the player does not have. `contents` at sm+ folds them back
-                into the single desktop row. The status line says what this state
-                is and why, and opens the resolver log when tapped. */}
-            <div className="flex min-w-0 items-center gap-x-1.5 max-sm:order-last max-sm:basis-full sm:contents">
-              {framedEpisodeStepper && (
-                <EpisodeStepper episode={aeEpisode} onChange={setAeEpisode} />
-              )}
-              <button
-                type="button"
-                onClick={() => setEmbedPanelOpen(true)}
-                className={`pointer-events-auto min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-white/10 ${
-                  embedStatus === "failed" && !embedCarried ? "text-amber-200" : "text-white/70"
-                }`}
-                title={
-                  embedStatus === "failed"
-                    ? "No provider gave a stream this site could play, so the provider's own player is shown"
-                    : "Every provider is being tried at once — the first stream that answers plays here"
-                }
-              >
-                <span className="hidden font-semibold text-white sm:inline">{title} · </span>
-                {embedStatus === "resolving"
-                  ? (
-                      <>
-                        <span className="sm:hidden">Trying every server for a stream…</span>
-                        <span className="hidden sm:inline">
-                          Trying every server for an ad-free stream…
-                        </span>
-                      </>
-                    )
-                  : embedStatus === "failed" && !embedCarried
-                    ? (
-                        <>
-                          <span className="sm:hidden">
-                            {providerName} — may not carry this
-                          </span>
-                          <span className="hidden sm:inline">
-                            {providerName} may not carry this title — try another server
-                          </span>
-                        </>
-                      )
-                    : embedStatus === "failed"
-                      ? (
-                          <>
-                            <span className="sm:hidden">
-                              {providerName} — press play on its screen
-                            </span>
-                            <span className="hidden sm:inline">
-                              {providerName} has this title — press play on its screen; seek and
-                              volume stay there
-                            </span>
-                          </>
-                        )
-                      : `${providerName} is running the film`}
-              </button>
-            </div>
-            <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-1">
-              <ServerSwitcher
-                servers={servers}
-                activeKey={server}
-                onSelect={selectServer}
-                open={serverOpen}
-                setOpen={setServerOpen}
-                align="right"
-                drop="down"
-              />
-              <DownloadMenu
-                files={downloadFiles}
-                streamUrl={streamProbeUrl}
-                referer={providerUrl}
-                iframeUrl={providerUrl}
-                ids={{
-                  tmdbId,
-                  imdbId,
-                  kind,
-                  season,
-                  episode: usingAutoembed || animeServer ? aeEpisode : (episode ?? aeEpisode),
-                }}
-                title={title}
-                open={downloadOpen}
-                setOpen={setDownloadOpen}
-                align="right"
-                drop="down"
-              />
-              <a
-                href={providerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-                aria-label="Open the provider directly"
-                title="If the player stays blank, open the provider directly"
-              >
-                <ExternalLink className="size-5" />
-              </a>
-              <button
-                type="button"
-                onClick={toggleFullscreen}
-                className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-                aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-                title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-              >
-                {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Every embed server on this title answered with an error page: say so
-          plainly rather than framing the provider's stack trace as a player. */}
-      {embedDead && (
-        <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black px-4">
-          <div className="w-full max-w-sm rounded-2xl border border-border/60 bg-card/95 p-5 text-center">
-            <p className="font-display text-base font-semibold">
-              No working server for this title
-            </p>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              Every provider we tried has no player for this id right now. Pick
-              another server, or open the provider directly.
-            </p>
-            <div className="mt-4 flex items-center justify-center gap-2">
+            <span className="relative z-10 max-w-[86vw] truncate rounded-full bg-black/60 px-4 py-1.5 font-display text-sm font-semibold text-white backdrop-blur-sm">
+              {title}
+            </span>
+            {/* While the race runs the orbit is the whole message. A miss is not
+                the viewer's problem to read: the reason lives in the resolver log
+                behind the top band, and the cover just offers another server. */}
+            {!raceSpent && (
+              <p className="relative z-10 max-w-[86vw] text-center text-xs text-white/70">
+                Loading this server's player…
+              </p>
+            )}
+            {providerReady && !providerOpen && (
+              <p className="relative z-10 max-w-[86vw] text-center text-xs text-white/70">
+                {`Press play and ${embedHost || providerName}'s own player starts here — its seek and volume sit on its screen.`}
+              </p>
+            )}
+            <div className="relative z-10 mt-1 flex max-w-[94vw] flex-wrap items-center justify-center gap-2">
               <ServerSwitcher
                 servers={servers}
                 activeKey={server}
@@ -1533,226 +1613,472 @@ export default function PlayerStage({
                 align="left"
                 drop="up"
               />
-              {(embedUrl || embedSource) && (
-                <a
-                  href={(embedUrl || embedSource) as string}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-lg border border-border/60 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
+              {raceSpent && (
+                <button
+                  type="button"
+                  onClick={retryRace}
+                  className="flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white backdrop-blur-sm transition-colors hover:bg-white/25"
+                  title="Ask every provider for this server again"
                 >
-                  Open provider ↗
-                </a>
+                  <RotateCcw className="size-3.5" />
+                  Try again
+                </button>
               )}
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Embed resolver panel — paste/resolve an embed URL and pick a stream. */}
-      {usingEmbed && embedPanelOpen && (
-        <div className="absolute inset-0 z-[65] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-xl border border-border/60 bg-card/95 p-4 text-sm text-card-foreground shadow-2xl">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="font-display font-semibold">
-                Embed stream — ad-free
-              </span>
-              <button
-                type="button"
-                onClick={() => setEmbedPanelOpen(false)}
-                className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                aria-label="Close"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-            <p className="mb-3 text-xs text-muted-foreground">
-              Paste a vidlink.pro / vixsrc.to (or similar) embed link — the
-              Worker follows its iframe chain and plays the raw HLS stream
-              here, without the provider&apos;s player or ads.
+        {/* The hand-off gap: the race is over, a stream is attached, and the
+            element has not painted a frame yet. Clicks pass straight through, so
+            the viewer can still press play while the first segment downloads. */}
+        {streamWarming && (
+          <div className="pointer-events-none absolute inset-0 z-[62] flex flex-col items-center justify-center gap-2.5">
+            <LoadingOrbit className="text-[4.25rem] sm:text-[5.25rem]" />
+            <p className="rounded-full bg-black/55 px-3 py-1 text-xs text-white/80 backdrop-blur-sm">
+              {`Loading the first frame from ${providerName}…`}
             </p>
-            <div className="flex gap-2">
-              <input
-                value={embedUrl}
-                onChange={(e) => setEmbedUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void runEmbedResolve(embedUrl);
-                }}
-                placeholder="https://vidlink.pro/movie/… or vixsrc.to/movie/…"
-                className="min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-xs outline-none focus-visible:border-ring"
-              />
-              <button
-                type="button"
-                disabled={embedStatus === "resolving"}
-                onClick={() => void runEmbedResolve(embedUrl)}
-                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-opacity disabled:opacity-60"
-              >
-                {embedStatus === "resolving" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Link2 className="size-3.5" />
+          </div>
+        )}
+
+        {/* Same beat on a chip that can only show the provider's own page: its
+            first paint is silent to us, so our mark opens the box for a few
+            seconds and then fades out — click-through the whole time, so the
+            provider's play button is pressable under it. */}
+        {providerMode && (
+          <div
+            key={providerUrl}
+            className="ff-warm pointer-events-none absolute inset-0 z-[62] flex flex-col items-center justify-center gap-2.5"
+          >
+            <LoadingOrbit className="text-[4.25rem] sm:text-[5.25rem]" />
+            <p className="rounded-full bg-black/55 px-3 py-1 text-xs text-white/80 backdrop-blur-sm">
+              {`Waiting for ${providerName}…`}
+            </p>
+          </div>
+        )}
+
+        {/* The Videasy drama player: iframe-only, so it keeps the whole stage.
+            Our chrome lives in one top band for every framed provider — see the
+            `providerMode` block below — because a provider's own play, seek and
+            volume always sit along its bottom edge. */}
+        {usingAutoembed && iframeServerUrl && providerFramed && (
+          <div className="absolute inset-0 z-[60] bg-black">
+            <iframe
+              key={iframeServerUrl}
+              src={iframeServerUrl}
+              title={`${title} — Drama`}
+              className="absolute inset-0 size-full border-0"
+              allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
+              allowFullScreen
+              referrerPolicy="origin"
+            />
+          </div>
+        )}
+
+        {/* Embed servers that ended up framing their own player: only reached once
+            the race failed or the viewer asked for it, so our stage was up first. */}
+        {embedIframe && (embedUrl || embedSource) && (
+          <div className="absolute inset-0 z-[60] bg-black">
+            <iframe
+              src={(embedUrl || embedSource) as string}
+              title={`${title} — Embed`}
+              className="absolute inset-0 size-full border-0"
+              allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
+              allowFullScreen
+              referrerPolicy="origin"
+            />
+            {/* The provider's own wall ("we don't have this episode") is served at
+                HTTP 200, so no probe can tell it from a working player. Say out
+                loud which host is showing and where to go instead — that is the
+                one case where a framed provider page reads as a broken site. It
+                is said from the top band, so this page keeps its bottom edge. */}
+          </div>
+        )}
+
+        {/* Our design over a provider's own player, along the TOP edge. It keeps
+            the native bar's gradient and buttons, but only the ones that really
+            act on a framed page: server, open-the-provider, fullscreen. The
+            things to *do* with the title live in the row under the box.
+            A scrubber or volume slider would be decoration here — this site
+            cannot seek, mute or read the time of a cross-origin player — and the
+            band ignores clicks except on its buttons, which leaves the provider's
+            own play/seek/volume along its bottom edge completely usable. */}
+        {providerMode && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-[61] bg-gradient-to-b from-black/90 via-black/55 to-transparent px-2 pb-9 pt-2 max-sm:pb-6 max-sm:pt-1.5 sm:px-4">
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 sm:gap-x-2.5">
+              {/* Stepper + status travel together: on a phone they share the row
+                  under the buttons, since a stepper, two labels and two icons need
+                  width the player does not have. `contents` at sm+ folds them back
+                  into the single desktop row. The status line says what this state
+                  is and why, and opens the resolver log when tapped. */}
+              <div className="flex min-w-0 items-center gap-x-1.5 max-sm:order-last max-sm:basis-full sm:contents">
+                {framedEpisodeStepper && (
+                  <EpisodeStepper episode={aeEpisode} onChange={setAeEpisode} />
                 )}
-                Resolve
-              </button>
-            </div>
-            {embedError && (
-              <p className="mt-2 text-xs text-destructive">{embedError}</p>
-            )}
-            {embedCandidates.length > 0 && (
-              <div className="mt-3 space-y-1">
-                <p className="text-xs font-medium text-muted-foreground">
-                  Found {embedCandidates.length} stream(s) — pick one:
-                </p>
-                {embedCandidates.map((c) => {
-                  let host = c.url;
-                  try {
-                    host = new URL(c.url).hostname;
-                  } catch {
-                    /* keep full url */
+                <button
+                  type="button"
+                  onClick={() => setEmbedPanelOpen(true)}
+                  className={`pointer-events-auto min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-white/10 ${
+                    embedStatus === "failed" && !embedCarried ? "text-amber-200" : "text-white/70"
+                  }`}
+                  title={
+                    embedStatus === "failed"
+                      ? "No provider gave a stream this site could play, so the provider's own player is shown"
+                      : "Every provider is being tried at once — the first stream that answers plays here"
                   }
-                  return (
-                    <button
-                      key={c.url}
-                      type="button"
-                      onClick={() => playEmbedCandidate(c)}
-                      title={c.url}
-                      className={`block w-full truncate rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-accent ${
-                        embedStream === c.url
-                          ? "border-primary/60 text-primary"
-                          : "border-border/60"
-                      }`}
-                    >
-                      {host}{" "}
-                      <span className="text-muted-foreground">({c.via})</span>
-                    </button>
-                  );
-                })}
+                >
+                  <span className="hidden font-semibold text-white sm:inline">{title} · </span>
+                  {embedStatus === "resolving"
+                    ? (
+                        <>
+                          <span className="sm:hidden">Trying every server for a stream…</span>
+                          <span className="hidden sm:inline">
+                            Trying every server for an ad-free stream…
+                          </span>
+                        </>
+                      )
+                    : embedStatus === "failed" && embedBlocked
+                      ? (
+                          <>
+                            <span className="sm:hidden">
+                              {providerName} refused our resolver
+                            </span>
+                            <span className="hidden sm:inline">
+                              {providerName} refused our resolver but serves you — press play
+                              on its screen
+                            </span>
+                          </>
+                        )
+                      : embedStatus === "failed" && !embedCarried
+                        ? (
+                            <>
+                              <span className="sm:hidden">
+                                {providerName} — may not carry this
+                              </span>
+                              <span className="hidden sm:inline">
+                                {providerName} may not carry this title — try another server
+                              </span>
+                            </>
+                          )
+                      : embedStatus === "failed"
+                        ? (
+                            /* Only reachable once our own play button handed the box
+                               over, so this says what is true then: it is running. */
+                            <>
+                              <span className="sm:hidden">
+                                {providerName} is running the film
+                              </span>
+                              <span className="hidden sm:inline">
+                                {providerName} is running the film — its seek and volume sit on its
+                                screen
+                              </span>
+                            </>
+                          )
+                        : `${providerName} is running the film`}
+                </button>
               </div>
-            )}
-            {(embedUrl || embedSource) && (
+              <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-1">
+                <ServerSwitcher
+                  servers={servers}
+                  activeKey={server}
+                  onSelect={selectServer}
+                  open={serverOpen}
+                  setOpen={setServerOpen}
+                  align="right"
+                  drop="down"
+                />
+                <a
+                  href={providerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+                  aria-label="Open the provider directly"
+                  title="If the player stays blank, open the provider directly"
+                >
+                  <ExternalLink className="size-5" />
+                </a>
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+                  aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+                >
+                  {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Every embed server on this title answered with an error page: say so
+            plainly rather than framing the provider's stack trace as a player. */}
+        {embedDead && (
+          <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black px-4">
+            <div className="w-full max-w-sm rounded-2xl border border-border/60 bg-card/95 p-5 text-center">
+              <p className="font-display text-base font-semibold">
+                No working server for this title
+              </p>
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                {embedError ||
+                  "Every provider we tried has no player for this id right now."}{" "}
+                Pick another server, or open it in its own tab.
+              </p>
+              <div className="mt-4 flex items-center justify-center gap-2">
+                <ServerSwitcher
+                  servers={servers}
+                  activeKey={server}
+                  onSelect={selectServer}
+                  open={serverOpen}
+                  setOpen={setServerOpen}
+                  align="left"
+                  drop="up"
+                />
+                {(embedUrl || embedSource) && (
+                  <a
+                    href={(embedUrl || embedSource) as string}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-lg border border-border/60 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
+                  >
+                    Open provider ↗
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Embed resolver panel — paste/resolve an embed URL and pick a stream. */}
+        {usingEmbed && embedPanelOpen && (
+          <div className="absolute inset-0 z-[65] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-xl border border-border/60 bg-card/95 p-4 text-sm text-card-foreground shadow-2xl">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-display font-semibold">
+                  Embed stream — ad-free
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setEmbedPanelOpen(false)}
+                  className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  aria-label="Close"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+              <p className="mb-3 text-xs text-muted-foreground">
+                Paste a vidlink.pro / vixsrc.to (or similar) embed link — the
+                Worker follows its iframe chain and plays the raw HLS stream
+                here, without the provider&apos;s player or ads.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  value={embedUrl}
+                  onChange={(e) => setEmbedUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void runEmbedResolve(embedUrl);
+                  }}
+                  placeholder="https://vidlink.pro/movie/… or vixsrc.to/movie/…"
+                  className="min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-xs outline-none focus-visible:border-ring"
+                />
+                <button
+                  type="button"
+                  disabled={embedStatus === "resolving"}
+                  onClick={() => void runEmbedResolve(embedUrl)}
+                  className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-opacity disabled:opacity-60"
+                >
+                  {embedStatus === "resolving" ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Link2 className="size-3.5" />
+                  )}
+                  Resolve
+                </button>
+              </div>
+              {embedError && (
+                <p className="mt-2 text-xs text-destructive">{embedError}</p>
+              )}
+              {embedCandidates.length > 0 && (
+                <div className="mt-3 space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Found {embedCandidates.length} stream(s) — pick one:
+                  </p>
+                  {embedCandidates.map((c) => {
+                    let host = c.url;
+                    try {
+                      host = new URL(c.url).hostname;
+                    } catch {
+                      /* keep full url */
+                    }
+                    return (
+                      <button
+                        key={c.url}
+                        type="button"
+                        onClick={() => playEmbedCandidate(c)}
+                        title={c.url}
+                        className={`block w-full truncate rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-accent ${
+                          embedStream === c.url
+                            ? "border-primary/60 text-primary"
+                            : "border-border/60"
+                        }`}
+                      >
+                        {host}{" "}
+                        <span className="text-muted-foreground">({c.via})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {(embedUrl || embedSource) && (
+                <button
+                  type="button"
+                  onClick={() => setEmbedPanelOpen(false)}
+                  className="mt-3 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                >
+                  Back to the provider player
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Controls — float up from the bottom edge on hover/tap. Hidden while a
+            provider page holds the box; our bar above it takes the edge instead. */}
+        <div
+          onMouseEnter={() => setHoveringControls(true)}
+          onMouseLeave={() => setHoveringControls(false)}
+          className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2 pb-2.5 pt-10 transition-all duration-300 ease-out max-sm:pt-6 sm:px-4 ${
+            providerMode
+              ? "hidden"
+              : controlsVisible || !playing
+                ? "translate-y-0 opacity-100"
+                : "pointer-events-none translate-y-3 opacity-0"
+          }`}
+        >
+          {/* Progress / seek bar — click to jump, drag to scrub. */}
+          <div
+            ref={scrubRef}
+            data-player-scrubber
+            className="group/scrub mb-2 flex h-6 cursor-pointer touch-none items-center"
+            onPointerDown={(e) => {
+              if (duration <= 0) return;
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {
+                /* capture is best-effort */
+              }
+              scrubbingRef.current = true;
+              setControlsHold(true);
+              const rect = e.currentTarget.getBoundingClientRect();
+              controls.seekToRatio((e.clientX - rect.left) / rect.width);
+            }}
+            onPointerMove={(e) => {
+              if (!scrubbingRef.current) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              controls.seekToRatio((e.clientX - rect.left) / rect.width);
+            }}
+            onPointerUp={(e) => {
+              if (!scrubbingRef.current) return;
+              scrubbingRef.current = false;
+              setControlsHold(false);
+              try {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+              } catch {
+                /* best-effort */
+              }
+            }}
+            onPointerCancel={() => {
+              scrubbingRef.current = false;
+              setControlsHold(false);
+            }}
+            role="slider"
+            aria-label="Seek"
+            aria-valuemin={0}
+            aria-valuemax={Math.round(duration)}
+            aria-valuenow={Math.round(currentTime)}
+          >
+            <div className="relative h-1.5 w-full rounded-full bg-white/25 transition-[height] group-hover/scrub:h-2.5">
+              {/* Downloaded (buffered) portion. */}
+              <div
+                className="absolute inset-y-0 left-0 rounded-full bg-white/30"
+                style={{ width: `${duration ? Math.min(100, (bufferedEnd / duration) * 100) : 0}%` }}
+              />
+              {/* Played portion + thumb. */}
+              <div
+                className="absolute inset-y-0 left-0 rounded-full bg-primary"
+                style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+              />
+              <div
+                className="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow transition-transform group-hover/scrub:scale-110"
+                style={{ left: `${duration ? Math.min(100, (currentTime / duration) * 100) : 0}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 sm:gap-x-2.5">
+            <span className="w-10 shrink-0 text-[11px] font-medium tabular-nums text-white/80">
+              {formatTime(currentTime)}
+            </span>
+            <button
+              type="button"
+              onClick={() => controls.togglePlay()}
+              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              aria-label={playing ? "Pause" : "Play"}
+            >
+              {playing ? (
+                <Pause className="size-5 fill-current" />
+              ) : (
+                <Play className="size-5 fill-current" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => seekBy(-10)}
+              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              aria-label="Back 10 seconds"
+            >
+              <RotateCcw className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => seekBy(10)}
+              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              aria-label="Forward 10 seconds"
+            >
+              <RotateCw className="size-4" />
+            </button>
+
+            {/* Volume: hover-expand on desktop, plain mute toggle on touch. */}
+            <div className="group/vol flex items-center max-sm:hidden">
               <button
                 type="button"
-                onClick={() => setEmbedPanelOpen(false)}
-                className="mt-3 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                onClick={() => controls.toggleMute()}
+                className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+                aria-label={muted ? "Unmute" : "Mute"}
               >
-                Back to the provider player
+                {muted || volume === 0 ? (
+                  <VolumeX className="size-5" />
+                ) : volume < 0.5 ? (
+                  <Volume1 className="size-5" />
+                ) : (
+                  <Volume2 className="size-5" />
+                )}
               </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Controls — float up from the bottom edge on hover/tap. Hidden while a
-          provider page holds the box; our bar above it takes the edge instead. */}
-      <div
-        onMouseEnter={() => setHoveringControls(true)}
-        onMouseLeave={() => setHoveringControls(false)}
-        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2 pb-2.5 pt-10 transition-all duration-300 ease-out max-sm:pt-6 sm:px-4 ${
-          providerMode
-            ? "hidden"
-            : controlsVisible || !playing
-              ? "translate-y-0 opacity-100"
-              : "pointer-events-none translate-y-3 opacity-0"
-        }`}
-      >
-        {/* Progress / seek bar — click to jump, drag to scrub. */}
-        <div
-          ref={scrubRef}
-          data-player-scrubber
-          className="group/scrub mb-2 flex h-6 cursor-pointer touch-none items-center"
-          onPointerDown={(e) => {
-            if (duration <= 0) return;
-            try {
-              e.currentTarget.setPointerCapture(e.pointerId);
-            } catch {
-              /* capture is best-effort */
-            }
-            scrubbingRef.current = true;
-            setControlsHold(true);
-            const rect = e.currentTarget.getBoundingClientRect();
-            controls.seekToRatio((e.clientX - rect.left) / rect.width);
-          }}
-          onPointerMove={(e) => {
-            if (!scrubbingRef.current) return;
-            const rect = e.currentTarget.getBoundingClientRect();
-            controls.seekToRatio((e.clientX - rect.left) / rect.width);
-          }}
-          onPointerUp={(e) => {
-            if (!scrubbingRef.current) return;
-            scrubbingRef.current = false;
-            setControlsHold(false);
-            try {
-              e.currentTarget.releasePointerCapture(e.pointerId);
-            } catch {
-              /* best-effort */
-            }
-          }}
-          onPointerCancel={() => {
-            scrubbingRef.current = false;
-            setControlsHold(false);
-          }}
-          role="slider"
-          aria-label="Seek"
-          aria-valuemin={0}
-          aria-valuemax={Math.round(duration)}
-          aria-valuenow={Math.round(currentTime)}
-        >
-          <div className="relative h-1.5 w-full rounded-full bg-white/25 transition-[height] group-hover/scrub:h-2.5">
-            {/* Downloaded (buffered) portion. */}
-            <div
-              className="absolute inset-y-0 left-0 rounded-full bg-white/30"
-              style={{ width: `${duration ? Math.min(100, (bufferedEnd / duration) * 100) : 0}%` }}
-            />
-            {/* Played portion + thumb. */}
-            <div
-              className="absolute inset-y-0 left-0 rounded-full bg-primary"
-              style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-            />
-            <div
-              className="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow transition-transform group-hover/scrub:scale-110"
-              style={{ left: `${duration ? Math.min(100, (currentTime / duration) * 100) : 0}%` }}
-            />
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 sm:gap-x-2.5">
-          <span className="w-10 shrink-0 text-[11px] font-medium tabular-nums text-white/80">
-            {formatTime(currentTime)}
-          </span>
-          <button
-            type="button"
-            onClick={() => controls.togglePlay()}
-            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-            aria-label={playing ? "Pause" : "Play"}
-          >
-            {playing ? (
-              <Pause className="size-5 fill-current" />
-            ) : (
-              <Play className="size-5 fill-current" />
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => seekBy(-10)}
-            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-            aria-label="Back 10 seconds"
-          >
-            <RotateCcw className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => seekBy(10)}
-            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-            aria-label="Forward 10 seconds"
-          >
-            <RotateCw className="size-4" />
-          </button>
-
-          {/* Volume: hover-expand on desktop, plain mute toggle on touch. */}
-          <div className="group/vol flex items-center max-sm:hidden">
+              <div className="w-0 overflow-hidden opacity-0 transition-all duration-300 group-hover/vol:w-24 group-hover/vol:opacity-100 group-focus-within/vol:w-24 group-focus-within/vol:opacity-100">
+                <Slider
+                  value={[muted ? 0 : Math.round(volume * 100)]}
+                  max={100}
+                  step={1}
+                  onValueChange={(val) => controls.setVolume((val[0] ?? 0) / 100)}
+                  className="w-24 [&_[data-slot=slider-track]]:bg-white/25 [&_[data-slot=slider-range]]:bg-primary [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-primary [&_[data-slot=slider-thumb]]:bg-white"
+                  aria-label="Volume"
+                />
+              </div>
+            </div>
+            {/* Touch devices have no hover — show the mute toggle here instead. */}
             <button
               type="button"
               onClick={() => controls.toggleMute()}
-              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15 sm:hidden"
               aria-label={muted ? "Unmute" : "Mute"}
             >
               {muted || volume === 0 ? (
@@ -1763,322 +2089,288 @@ export default function PlayerStage({
                 <Volume2 className="size-5" />
               )}
             </button>
-            <div className="w-0 overflow-hidden opacity-0 transition-all duration-300 group-hover/vol:w-24 group-hover/vol:opacity-100 group-focus-within/vol:w-24 group-focus-within/vol:opacity-100">
-              <Slider
-                value={[muted ? 0 : Math.round(volume * 100)]}
-                max={100}
-                step={1}
-                onValueChange={(val) => controls.setVolume((val[0] ?? 0) / 100)}
-                className="w-24 [&_[data-slot=slider-track]]:bg-white/25 [&_[data-slot=slider-range]]:bg-primary [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-primary [&_[data-slot=slider-thumb]]:bg-white"
-                aria-label="Volume"
+
+            <span className="w-10 shrink-0 text-[11px] font-medium tabular-nums text-white/80">
+              {formatTime(duration)}
+            </span>
+
+            {/* Twelve controls never fit across a phone — the row used to walk off
+                the right edge and take the gear, PiP and fullscreen with it. This
+                spacer gives the provider cluster its own line until there is room
+                for one row (a landscape phone is still narrower than a laptop). */}
+            <span aria-hidden className="hidden basis-full shrink-0 max-[820px]:block" />
+
+            {/* Which language the film is heard in, beside the server that
+                carries it: a viewer picks a source and its voice together, and
+                the pick is still there in fullscreen, where the row under the
+                box is not. */}
+            {(servers.length > 1 || dubs.length > 0 || audioTracks.length > 0) && (
+              <LanguageMenu
+                tracks={audioTracks}
+                activeTrack={activeAudioTrack}
+                onSelectTrack={setAudioTrack}
+                dubs={dubs}
+                activeDub={activeDub}
+                onSelectDub={setDub}
+                serverAudio={serverAudio}
+                serverKeys={servers.map((s) => s.key)}
+                serverName={serverName}
+                currentServer={server}
+                probe={audioProbe}
+                onHandOff={handOffLanguage}
+                open={langOpen}
+                setOpen={setLangOpen}
               />
-            </div>
-          </div>
-          {/* Touch devices have no hover — show the mute toggle here instead. */}
-          <button
-            type="button"
-            onClick={() => controls.toggleMute()}
-            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15 sm:hidden"
-            aria-label={muted ? "Unmute" : "Mute"}
-          >
-            {muted || volume === 0 ? (
-              <VolumeX className="size-5" />
-            ) : volume < 0.5 ? (
-              <Volume1 className="size-5" />
-            ) : (
-              <Volume2 className="size-5" />
             )}
-          </button>
 
-          {/* Share, right beside the volume controls. */}
-          <button
-            type="button"
-            onClick={shareMovie}
-            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-            aria-label="Share this movie"
-            title="Share"
-          >
-            <Share2 className="size-5" />
-          </button>
+            {/* Playback server — switch between this site's file and the embed
+                servers. Shown whenever more than one server is available. */}
+            {servers.length > 1 && (
+              <ServerSwitcher
+                servers={servers}
+                activeKey={server}
+                onSelect={selectServer}
+                open={serverOpen}
+                setOpen={setServerOpen}
+                align="right"
+              />
+            )}
 
-          <span className="w-10 shrink-0 text-[11px] font-medium tabular-nums text-white/80">
-            {formatTime(duration)}
-          </span>
-
-          {/* Twelve controls never fit across a phone — the row used to walk off
-              the right edge and take the gear, PiP and fullscreen with it. This
-              spacer gives the provider cluster its own line until there is room
-              for one row (a landscape phone is still narrower than a laptop). */}
-          <span aria-hidden className="hidden basis-full shrink-0 max-[820px]:block" />
-
-          {/* Language switch — original + admin-added dubs. */}
-          {dubs.length > 0 && (
-            <div className="relative shrink-0" data-player-menu>
+            {/* Settings gear: night mode, loop, rotate, captions, speed, quality. */}
+            <div className="relative ml-auto shrink-0" data-player-menu>
               <button
                 type="button"
-                onClick={() => setLangOpen((v) => !v)}
-                className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15"
-                aria-label="Audio language"
-                title="Audio language"
+                onClick={() => {
+                  setSettingsOpen((v) => !v);
+                  setSettingsView("main");
+                  setLangOpen(false);
+                }}
+                className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${
+                  settingsOpen || nightMode || loop || rotation !== 0 || playbackRate !== 1 || activeQuality || activeSubtitle
+                    ? "text-primary"
+                    : ""
+                }`}
+                aria-label="Player settings"
+                title="Settings"
               >
-                <Languages className="size-5" />
-                <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">
-                  {activeDub ?? "Original"}
-                </span>
+                <Settings className="size-5" />
               </button>
-              {langOpen && (
-                <div className="absolute bottom-full right-0 z-30 mb-2 min-w-[160px] overflow-hidden rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.9)] backdrop-blur">
-                  <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
-                    Audio language
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDub(null);
-                      setLangOpen(false);
-                    }}
-                    className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10 ${
-                      activeDub === null ? "bg-primary/25 font-semibold text-primary" : ""
-                    }`}
-                  >
-                    Original
-                    {activeDub === null && <span className="text-xs">✓</span>}
-                  </button>
-                  {dubs.map((d) => (
-                    <button
-                      key={d.label}
-                      type="button"
-                      onClick={() => {
-                        setDub(d.label);
-                        setLangOpen(false);
-                      }}
-                      className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10 ${
-                        activeDub === d.label ? "bg-primary/25 font-semibold text-primary" : ""
-                      }`}
-                    >
-                      {d.label}
-                      {activeDub === d.label && <span className="text-xs">✓</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
 
-          {/* Playback server — switch between this site's file and the embed
-              servers. Shown whenever more than one server is available. */}
-          {servers.length > 1 && (
-            <ServerSwitcher
-              servers={servers}
-              activeKey={server}
-              onSelect={selectServer}
-              open={serverOpen}
-              setOpen={setServerOpen}
-              align="right"
-            />
-          )}
-
-          <DownloadMenu
-            files={downloadFiles}
-            streamUrl={streamProbeUrl} referer={embedUrl || embedSource || iframeServerUrl}
-            ids={{ tmdbId, imdbId, kind, season, episode: usingAutoembed ? aeEpisode : (episode ?? aeEpisode) }}
-            title={title}
-            open={downloadOpen}
-            setOpen={setDownloadOpen}
-            align="right"
-          />
-
-          {/* Settings gear: night mode, loop, rotate, captions, speed, quality. */}
-          <div className="relative ml-auto shrink-0" data-player-menu>
-            <button
-              type="button"
-              onClick={() => {
-                setSettingsOpen((v) => !v);
-                setSettingsView("main");
-                setLangOpen(false);
-              }}
-              className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${
-                settingsOpen || nightMode || loop || rotation !== 0 || playbackRate !== 1 || activeQuality || activeSubtitle
-                  ? "text-primary"
-                  : ""
-              }`}
-              aria-label="Player settings"
-              title="Settings"
-            >
-              <Settings className="size-5" />
-            </button>
-
-            {settingsOpen && (
-              <div className="absolute bottom-full right-0 z-30 mb-2 w-[264px] max-w-[86vw] overflow-hidden rounded-2xl border border-white/15 bg-black/95 py-1.5 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur">
-                {settingsView === "main" && (
-                  <>
-                    <SettingsToggle
-                      icon={<Moon className="size-4" />}
-                      label="Night Mode"
-                      on={nightMode}
-                      onToggle={() => setNightMode(!nightMode)}
-                    />
-                    <SettingsToggle
-                      icon={<Repeat className="size-4" />}
-                      label="Loop"
-                      on={loop}
-                      onToggle={() => setLoop(!loop)}
-                    />
-                    <SettingsToggle
-                      icon={<RotateCw className="size-4" />}
-                      label="Auto Rotate"
-                      on={rotation !== 0}
-                      onToggle={() => setRotation(rotation === 0 ? 90 : 0)}
-                    />
-                    {(subtitles.length > 0 || streamSubtitleLabels.length > 0) && (
-                      <SettingsLink
-                        icon={<Captions className="size-4" />}
-                        label="Subtitles"
-                        value={activeSubtitle ?? "Off"}
-                        onClick={() => setSettingsView("subtitles")}
+              {settingsOpen && (
+                <div className="absolute bottom-full right-0 z-30 mb-2 w-[264px] max-w-[86vw] overflow-hidden rounded-2xl border border-white/15 bg-black/95 py-1.5 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur">
+                  {settingsView === "main" && (
+                    <>
+                      <SettingsToggle
+                        icon={<Moon className="size-4" />}
+                        label="Night Mode"
+                        on={nightMode}
+                        onToggle={() => setNightMode(!nightMode)}
                       />
-                    )}
-                    <SettingsLink
-                      icon={<Gauge className="size-4" />}
-                      label="Playback Speed"
-                      value={playbackRate === 1 ? "Normal" : `${playbackRate}x`}
-                      onClick={() => setSettingsView("speed")}
-                    />
-                    {qualities.length > 0 && (
-                      <SettingsLink
-                        icon={<Settings className="size-4" />}
-                        label="Quality"
-                        value={activeQuality ?? "Auto"}
-                        onClick={() => setSettingsView("quality")}
+                      <SettingsToggle
+                        icon={<Repeat className="size-4" />}
+                        label="Loop"
+                        on={loop}
+                        onToggle={() => setLoop(!loop)}
                       />
-                    )}
-                  </>
-                )}
+                      <SettingsToggle
+                        icon={<RotateCw className="size-4" />}
+                        label="Auto Rotate"
+                        on={rotation !== 0}
+                        onToggle={() => setRotation(rotation === 0 ? 90 : 0)}
+                      />
+                      {(subtitles.length > 0 || streamSubtitleLabels.length > 0) && (
+                        <SettingsLink
+                          icon={<Captions className="size-4" />}
+                          label="Subtitles"
+                          value={activeSubtitle ?? "Off"}
+                          onClick={() => setSettingsView("subtitles")}
+                        />
+                      )}
+                      <SettingsLink
+                        icon={<Gauge className="size-4" />}
+                        label="Playback Speed"
+                        value={playbackRate === 1 ? "Normal" : `${playbackRate}x`}
+                        onClick={() => setSettingsView("speed")}
+                      />
+                      {qualities.length > 0 && (
+                        <SettingsLink
+                          icon={<Settings className="size-4" />}
+                          label="Quality"
+                          value={activeQuality ?? "Auto"}
+                          onClick={() => setSettingsView("quality")}
+                        />
+                      )}
+                    </>
+                  )}
 
-                {settingsView !== "main" && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setSettingsView("main")}
-                      className="flex w-full items-center gap-2.5 border-b border-white/10 px-3 pb-2 pt-1.5 text-left text-sm font-semibold text-white hover:bg-white/5"
-                    >
-                      <ChevronLeft className="size-4" />
-                      {settingsView === "subtitles"
-                        ? "Subtitles"
-                        : settingsView === "speed"
-                          ? "Playback Speed"
-                          : "Quality"}
-                    </button>
-                    <div className="max-h-[220px] overflow-y-auto">
-                      {settingsView === "subtitles" && (
-                        <>
-                          <MenuOption
-                            label="Off"
-                            selected={activeSubtitle === null}
-                            onSelect={() => {
-                              setSubtitle(null);
-                              setSettingsOpen(false);
-                            }}
-                          />
-                          {subtitles.map((s) => (
+                  {settingsView !== "main" && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setSettingsView("main")}
+                        className="flex w-full items-center gap-2.5 border-b border-white/10 px-3 pb-2 pt-1.5 text-left text-sm font-semibold text-white hover:bg-white/5"
+                      >
+                        <ChevronLeft className="size-4" />
+                        {settingsView === "subtitles"
+                          ? "Subtitles"
+                          : settingsView === "speed"
+                            ? "Playback Speed"
+                            : "Quality"}
+                      </button>
+                      <div className="max-h-[220px] overflow-y-auto">
+                        {settingsView === "subtitles" && (
+                          <>
                             <MenuOption
-                              key={s.label}
-                              label={s.label}
-                              selected={activeSubtitle === s.label}
+                              label="Off"
+                              selected={activeSubtitle === null}
                               onSelect={() => {
-                                setSubtitle(s.label);
+                                setSubtitle(null);
                                 setSettingsOpen(false);
                               }}
                             />
-                          ))}
-                          {/* Caption tracks the provider's own stream carries —
-                              for the ad-free embed servers this is the only
-                              subtitle list there is. */}
-                          {streamSubtitleLabels
-                            .filter((l) => !subtitles.some((s) => s.label === l))
-                            .map((label) => (
+                            {subtitles.map((s) => (
                               <MenuOption
-                                key={label}
-                                label={label}
-                                selected={activeSubtitle === label}
+                                key={s.label}
+                                label={s.label}
+                                selected={activeSubtitle === s.label}
                                 onSelect={() => {
-                                  setSubtitle(label);
+                                  setSubtitle(s.label);
                                   setSettingsOpen(false);
                                 }}
                               />
                             ))}
-                        </>
-                      )}
-                      {settingsView === "speed" &&
-                        [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((r) => (
-                          <MenuOption
-                            key={r}
-                            label={r === 1 ? "Normal" : `${r}x`}
-                            selected={playbackRate === r}
-                            onSelect={() => {
-                              setPlaybackRate(r);
-                              setSettingsOpen(false);
-                            }}
-                          />
-                        ))}
-                      {settingsView === "quality" && (
-                        <>
-                          <MenuOption
-                            label="Auto"
-                            selected={activeQuality === null}
-                            onSelect={() => {
-                              setQuality(null);
-                              setSettingsOpen(false);
-                            }}
-                          />
-                          {qualities.map((q) => (
+                            {/* Caption tracks the provider's own stream carries —
+                                for the ad-free embed servers this is the only
+                                subtitle list there is. */}
+                            {streamSubtitleLabels
+                              .filter((l) => !subtitles.some((s) => s.label === l))
+                              .map((label) => (
+                                <MenuOption
+                                  key={label}
+                                  label={label}
+                                  selected={activeSubtitle === label}
+                                  onSelect={() => {
+                                    setSubtitle(label);
+                                    setSettingsOpen(false);
+                                  }}
+                                />
+                              ))}
+                          </>
+                        )}
+                        {settingsView === "speed" &&
+                          [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((r) => (
                             <MenuOption
-                              key={q.label}
-                              label={q.label}
-                              selected={activeQuality === q.label}
+                              key={r}
+                              label={r === 1 ? "Normal" : `${r}x`}
+                              selected={playbackRate === r}
                               onSelect={() => {
-                                setQuality(q.label);
+                                setPlaybackRate(r);
                                 setSettingsOpen(false);
                               }}
                             />
                           ))}
-                          <p className="border-t border-white/10 px-3 py-2 text-[11px] leading-snug text-white/50">
-                            {qualities.map((q) => q.label).join(" / ")}
-                            {" "}files play when added by the server. If a quality
-                            file is not available, the player safely uses the
-                            original stream.
-                          </p>
-                        </>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
+                        {settingsView === "quality" && (
+                          <>
+                            <MenuOption
+                              label="Auto"
+                              selected={activeQuality === null}
+                              onSelect={() => {
+                                setQuality(null);
+                                setSettingsOpen(false);
+                              }}
+                            />
+                            {qualities.map((q) => (
+                              <MenuOption
+                                key={q.label}
+                                label={q.label}
+                                selected={activeQuality === q.label}
+                                onSelect={() => {
+                                  setQuality(q.label);
+                                  setSettingsOpen(false);
+                                }}
+                              />
+                            ))}
+                            <p className="border-t border-white/10 px-3 py-2 text-[11px] leading-snug text-white/50">
+                              {qualities.map((q) => q.label).join(" / ")}
+                              {" "}files play when added by the server. If a quality
+                              file is not available, the player safely uses the
+                              original stream.
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Picture-in-picture — floating OS window. */}
+            <button
+              type="button"
+              onClick={togglePip}
+              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              aria-label="Picture-in-picture"
+              title="Picture-in-picture"
+            >
+              <PictureInPicture2 className="size-5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+              title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+            >
+              {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
+            </button>
           </div>
-
-          {/* Picture-in-picture — floating OS window. */}
-          <button
-            type="button"
-            onClick={togglePip}
-            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-            aria-label="Picture-in-picture"
-            title="Picture-in-picture"
-          >
-            <PictureInPicture2 className="size-5" />
-          </button>
-
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-            aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-            title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-          >
-            {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
-          </button>
         </div>
       </div>
+      {/* The box plays; everything the viewer does *with* the title —
+          tell a friend about it, keep a file, save it for later — lives under
+          it, in the page's own design. The bar never has to squeeze them in. */}
+      {!fullscreen && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button type="button" onClick={shareMovie} className={CHIP} aria-label="Share this movie">
+            <Share2 className="size-4 shrink-0" />
+            Share
+          </button>
+          <DownloadMenu
+            tone="chip"
+            files={downloadFiles}
+            streamUrl={streamProbeUrl}
+            referer={providerUrl}
+            iframeUrl={iframeServerUrl || embedSource}
+            ids={{
+              tmdbId,
+              imdbId,
+              kind,
+              season,
+              episode: usingAutoembed || animeServer ? aeEpisode : (episode ?? aeEpisode),
+            }}
+            title={title}
+            open={downloadOpen}
+            setOpen={setDownloadOpen}
+            align="left"
+            drop="down"
+          />
+          {onToggleSave && (
+            <button
+              type="button"
+              onClick={onToggleSave}
+              className={CHIP}
+              aria-pressed={saved}
+              title={saved ? "Remove from your list" : "Save this title for later"}
+            >
+              <Bookmark className={`size-4 shrink-0 ${saved ? "fill-primary text-primary" : ""}`} />
+              {saved ? "Saved" : "Save"}
+            </button>
+          )}
+          <ShareMenu title={title} providerUrl={providerUrl} />
+        </div>
+      )}
     </div>
   );
 }
@@ -2258,8 +2550,11 @@ function ServerSwitcher({
 /** File name hint for the `download` attribute (browsers may ignore it
  *  cross-origin — the link still opens the file for saving). */
 function downloadName(title: string, label: string, url: string): string {
+  /* A piped stream's own name ends in the pipe's path, so ask what it proxies. */
   const ext =
-    /\.(m3u8|mp4|mkv|webm|mov|m4v)(\?|#|$)/i.exec(url)?.[1]?.toLowerCase() ?? "mp4";
+    /\.(m3u8|mp4|mkv|webm|mov|m4v)(\?|#|$)/i
+      .exec(pipedTarget(url) || url)
+      ?.[1]?.toLowerCase() ?? "mp4";
   const clean = (s: string) =>
     s
       .replace(/[^\p{L}\p{N}]+/gu, "-")
@@ -2279,6 +2574,7 @@ function DownloadMenu({
   setOpen,
   align = "right",
   drop = "up",
+  tone = "bar",
 }: {
   files: { label: string; url: string }[];
   streamUrl: string;
@@ -2299,12 +2595,23 @@ function DownloadMenu({
   align?: "left" | "right";
   /** See ServerSwitcher — top-strip menus must open downward to escape overflow-hidden. */
   drop?: "up" | "down";
+  /** "bar" floats over the film in white; "chip" wears the page's own colors. */
+  tone?: "bar" | "chip";
 }) {
   const [qualities, setQualities] = useState<{ label: string; url: string }[]>([]);
+  /** What the Worker read in the live stream's own master playlist. Its
+   *  rendition links often have no `.m3u8` in them, so this is the honest way
+   *  to know the rows below are streams rather than files. */
+  const [streamKind, setStreamKind] = useState<"hls" | "direct" | "">("");
+  /** Content verdicts for rows neither the file name nor the probe settled. */
+  const [playlists, setPlaylists] = useState<Record<string, boolean>>({});
   const [providers, setProviders] = useState<TitleDownloadProvider[]>([]);
   const [probeStatus, setProbeStatus] = useState<"idle" | "loading" | "done">("idle");
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [savedNote, setSavedNote] = useState<Record<string, string>>({});
+  /** Why a row failed, kept for the retry button's tooltip — the reason the
+   *  owner needs when a download dies, and nothing the film itself should wear. */
+  const [why, setWhy] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState("");
   const loadedFor = useRef("");
 
@@ -2334,7 +2641,10 @@ function DownloadMenu({
       ),
       streamUrl
         ? fetchEmbedQualities(streamUrl)
-            .then((r) => r.entries ?? [])
+            .then((r) => {
+              setStreamKind(r.kind === "hls" || r.kind === "direct" ? r.kind : "");
+              return r.entries ?? [];
+            })
             .catch(() => [])
         : Promise.resolve([]),
     ]).then(([prov, quals]) => {
@@ -2353,6 +2663,30 @@ function DownloadMenu({
   ]);
   const detected: SniffedStream[] = sniffed.filter((s) => !listed.has(s.url));
 
+  /* Whichever Referer this CDN's host answered our player with beats the page
+     the viewer happens to be standing on: a sweep row from another server is
+     gated by that server's host, not by this one's. */
+  const refFor = (url: string) => refererFor(pipedTarget(url) || url) || referer || "";
+
+  /** Rows the file name cannot settle are settled by their first bytes. */
+  const fromMaster = new Set(streamKind === "hls" ? qualities.map((q) => q.url) : []);
+  const isStream = (url: string) => isHlsLink(url) || playlists[url] === true || fromMaster.has(url);
+
+  /* Nothing may be offered as a plain file until we know it is one — a manifest
+     saved under an .mp4 name is exactly the download that never played. */
+  useEffect(() => {
+    if (!open) return;
+    const candidates = [...listed, ...detected.map((s) => s.url)].filter(
+      (u) => u && !isHlsLink(u) && playlists[u] === undefined && !fromMaster.has(u),
+    );
+    for (const u of candidates) {
+      void hlsByContent(u, refFor(u)).then((hls) =>
+        setPlaylists((p) => (p[u] === hls ? p : { ...p, [u]: hls })),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, probeKey, attempt, providers, qualities, detected.length, streamKind, referer]);
+
   /* The copy button hands out the Worker byte-pipe link: plain, public, no
      browser headers needed, Range-correct — so IDM (or any manager) pulls the
      file at full speed with resume. That is the escape hatch when the
@@ -2363,7 +2697,7 @@ function DownloadMenu({
       title="Copy direct link — paste into IDM or any download manager"
       onClick={() => {
         navigator.clipboard
-          ?.writeText(proxyUrl(url, referer || undefined, downloadName(title, label, url)))
+          ?.writeText(proxyUrl(url, refFor(url) || undefined, downloadName(title, label, url)))
           .then(() => {
             setCopied(url);
             setTimeout(() => setCopied(""), 2500);
@@ -2400,7 +2734,7 @@ function DownloadMenu({
       sub,
       url,
       <a
-        href={proxyUrl(url, referer || undefined, downloadName(title, label, url))}
+        href={proxyUrl(url, refFor(url) || undefined, downloadName(title, label, url))}
         download={downloadName(title, label, url)}
         target="_blank"
         rel="noopener noreferrer"
@@ -2416,12 +2750,12 @@ function DownloadMenu({
 
   /* HLS rows download in-browser (segments → remuxed .mp4) with live progress. */
   const streamRow = (label: string, sub: string, url: string) => {
-    if (!isHlsLink(url)) return row(label, sub, url);
+    if (!isStream(url)) return row(label, sub, url);
     const pct = progress[url];
     const busy = pct !== undefined && pct >= 0 && pct < 1;
     const start = () => {
       setProgress((p) => ({ ...p, [url]: 0 }));
-      downloadHls(url, (f) => setProgress((p) => ({ ...p, [url]: f })), { referer })
+      downloadHls(url, (f) => setProgress((p) => ({ ...p, [url]: f })), { referer: refFor(url) })
         .then(({ blob, skipped }) => {
           saveBlob(blob, downloadName(title, label, url).replace(/\.m3u8$/i, ".mp4"));
           if (skipped) setSavedNote((n) => ({ ...n, [url]: `${skipped} parts skipped` }));
@@ -2436,7 +2770,10 @@ function DownloadMenu({
             4000,
           );
         })
-        .catch(() => setProgress((p) => ({ ...p, [url]: -1 })));
+        .catch((err: unknown) => {
+          setWhy((w) => ({ ...w, [url]: String(err?.toString?.() ?? err).slice(0, 120) }));
+          setProgress((p) => ({ ...p, [url]: -1 }));
+        });
     };
     return line(
       label,
@@ -2464,6 +2801,7 @@ function DownloadMenu({
           <button
             type="button"
             onClick={start}
+            title={why[url] || undefined}
             className="shrink-0 text-[10px] font-semibold text-red-400 hover:text-red-300"
           >
             failed — retry
@@ -2498,12 +2836,22 @@ function DownloadMenu({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15"
+        className={
+          tone === "chip"
+            ? CHIP
+            : "flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15"
+        }
         aria-label="Download"
         title="Download"
       >
-        <Download className="size-5 shrink-0" />
-        <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">Download</span>
+        <Download className={tone === "chip" ? "size-4 shrink-0" : "size-5 shrink-0"} />
+        {tone === "chip" ? (
+          "Download"
+        ) : (
+          <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">
+            Download
+          </span>
+        )}
       </button>
       {open && (
         <div
@@ -2685,5 +3033,339 @@ function MenuOption({
       {label}
       {selected && <span className="text-xs">✓</span>}
     </button>
+  );
+}
+
+/* ------------------- Language control (beside the server pick) ------------------- */
+
+/** How many languages this film can be heard in *on any server on offer*, and
+ *  the pick that changes it. Three sources feed one list: the audio renditions
+ *  the playing stream declares (`EXT-X-MEDIA:TYPE=AUDIO`), the same lines read
+ *  off every other server's playlist when the menu is opened, and the dub files
+ *  an admin attached to the catalog row. A language this server carries switches
+ *  in place — position, mute and volume survive it. A language only another
+ *  server carries hands playback over there and lands on it once that stream
+ *  parses. Nothing here is guesswork: a server that answers no audio lines
+ *  simply contributes no rows. */
+function LanguageMenu({
+  tracks,
+  activeTrack,
+  onSelectTrack,
+  dubs,
+  activeDub,
+  onSelectDub,
+  serverAudio,
+  serverKeys,
+  serverName,
+  currentServer,
+  probe,
+  onHandOff,
+  open,
+  setOpen,
+}: {
+  tracks: PlayerAudioTrack[];
+  activeTrack: number | null;
+  onSelectTrack: (id: number) => void;
+  dubs: PlayerDub[];
+  activeDub: string | null;
+  onSelectDub: (label: string | null) => void;
+  serverAudio: Record<string, ServerAudio[]>;
+  serverKeys: string[];
+  serverName: (key: string) => string;
+  currentServer: string;
+  probe: "idle" | "loading" | "done";
+  onHandOff: (intent: {
+    key: string;
+    label: string;
+    server: string;
+    dubLabel?: string | null;
+  }) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  /* Nothing picked yet = whatever the playlist marks DEFAULT, because that is
+     the rendition actually playing. */
+  const currentTrack =
+    tracks.find((t) => t.id === activeTrack) ??
+    tracks.find((t) => t.isDefault) ??
+    tracks[0];
+  const playingKey =
+    currentServer === "original" && dubs.length > 0
+      ? audioKeyOf({ name: activeDub ?? "Original" })
+      : currentTrack
+        ? audioKeyOf({ name: currentTrack.name, lang: currentTrack.lang })
+        : "";
+
+  /** One server's claim on a language: a rendition of its own stream, one of
+   *  the catalog's dub files, or an audio line its playlist offered. */
+  type Entry = {
+    server: string;
+    kind: "track" | "dub" | "audio";
+    label: string;
+    id?: number;
+  };
+  const rows: { key: string; label: string; entries: Entry[] }[] = [];
+  const rowAt = new Map<string, number>();
+  const add = (key: string, label: string, entry: Entry) => {
+    if (!key || key === "unknown" || !label.trim()) return;
+    const at = rowAt.get(key);
+    if (at === undefined) {
+      rowAt.set(key, rows.length);
+      rows.push({ key, label, entries: [entry] });
+      return;
+    }
+    const row = rows[at];
+    if (!row.entries.some((e) => e.server === entry.server)) row.entries.push(entry);
+  };
+
+  tracks.forEach((t) =>
+    add(audioKeyOf({ name: t.name, lang: t.lang }), t.name, {
+      server: currentServer,
+      kind: "track",
+      label: t.name,
+      id: t.id,
+    }),
+  );
+  if (dubs.length > 0)
+    add(audioKeyOf({ name: "Original" }), "Original", {
+      server: "original",
+      kind: "dub",
+      label: "Original",
+    });
+  dubs.forEach((d) =>
+    add(audioKeyOf({ name: d.label }), d.label, {
+      server: "original",
+      kind: "dub",
+      label: d.label,
+    }),
+  );
+  serverKeys.forEach((key) =>
+    (serverAudio[key] ?? []).forEach((a) =>
+      add(audioKeyOf({ name: a.name, lang: a.lang }), a.name, {
+        server: key,
+        kind: "audio",
+        label: a.name,
+      }),
+    ),
+  );
+
+  const options = rows.map((row) => {
+    /* Prefer acting on the server already playing: a rendition of its stream
+       (in place), a dub file it holds, then a language its playlist promised.
+       Only a server we are not on makes this a hand-off. */
+    const local =
+      row.entries.find((e) => e.kind === "track" && e.server === currentServer) ??
+      row.entries.find((e) => e.kind === "dub" && e.server === currentServer) ??
+      row.entries.find((e) => e.server === currentServer);
+    const target = local ?? row.entries[0];
+    const on = row.key === playingKey;
+    const elseWhere = row.entries
+      .filter((e) => e.server !== currentServer)
+      .map((e) => serverName(e.server).replace(/\D+/g, ""))
+      .filter(Boolean);
+    const hint = on
+      ? "✓"
+      : elseWhere.length === 0
+        ? "Here"
+        : elseWhere.length === 1
+          ? `Server ${elseWhere[0]}`
+          : `Servers ${elseWhere.join(" · ")}`;
+    const choose = () => {
+      if (on) return;
+      if (target.kind === "track" && target.id !== undefined) {
+        onSelectTrack(target.id);
+        return;
+      }
+      if (target.kind === "dub" && currentServer === "original") {
+        onSelectDub(target.label === "Original" ? null : target.label);
+        return;
+      }
+      onHandOff({
+        key: row.key,
+        label: row.label,
+        server: target.server,
+        dubLabel:
+          target.kind === "dub"
+            ? target.label === "Original"
+              ? null
+              : target.label
+            : undefined,
+      });
+    };
+    return { key: row.key, label: row.label, on, hint, choose };
+  });
+
+  const count = options.length;
+  const plural = count === 1 ? "language" : "languages";
+  const playing = options.find((o) => o.on)?.label ?? options[0]?.label ?? "";
+
+  return (
+    <div className="relative shrink-0" data-player-menu>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`flex items-center gap-1.5 rounded-lg px-2 py-2 transition-colors hover:bg-white/15 ${
+          open ? "text-primary" : "text-white"
+        }`}
+        aria-label={
+          playing
+            ? `Audio language: ${playing}. This title is in ${count} ${plural} across its servers`
+            : "Audio language"
+        }
+        aria-expanded={open}
+        title={
+          playing
+            ? `Playing in ${playing} — tap to hear it in another of its ${count} ${plural}`
+            : "Audio language"
+        }
+      >
+        <Languages className="size-5 shrink-0" />
+        <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">
+          {playing ? `${playing} · ${count}` : "Language"}
+        </span>
+      </button>
+      {open && (
+        /* Opens to the RIGHT of its own left edge: on a phone this button is the
+           first of the cluster, so a right-anchored menu walked off the screen. */
+        <div className="absolute bottom-full left-0 z-30 mb-2 max-h-[46vh] min-w-[210px] max-w-[calc(100vw-24px)] overflow-y-auto rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur">
+          <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
+            {count > 0 ? `Audio language · ${count} ${plural}` : "Audio language"}
+          </p>
+          {options.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              onClick={() => {
+                o.choose();
+                if (o.on) setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10 ${
+                o.on ? "bg-primary/25 font-semibold text-primary" : ""
+              }`}
+            >
+              {o.label}
+              <span
+                className={`shrink-0 text-[10px] ${o.on ? "text-primary" : "text-white/45"}`}
+              >
+                {o.hint}
+              </span>
+            </button>
+          ))}
+          {probe !== "done" && (
+            <p className="px-3 py-2 text-[11px] text-white/50">
+              Checking every server…
+            </p>
+          )}
+          {probe === "done" && count === 0 && (
+            <p className="px-3 py-2 text-[11px] text-white/50">
+              None of these servers says which language it carries.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------- Share menu (under the box) ------------------------- */
+
+/** The apps a viewer actually sends a film through, plus the plain link. This
+ *  is a decision about the title, not about playback, so it lives under the box
+ *  where the bar's auto-hide can never take it away mid-share. */
+function ShareMenu({ title, providerUrl }: { title: string; providerUrl?: string }) {
+  const [open, setOpen] = useState(false);
+  const url = typeof window === "undefined" ? "" : window.location.href;
+  const text = `Watch “${title}” on FilmFlix`;
+  const links = [
+    {
+      label: "WhatsApp",
+      href: `https://wa.me/?text=${encodeURIComponent(`${text} ${url}`)}`,
+    },
+    {
+      label: "Telegram",
+      href: `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(title)}`,
+    },
+    {
+      label: "Facebook",
+      href: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`,
+    },
+  ];
+  const item =
+    "flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-popover-foreground transition-colors hover:bg-muted";
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`${CHIP} px-3`}
+        aria-label="More share options"
+        aria-expanded={open}
+        title="More"
+      >
+        <MoreHorizontal className="size-4" />
+      </button>
+      {open && (
+        <>
+          {/* A press anywhere else closes it — the row sits outside the stage
+              box, so the bar's own click-catcher never sees these clicks. */}
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-hidden
+            className="fixed inset-0 z-20 cursor-default"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute bottom-full left-0 z-30 mb-2 min-w-[200px] overflow-hidden rounded-xl border border-border/60 bg-popover py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.5)]">
+            <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Share
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(url);
+                  toast.success("Link copied — paste it anywhere to share");
+                } catch {
+                  toast.error("Could not copy the link");
+                }
+                setOpen(false);
+              }}
+              className={item}
+            >
+              <Link2 className="size-3.5" />
+              Copy link
+            </button>
+            {links.map((l) => (
+              <a
+                key={l.label}
+                href={l.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setOpen(false)}
+                className={item}
+              >
+                {l.label}
+              </a>
+            ))}
+            {providerUrl && (
+              <>
+                <div className="my-1 h-px bg-border/60" />
+                <a
+                  href={providerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setOpen(false)}
+                  className={item}
+                >
+                  <ExternalLink className="size-3.5" />
+                  Open provider page
+                </a>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   );
 }

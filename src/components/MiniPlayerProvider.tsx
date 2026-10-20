@@ -1,11 +1,13 @@
 import {
   Maximize2,
+  Minus,
   Pause,
   Play,
   Volume2,
   VolumeX,
   X,
   AudioLines,
+  Captions,
   RotateCcw,
   RotateCw,
   TriangleAlert,
@@ -24,6 +26,7 @@ import { createPortal } from "react-dom";
 import {
   MiniPlayerContext,
   type MiniPlayerMovie,
+  type PlayerAudioTrack,
   type PlayerControls,
   type PlayerRotation,
 } from "./mini-player-context";
@@ -81,6 +84,24 @@ function swapSrcKeepingPosition(
  *  setting el.src to a .m3u8 would only work on Safari, so non-Safari
  *  browsers get this wired in setHlsSource. One instance at a time. */
 let activeHls: Hls | null = null;
+/** Where the mounted provider listens for the audio renditions a stream
+ *  carries. The engine is module-level (one at a time, survives surface swaps)
+ *  while the language list is React state, so the two meet here. */
+let audioTracksSink:
+  | ((tracks: PlayerAudioTrack[], currentId: number | null) => void)
+  | null = null;
+
+/** The languages one playlist offers, in the shape the UI can list. */
+function audioRenditions(hls: Hls): PlayerAudioTrack[] {
+  return (hls.audioTracks ?? [])
+    .filter((t) => String(t.type).toUpperCase() === "AUDIO")
+    .map((t) => ({
+      id: t.id,
+      name: (t.name ?? "").trim() || t.lang || `Track ${t.id + 1}`,
+      lang: t.lang,
+      isDefault: Boolean(t.default),
+    }));
+}
 /** Token auto-refresh + loader stamping for the active IP-bound stream. */
 let activeTokenCtx: TokenContext | null = null;
 let disposeTokenRefresh: (() => void) | null = null;
@@ -198,10 +219,18 @@ function buildHls(el: HTMLVideoElement, src: string) {
     ...(activeTokenCtx ? { loader: makeTokenLoader(activeTokenCtx) } : {}),
   });
   activeHls = hls;
+  /* Which languages this stream carries, and which one is on. hls.js reads both
+     off the master playlist's TYPE=AUDIO renditions, so a provider title can be
+     in three languages without our catalog knowing anything about it. */
+  const reportAudio = () =>
+    audioTracksSink?.(audioRenditions(hls), hls.audioTrack >= 0 ? hls.audioTrack : null);
+  hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, reportAudio);
+  hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, reportAudio);
   hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
     /* Feed the media sniffer: hls.js knows every resolution the CDN offers,
        which is exactly the list IDM shows next to the browser button. */
     reportHlsLevels(src, data.levels ?? []);
+    reportAudio();
     if (resumeAt > 0) el.currentTime = resumeAt;
     el.playbackRate = rate;
     el.play().catch(() => undefined);
@@ -282,6 +311,31 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   /** Currently playing audio version: null = original, else the dub label. */
   const [activeDub, setActiveDub] = useState<string | null>(null);
 
+  /** Languages the CURRENT stream carries, and which one is on right now. */
+  const [audioTracks, setAudioTracks] = useState<PlayerAudioTrack[]>([]);
+  const [activeAudioTrack, setActiveAudioTrack] = useState<number | null>(null);
+  useEffect(() => {
+    audioTracksSink = (tracks, currentId) => {
+      setAudioTracks(tracks);
+      setActiveAudioTrack(currentId);
+    };
+    return () => {
+      audioTracksSink = null;
+    };
+  }, []);
+  /** Hear the film in another of its own languages, in place. */
+  const setAudioTrack = useCallback((id: number) => {
+    if (!activeHls) return;
+    activeHls.audioTrack = id;
+    setActiveAudioTrack(id);
+  }, []);
+  /* A new stream must not wear the last one's language list while its own
+     manifest is still on its way. */
+  useEffect(() => {
+    setAudioTracks([]);
+    setActiveAudioTrack(null);
+  }, [movie?.videoUrl]);
+
   /* --------------------- Viewer settings (gear menu) -------------------- */
   const [nightMode, setNightMode] = useState(false);
   const [loop, setLoop] = useState(false);
@@ -322,9 +376,23 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     const el = videoRef.current;
     if (!el) return;
     setHasStarted(true);
-    el.muted = false;
-    el.play().catch(() => {
-      // Autoplay policy fallback: start muted, let the user unmute.
+    /* Never unmute here: this runs for autoplay *and* for the viewer's own Play
+       press, and a player showing the muted icon must stay silent when it
+       starts. Only an unmuted autoplay is blocked, which the fallback below
+       handles by muting and telling the UI about it. */
+    el.play().catch((err: unknown) => {
+      /* Only the autoplay policy is allowed to mute us. Everything else this
+         promise rejects with is routine here — hls.js wires the next stream a
+         beat after this call and the browser answers "play() interrupted by a
+         load" (AbortError) — and muting for it left every film that opened
+         from a click starting silent with an "Unmute" icon on screen, which
+         reads as "this player has no sound" rather than as anything we could
+         blame the browser for. */
+      if ((err as DOMException)?.name !== "NotAllowedError") {
+        el.play().catch(() => undefined);
+        return;
+      }
+      // A real block: start muted so the film still plays, and say so in the icon.
       el.muted = true;
       setMuted(true);
       el.play().catch(() => undefined);
@@ -518,8 +586,15 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   const toggleMute = useCallback(() => {
     const el = videoRef.current;
     if (!el) return;
-    el.muted = !el.muted;
-    setMuted(el.muted);
+    const next = !el.muted;
+    /* A slider left at 0 mutes the same button; un-muting it has to return
+       sound, otherwise the icon says audible and the ear hears nothing. */
+    if (!next && el.volume === 0) {
+      el.volume = 1;
+      setVolume(1);
+    }
+    el.muted = next;
+    setMuted(next);
   }, []);
 
   const setVolumeTo = useCallback((v: number) => {
@@ -655,6 +730,9 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       handleSurfaceMouseLeave,
       activeDub,
       setDub,
+      audioTracks,
+      activeAudioTrack,
+      setAudioTrack,
       nightMode,
       setNightMode,
       loop,
@@ -692,6 +770,9 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       handleSurfaceMouseLeave,
       activeDub,
       setDub,
+      audioTracks,
+      activeAudioTrack,
+      setAudioTrack,
       nightMode,
       loop,
       rotation,
@@ -713,6 +794,20 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   const inlineOnPage =
     movie != null && mode === "inline" && stageEl != null && onPlayingPage;
   const miniActive = movie != null && mode === "mini";
+  /** The card shrinks to just the picture; the film never stops for it. */
+  const [miniSmall, setMiniSmall] = useState(false);
+  /** A new viewing always opens full size — never inherit the last one's shape. */
+  useEffect(() => {
+    setMiniSmall(false);
+  }, [movie?.resumeKey, movie?.movieId]);
+  const miniPct = duration ? Math.min(100, (currentTime / duration) * 100) : 0;
+  /** The card's own caption picker — the stage's menus are not reachable here. */
+  const [miniSubsOpen, setMiniSubsOpen] = useState(false);
+  const miniSubs = movie?.subtitles ?? [];
+  const scrubMini = (host: HTMLElement, x: number) => {
+    const r = host.getBoundingClientRect();
+    if (r.width) seekToRatio((x - r.left) / r.width);
+  };
 
   // Single portal target: stage (inline on page) → mini card → parking.
   const portalTarget = inlineOnPage ? stageEl : miniActive ? miniSlot : parkingEl;
@@ -752,7 +847,10 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
             nightMode={nightMode}
             rotation={rotation}
             loop={loop}
+            muted={muted}
+            volume={volume}
             visible={Boolean(inlineOnPage || miniActive)}
+            chromeless={miniActive}
             posterUrl={movie.backdropUrl ?? movie.posterUrl ?? null}
             title={movie.title}
             onPlay={() => {
@@ -799,96 +897,222 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
           portalTarget,
         )}
 
-      {/* Floating mini card */}
+      {/* Floating mini card, laid out like the reference: a header naming what
+          is playing plus the three ways out, a round play/pause with ±10s each
+          side, and the whole film's progress along the bottom. Every control is
+          always on show — the viewer is reading another page, so anything
+          hover-gated here is a control they never find. */}
       {miniActive && movie && (
         <div
           data-slot="mini-player"
-          className="fixed bottom-3 right-3 z-[60] w-[45vw] max-w-[340px] min-w-[180px] overflow-hidden rounded-xl border border-white/15 bg-black/95 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.95)] backdrop-blur max-sm:bottom-[max(0.75rem,env(safe-area-inset-bottom))] max-sm:right-[max(0.75rem,env(safe-area-inset-right))] sm:bottom-4 sm:right-4 sm:w-[340px]"
+          className={`fixed bottom-3 right-3 z-[60] overflow-hidden rounded-xl border border-white/15 bg-black shadow-[0_24px_64px_-16px_rgba(0,0,0,0.95)] backdrop-blur max-sm:bottom-[max(0.75rem,env(safe-area-inset-bottom))] max-sm:right-[max(0.75rem,env(safe-area-inset-right))] ${
+            miniSmall
+              ? "w-[30vw] max-w-[132px] min-w-[96px]"
+              : "w-[min(92vw,460px)]"
+          }`}
         >
           <div className="group/mp relative aspect-video bg-black">
             {/* Portal target for the persistent video */}
             <div ref={setMiniSlot} className="absolute inset-0" />
 
-            {/* Tap-to-toggle controls on the mini card (instead of pausing). */}
+            {/* Tapping the picture plays or pauses (touch), or brings a
+                minimised card back to full size. */}
             <div
               className="absolute inset-0 z-10"
-              onPointerUp={(e) => {
-                if (e.pointerType === "mouse") return;
-                toggleControlsOverlay();
+              onPointerUp={() => {
+                if (miniSmall) setMiniSmall(false);
+                else togglePlay();
               }}
             />
 
-            {/* Title + close */}
-            <div className={`absolute inset-x-0 top-0 z-20 flex items-start justify-between bg-gradient-to-b from-black/80 to-transparent p-2 transition-opacity ${
-              controlsOverlayVisible
-                ? "pointer-events-auto opacity-100"
-                : "pointer-events-none opacity-0 group-hover/mp:pointer-events-auto group-hover/mp:opacity-100"
-            }`}>
-              <p className="line-clamp-1 pr-2 text-xs font-medium text-white/90">
-                {movie.title}
-              </p>
+            {miniSmall ? (
               <button
                 type="button"
-                onClick={close}
-                aria-label="Close miniplayer"
-                className="pointer-events-auto rounded-md bg-black/40 p-1 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-
-            {/* Controls */}
-            <div className={`absolute inset-x-0 bottom-0 z-20 flex items-center gap-0.5 bg-gradient-to-t from-black/85 to-transparent p-1.5 transition-opacity ${
-              controlsOverlayVisible
-                ? "pointer-events-auto opacity-100"
-                : "pointer-events-none opacity-0 group-hover/mp:pointer-events-auto group-hover/mp:opacity-100"
-            }`}>
-              <button
-                type="button"
-                onClick={togglePlay}
-                aria-label={playing ? "Pause" : "Play"}
-                className="pointer-events-auto rounded-md p-1.5 text-white transition-colors hover:bg-white/15"
-              >
-                {playing ? (
-                  <Pause className="size-4 fill-current" />
-                ) : (
-                  <Play className="size-4 fill-current" />
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={toggleMute}
-                aria-label={muted ? "Unmute" : "Mute"}
-                className="pointer-events-auto rounded-md p-1.5 text-white transition-colors hover:bg-white/15"
-              >
-                {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
-              </button>
-              <span className="ml-auto pr-1 text-[10px] font-medium tabular-nums text-white/70">
-                {formatTime(currentTime)}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  navigate(playingPath);
-                  setModeState("inline");
-                }}
-                aria-label="Expand player"
-                title="Back to movie page"
-                className="pointer-events-auto rounded-md p-1.5 text-white transition-colors hover:bg-white/15"
-              >
-                <Maximize2 className="size-4" />
-              </button>
-            </div>
-
-            {/* Progress line */}
-            <div className="absolute inset-x-0 bottom-0 z-30 h-[3px] bg-white/15">
-              <div
-                className="h-full bg-primary"
-                style={{
-                  width: `${duration ? Math.min(100, (currentTime / duration) * 100) : 0}%`,
-                }}
+                onClick={() => setMiniSmall(false)}
+                aria-label="Expand mini player"
+                title="Back to the full mini player"
+                className="absolute inset-0 z-20 cursor-pointer"
               />
-            </div>
+            ) : (
+              <>
+                {/* Header: what is playing, and the three ways out. */}
+                <div className="absolute inset-x-0 top-0 z-30 flex items-center gap-1 bg-gradient-to-b from-black/85 via-black/40 to-transparent pb-6 pl-2 pr-1.5 pt-1.5">
+                  {/* The site's own mark, already in cache from the tab — the
+                      cheaper neighbour to a 30 kB animated Logo chunk. */}
+                  <img
+                    src="/favicon.svg"
+                    alt=""
+                    className="size-4 shrink-0 rounded-[4px]"
+                  />
+                  <p className="min-w-0 flex-1 truncate pl-0.5 text-[11px] font-semibold text-white/90">
+                    {movie.title}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setMiniSmall(true)}
+                    aria-label="Minimise mini player"
+                    title="Out of the way — the film keeps playing"
+                    className="pointer-events-auto rounded-md bg-black/40 p-1 text-white transition-colors hover:bg-white/20"
+                  >
+                    <Minus className="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigate(playingPath);
+                      setModeState("inline");
+                    }}
+                    aria-label="Expand player"
+                    title="Back to movie page"
+                    className="pointer-events-auto rounded-md bg-black/40 p-1 text-white transition-colors hover:bg-white/20"
+                  >
+                    <Maximize2 className="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={close}
+                    aria-label="Close miniplayer"
+                    className="pointer-events-auto rounded-md bg-black/40 p-1 text-white transition-colors hover:bg-white/20"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+
+                {/* The centre trio: a round play/pause with ±10s either side.
+                    The strip itself takes no pointer events — pointer-events-none
+                    inherits, so each button has to claim its own back — which
+                    leaves the picture either side answering tap-to-pause. */}
+                <div className="pointer-events-none absolute inset-x-0 top-1/2 z-30 flex -translate-y-1/2 items-center justify-center gap-3 sm:gap-5">
+                  <button
+                    type="button"
+                    onClick={() => seekBy(-10)}
+                    aria-label="Back 10 seconds"
+                    className="pointer-events-auto grid size-8 place-items-center rounded-full bg-black/45 text-white transition-colors hover:bg-white/20 active:scale-95 sm:size-9"
+                  >
+                    <span className="relative grid place-items-center">
+                      <RotateCcw className="size-5" />
+                      <span className="absolute text-[7px] font-bold leading-none">10</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={togglePlay}
+                    aria-label={playing ? "Pause" : "Play"}
+                    className="pointer-events-auto flex size-11 items-center justify-center rounded-full bg-primary text-white shadow-[0_6px_18px_-4px_rgba(0,0,0,0.85)] transition-transform hover:brightness-110 active:scale-95 sm:size-12"
+                  >
+                    {playing ? (
+                      <Pause className="size-5 fill-current sm:size-6" />
+                    ) : (
+                      <Play className="ml-0.5 size-5 fill-current sm:size-6" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => seekBy(10)}
+                    aria-label="Forward 10 seconds"
+                    className="pointer-events-auto grid size-8 place-items-center rounded-full bg-black/45 text-white transition-colors hover:bg-white/20 active:scale-95 sm:size-9"
+                  >
+                    <span className="relative grid place-items-center">
+                      <RotateCw className="size-5" />
+                      <span className="absolute text-[7px] font-bold leading-none">10</span>
+                    </span>
+                  </button>
+                </div>
+
+                {/* Footer: the whole film on one bar, then where we are and the
+                    two switches that belong to this card alone. */}
+                <div className="absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/85 via-black/45 to-transparent px-2 pb-1.5 pt-5">
+                  {/* Scrubber: a wide invisible hit strip over a hairline track,
+                      so a thumb can actually land on it on a phone. */}
+                  <div
+                    className="relative h-4 touch-none"
+                    onPointerDown={(e) => {
+                      const host = e.currentTarget;
+                      host.setPointerCapture(e.pointerId);
+                      scrubMini(host, e.clientX);
+                    }}
+                    onPointerMove={(e) => {
+                      const host = e.currentTarget;
+                      if (host.hasPointerCapture(e.pointerId)) scrubMini(host, e.clientX);
+                    }}
+                    onPointerUp={(e) => {
+                      try {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
+                      } catch {
+                        /* already released */
+                      }
+                    }}
+                  >
+                    <div className="absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-white/25">
+                      <div
+                        className="h-full rounded-full bg-primary"
+                        style={{ width: `${miniPct}%` }}
+                      />
+                      <span
+                        className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary ring-2 ring-black/55"
+                        style={{ left: `${miniPct}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <p className="text-[11px] font-semibold tabular-nums text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">
+                      {formatTime(currentTime)}
+                      <span className="text-white/60"> / {formatTime(duration)}</span>
+                    </p>
+                    <div className="ml-auto flex items-center gap-0.5">
+                      {miniSubs.length > 0 && (
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => setMiniSubsOpen((v) => !v)}
+                            aria-label="Subtitles"
+                            aria-expanded={miniSubsOpen}
+                            className={`rounded-md p-1 transition-colors hover:bg-white/15 ${
+                              activeSubtitle ? "text-primary" : "text-white"
+                            }`}
+                          >
+                            <Captions className="size-4" />
+                          </button>
+                          {miniSubsOpen && (
+                            <div className="absolute bottom-full right-0 z-40 mb-1 w-36 rounded-lg border border-white/15 bg-black/95 py-1 shadow-xl">
+                              {[null, ...miniSubs.map((s) => s.label)].map((label) => (
+                                <button
+                                  key={label ?? "subs-off"}
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveSubtitle(label);
+                                    setMiniSubsOpen(false);
+                                  }}
+                                  className={`block w-full px-2.5 py-1 text-left text-[11px] transition-colors hover:bg-white/10 ${
+                                    activeSubtitle === label
+                                      ? "font-semibold text-primary"
+                                      : "text-white/85"
+                                  }`}
+                                >
+                                  {label ?? "Off"}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={toggleMute}
+                        aria-label={muted ? "Unmute" : "Mute"}
+                        className="pointer-events-auto rounded-md p-1 text-white transition-colors hover:bg-white/15"
+                      >
+                        {muted ? (
+                          <VolumeX className="size-4" />
+                        ) : (
+                          <Volume2 className="size-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -917,7 +1141,10 @@ function VideoSurface({
   nightMode,
   rotation,
   loop,
+  muted,
+  volume,
   visible,
+  chromeless,
   posterUrl,
   title,
   onPlay,
@@ -948,7 +1175,14 @@ function VideoSurface({
   nightMode: boolean;
   rotation: PlayerRotation;
   loop: boolean;
+  /** The viewer's sound choice, re-applied to this element on every mount. */
+  muted: boolean;
+  volume: number;
   visible: boolean;
+  /** True when this surface lives inside the floating mini card, which brings
+   *  its own centre button, scrubber and taps — the stage chrome would only
+   *  double up and swallow the card's gestures. */
+  chromeless?: boolean;
   posterUrl?: string | null;
   title?: string;
   /** Single tap on a zone: "left" | "center" | "right". */
@@ -1005,6 +1239,18 @@ function VideoSurface({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  /* Mute and volume live ON the media element, but the choice lives in provider
+     state that outlives it: closing a title unmounts this surface, so the next
+     element would otherwise come back with the browser's defaults — audible —
+     while the button still showed the muted icon. Re-applied on mount and on
+     every change, so the icon is always the truth. */
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    el.muted = muted;
+    el.volume = volume;
+  }, [muted, volume, videoRef]);
 
   /* Audio-only sources (mp3 links etc.) render no picture at all — the
      screen would be a silent-looking black box. When the file has no video
@@ -1477,15 +1723,15 @@ function VideoSurface({
             invisible button never swallows taps meant for the tap zones. */}
         <div
           className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-200 ${
-            controlsOverlayVisible && hasStarted ? "opacity-100" : "opacity-0"
+            !chromeless && controlsOverlayVisible && hasStarted ? "opacity-100" : "opacity-0"
           }`}
         >
           <button
             type="button"
-            tabIndex={controlsOverlayVisible && hasStarted ? 0 : -1}
+            tabIndex={!chromeless && controlsOverlayVisible && hasStarted ? 0 : -1}
             onClick={togglePlay}
             className={`flex size-16 items-center justify-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur transition-transform hover:scale-105 sm:size-[72px] ${
-              controlsOverlayVisible && hasStarted
+              !chromeless && controlsOverlayVisible && hasStarted
                 ? "pointer-events-auto"
                 : "pointer-events-none"
             }`}
@@ -1560,7 +1806,7 @@ function VideoSurface({
             third: -10s, right third: +10s, center: toggle controls. The
             double-tap seek uses the pending single-tap delay for a smooth
             rapid-tap experience (YouTube-style). */}
-        <div className="absolute inset-0 z-10 flex" data-slot="tap-zones">
+        <div className={`absolute inset-0 z-10 flex ${chromeless ? "hidden" : ""}`} data-slot="tap-zones">
           <div
             className="h-full flex-1"
             onPointerUp={(e) => handleTapZone(e, "left")}

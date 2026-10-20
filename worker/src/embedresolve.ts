@@ -370,16 +370,18 @@ async function probeStream(
   }
 }
 
-/** Order probed candidates the way the player wants them: H.264 first (the
+/** Order probed candidates the way the player wants them: H.264 first (every
  *  browser can decode it), CORS-open next (hls.js can fetch it without the
- *  proxy), and never a HEVC-only stream — that is the black rectangle viewers
- *  blame the whole site for. */
+ *  proxy). A HEVC stream is dropped unless the caller said the viewer's browser
+ *  passed the decode probe — vidlink keeps some titles only as HEVC, and for a
+ *  machine that can decode it our player beats the provider's page. */
 async function rankPlayable(
   items: { c: Candidate; p: Promise<StreamProbe> }[],
+  opts: { allowHevc?: boolean } = {},
 ): Promise<Candidate[]> {
   const checked = await Promise.all(items.map(async (x) => ({ c: x.c, p: await x.p })));
   return checked
-    .filter((x) => x.p.ok && x.p.codec !== "hevc")
+    .filter((x) => x.p.ok && (opts.allowHevc || x.p.codec !== "hevc"))
     .sort((a, b) => {
       const rank = (x: { p: StreamProbe }) =>
         (x.p.codec === "h264" ? 0 : 1) + (x.p.cors ? 0 : 2);
@@ -796,8 +798,15 @@ embedResolveRoutes.get("/stream", async (c) => {
        the provider's player instead of painting a black rectangle. */
     const vidlink = vidlinkTitleOf(url);
     if (vidlink) {
-      const { sources, reason } = await vidlinkSources(vidlink, (u, ref, headers) =>
-        fetchPage(u, ref, "", headers),
+      /* The viewer's own browser is the only witness for HEVC: the page says
+         `?hevc=1` when its media element claims hvc1/hev1 decode, and only then
+         does a title vidlink holds as HEVC come back as a stream instead of
+         handing the box to the provider's player. */
+      const allowHevc = c.req.query("hevc") === "1";
+      const { sources, reason } = await vidlinkSources(
+        vidlink,
+        (u, ref, headers) => fetchPage(u, ref, "", headers),
+        { allowHevc },
       );
       if (!sources.length)
         return c.json({
@@ -813,8 +822,26 @@ embedResolveRoutes.get("/stream", async (c) => {
             via: "vidlink handshake",
             quality: s.quality,
           },
-          p: probeStream(s.url, s.referer, s.cookie),
+          /* A file it signed and named is its own proof: probing that CDN from
+             here only adds a 429 that writes the stream off, while the viewer
+             reads it through our pipe — and the page preflights the pipe itself
+             before handing it to the player. */
+          p:
+            s.kind === "file"
+              ? Promise.resolve<StreamProbe>({
+                  ok: true,
+                  kind: "file",
+                  codec:
+                    s.codec === "hevc" || s.codec === "h265"
+                      ? "hevc"
+                      : s.codec === "h264" || s.codec === "avc"
+                        ? "h264"
+                        : "unknown",
+                  cors: false,
+                })
+              : probeStream(s.url, s.referer, s.cookie),
         })),
+        { allowHevc },
       );
       return c.json({
         candidates: candidates.map((x) => ({ ...x, cors: true })),
@@ -1178,9 +1205,28 @@ embedResolveRoutes.get("/pageinfo", async (c) => {
   if (!safe) return c.json({ live: false, carried: false, title: "" }, 400);
   try {
     const res = await fetchPage(safe.href, safe.origin + "/");
+    /* A 4xx here is the provider refusing *our* connection, not saying its page
+       is gone: vixsrc.to answers Cloudflare Worker egress 403 while the same URL
+       loads for the viewer's own browser. Calling that dead writes off a server
+       that plays, so it comes back live-but-blocked and the caller keeps the
+       chip with its own honest reason. A 404 is the one refusal that really
+       means "no page". */
+    if (res.status >= 400 && res.status < 500 && res.status !== 404)
+      return c.json({
+        live: true,
+        carried: false,
+        blocked: true,
+        title: "",
+        reason: `${safe.hostname} refused our resolver (${res.status})`,
+      });
     if (!res.ok || !res.body) {
       void res.body?.cancel().catch(() => undefined);
-      return c.json({ live: false, carried: false, title: "" });
+      return c.json({
+        live: false,
+        carried: false,
+        title: "",
+        reason: res.ok ? "" : `${safe.hostname} answered ${res.status}`,
+      });
     }
     /* The marker we look for is in the document head/first payload — reading a
        slice keeps a 200KB shell from being pulled through the Worker. */
@@ -1244,12 +1290,14 @@ embedResolveRoutes.get("/proxy", async (c) => {
      carries the same one — so the segments stream through without the browser
      ever seeing a header it cannot send. */
   const cookie = c.req.query("ck") ?? "";
-  /* A manifest is never seeked, and forwarding the player's Range probe would
-     make the upstream answer 4xx — which this route would report as a dead
-     stream — so range requests are left to media. */
-  const range = rewrite ? null : c.req.header("range");
-  try {
-    const res = await fetch(safe.href, {
+  /* Every byte request is forwarded: a progressive file (vidlink's HEVC mp4s)
+     is seeked by Range, and dropping the header would leave our player with a
+     movie it can only watch from the top. A manifest never gets seeked, but a
+     CDN that dislikes a Range on one answers 4xx — so the ask is retried
+     without the header rather than reported as a dead stream. */
+  const range = c.req.header("range");
+  const ask = (withRange: boolean) =>
+    fetch(safe.href, {
       redirect: "follow",
       headers: {
         "User-Agent": BROWSER_UA,
@@ -1257,9 +1305,19 @@ embedResolveRoutes.get("/proxy", async (c) => {
         Origin: safe.origin,
         Accept: "*/*",
         ...(cookie ? { Cookie: cookie } : {}),
-        ...(range ? { Range: range } : {}),
+        ...(withRange && range ? { Range: range } : {}),
       },
     });
+  try {
+    let res = await ask(Boolean(range));
+    /* A manifest never gets seeked, but a player still probes one with a Range
+       now and then, and some CDNs answer that with a range-specific refusal.
+       Only those are retried without the header: a 403 or 429 is the CDN's real
+       answer, and asking twice only digs the rate limit deeper. */
+    if (range && (res.status === 400 || res.status === 406 || res.status === 416)) {
+      void res.body?.cancel().catch(() => undefined);
+      res = await ask(false);
+    }
     const ctype = (res.headers.get("content-type") ?? "").toLowerCase();
     if (
       rewrite &&

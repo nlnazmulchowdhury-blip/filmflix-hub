@@ -31,7 +31,45 @@ const HLS_RE = /\.m3u8(\?|#|$)/i;
 const FILE_RE = /\.(mp4|mkv|webm|mov|m4v|avi)(\?|#|$)/i;
 /** Media segments — never offered on their own, they are pieces of a playlist. */
 const SEGMENT_RE = /\.(ts|m4s|m2ts|mp2t|sc2ts|init)(\?|#|$)/i;
+/** fMP4 init sections wear an .mp4 name and are worthless as a "movie". */
+const INIT_RE = /\/init[-_.]/i;
 const NOISE_RE = /\.(vtt|srt|ttml|js|css|png|jpe?g|webp|gif|svg|ico|woff2?|ttf|map)(\?|#|$)/i;
+
+/* A CDN's referer gate is per host, and a download menu lists sources the
+ * viewer may not be playing right now — so the Referer that made playback work
+ * is remembered by host and replayed for that host's files, on this viewing
+ * and the next. Without it a VidNest row asks zenoak.top with vidnest.fun and
+ * the CDN answers 403 while the same film streams fine two centimetres away. */
+const REF_STORE = "ff-cdn-referers";
+const referrers = new Map<string, string>(readStore());
+
+function readStore(): [string, string][] {
+  try {
+    const raw = localStorage.getItem(REF_STORE);
+    return raw ? (JSON.parse(raw) as [string, string][]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberReferer(host: string, referer: string): void {
+  if (!host || !referer || referrers.get(host) === referer) return;
+  referrers.set(host, referer);
+  try {
+    localStorage.setItem(REF_STORE, JSON.stringify([...referrers].slice(-80)));
+  } catch {
+    /* private mode: the in-memory map still serves this viewing */
+  }
+}
+
+/** The Referer this URL's host last accepted, or "" if we have never played it. */
+export function refererFor(url: string): string {
+  try {
+    return referrers.get(new URL(url, location.href).hostname) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 let streams: SniffedStream[] = [];
 let snapshot: SniffedStream[] = [];
@@ -78,13 +116,21 @@ function normalize(raw: string): string | null {
   const inner = u.searchParams.get("url");
   if (inner && u.pathname.endsWith("/embed/proxy")) {
     const ref = u.searchParams.get("ref");
-    if (ref) defaultReferer = ref;
+    if (ref) {
+      defaultReferer = ref;
+      try {
+        rememberReferer(new URL(inner).hostname, ref);
+      } catch {
+        /* not a real URL — nothing to remember */
+      }
+    }
     return normalize(inner);
   }
   /* Resolver/JSON endpoints are not media; the API host serves both. */
   if (u.pathname.includes("/embed/") && !HLS_RE.test(u.pathname) && !FILE_RE.test(u.pathname))
     return null;
-  if (NOISE_RE.test(u.pathname) || SEGMENT_RE.test(u.pathname)) return null;
+  if (NOISE_RE.test(u.pathname) || SEGMENT_RE.test(u.pathname) || INIT_RE.test(u.pathname))
+    return null;
   if (!HLS_RE.test(u.pathname) && !FILE_RE.test(u.pathname)) return null;
   return u.href;
 }

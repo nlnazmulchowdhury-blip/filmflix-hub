@@ -10,8 +10,15 @@
  *  - the Referer the player succeeded with is replayed on every request,
  *  - a segment gets 3 attempts before it is skipped, and one missing segment
  *    never aborts the whole file,
+ *  - every request carries a deadline, because a CDN socket that opens and
+ *    then stays silent used to freeze a download part-way through the film,
+ *  - segments are muxed in windows, because a feature film is over a gigabyte
+ *    and its raw bytes must not be held next to their own muxed output,
+ *  - a playlist is recognised by its first bytes, not by its file name, since
+ *    several providers name their manifests without `.m3u8`,
  *  - AES-128 encrypted playlists are decrypted with WebCrypto, because most
- *    provider CDNs serve `#EXT-X-KEY` streams.
+ *    provider CDNs serve `#EXT-X-KEY` streams, and a stream whose key will not
+ *    load reports failure rather than saving ciphertext.
  */
 import { Transmuxer } from "mux.js/lib/mp4/transmuxer";
 import { API_BASE } from "@/lib/api";
@@ -56,8 +63,16 @@ interface FetchOpts {
   attempts?: number;
 }
 
+/** Generous for a real segment (a few seconds through the pipe), short enough
+ *  that a socket which stops answering cannot hold a whole window open. */
+const TIMEOUT_MS = 25000;
+
 async function raw(url: string, referer?: string): Promise<Response> {
-  return fetch(proxyUrl(url, referer));
+  /* fetch never gives up on its own. One CDN socket that opens and then says
+     nothing used to freeze a download at a third of the film forever — the
+     window it sat in could not finish, so nothing behind it could start. A
+     deadline turns that into a retry, and a dead segment into a skip. */
+  return fetch(proxyUrl(url, referer), { signal: AbortSignal.timeout(TIMEOUT_MS) });
 }
 
 async function fetchBytes(url: string, opts: FetchOpts = {}): Promise<Bytes> {
@@ -194,18 +209,21 @@ function aesKey(uri: string, referer?: string): Promise<CryptoKey> {
       ]);
     })();
     keyCache.set(uri, cached);
+    /* A failed key must not poison every later attempt of this film. */
+    cached.catch(() => {
+      if (keyCache.get(uri) === cached) keyCache.delete(uri);
+    });
   }
   return cached;
 }
 
 async function decrypt(bytes: Bytes, seg: { keyUri: string | null; iv: Bytes | null }, referer?: string): Promise<Bytes> {
   if (!seg.keyUri || !seg.iv) return bytes;
-  try {
-    const key = await aesKey(seg.keyUri, referer);
-    return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-CBC", iv: seg.iv }, key, bytes));
-  } catch {
-    return bytes;
-  }
+  /* Never hand back the encrypted bytes. A stream that silently arrives as
+     ciphertext saves a file that plays nothing, and the viewer has no way to
+     tell that from a good download — so a dead key fails like one. */
+  const key = await aesKey(seg.keyUri, referer);
+  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-CBC", iv: seg.iv }, key, bytes));
 }
 
 /** If the playlist is a master, follow its first (highest) variant. */
@@ -257,30 +275,31 @@ async function mapLimit<T, R>(
   return out;
 }
 
-function remuxTs(segments: Bytes[]): Bytes {
+/** One transmuxer for the whole film, fed window by window. The header it
+ *  produces is emitted once, and every window hands back its own pieces so the
+ *  raw transport stream can be released as soon as it is muxed. */
+function createTsRemuxer() {
   const transmuxer = new Transmuxer();
-  const parts: Uint8Array[] = [];
+  const pieces: Bytes[] = [];
   let initPushed = false;
   transmuxer.on("data", (seg: { initSegment?: Uint8Array; data: Uint8Array }) => {
     if (seg.initSegment && !initPushed) {
-      parts.push(seg.initSegment);
+      pieces.push(seg.initSegment as Bytes);
       initPushed = true;
     }
-    parts.push(seg.data);
+    if (seg.data?.byteLength) pieces.push(seg.data as Bytes);
   });
-  for (const seg of segments) {
-    transmuxer.push(seg);
-    transmuxer.flush();
-  }
-  let total = 0;
-  for (const p of parts) total += p.byteLength;
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const p of parts) {
-    out.set(p, off);
-    off += p.byteLength;
-  }
-  return out;
+  return {
+    /** Muxes this window and hands back its pieces, so the caller can drop the
+     *  raw transport stream bytes it just consumed. */
+    remux(segments: Bytes[]): Bytes[] {
+      for (const seg of segments) {
+        transmuxer.push(seg);
+        transmuxer.flush();
+      }
+      return pieces.splice(0, pieces.length);
+    },
+  };
 }
 
 export interface HlsDownloadResult {
@@ -303,6 +322,12 @@ export async function downloadHlsAsMp4(
   return blob;
 }
 
+/** Segments pulled per window. A feature film is ~1 200 segments and over a
+ *  gigabyte, so the raw bytes are muxed and dropped in batches instead of all
+ *  at once — holding them and their muxed output together is what used to make
+ *  the tab die halfway through a download. */
+const WINDOW = 40;
+
 export async function downloadHls(
   playlistUrl: string,
   onProgress?: (fraction: number) => void,
@@ -314,24 +339,38 @@ export async function downloadHls(
   if (!segments.length) throw new Error("playlist has no segments");
   onProgress?.(0);
 
-  const init = initSegment
-    ? await decrypt(await fetchBytes(initSegment, { referer }), { keyUri: initKeyUri, iv: initIv }, referer)
-    : null;
-  let done = 0;
-  const bodies = await mapLimit(segments, 4, async (seg) => {
-    const bytes = await fetchBytes(seg.url, { referer });
-    done++;
-    onProgress?.(done / segments.length);
-    return decrypt(bytes, seg, referer);
-  });
-  const ok = bodies.filter((b): b is Bytes => b !== null);
-  if (!ok.length) throw new Error("every segment failed");
+  const parts: BlobPart[] = [];
+  if (initSegment) {
+    parts.push(
+      await decrypt(await fetchBytes(initSegment, { referer }), { keyUri: initKeyUri, iv: initIv }, referer),
+    );
+  }
+  const ts = isTs ? createTsRemuxer() : null;
+  let got = 0;
+  for (let start = 0; start < segments.length; start += WINDOW) {
+    const window = segments.slice(start, start + WINDOW);
+    let done = 0;
+    const bodies = await mapLimit(window, 4, async (seg) => {
+      const bytes = await fetchBytes(seg.url, { referer });
+      onProgress?.(Math.min(0.999, (start + ++done) / segments.length));
+      return decrypt(bytes, seg, referer);
+    });
+    const ok = bodies.filter((b): b is Bytes => b !== null);
+    got += ok.length;
+    /* A window's raw bytes are released here; only the muxed pieces are kept. */
+    parts.push(...(ts ? ts.remux(ok) : ok));
+    onProgress?.(Math.min(0.999, (start + window.length) / segments.length));
+  }
+  if (!got)
+    throw new Error(
+      segments[0].keyUri
+        ? "every segment failed — the AES key would not load"
+        : "every segment failed",
+    );
   /* MPEG-TS demuxers resync on 0x47, so dropped segments stay playable. */
   return {
-    blob: isTs
-      ? new Blob([remuxTs(ok)], { type: "video/mp4" })
-      : new Blob([init ?? new Uint8Array(), ...ok], { type: "video/mp4" }),
-    skipped: segments.length - ok.length,
+    blob: new Blob(parts, { type: "video/mp4" }),
+    skipped: segments.length - got,
     total: segments.length,
   };
 }
@@ -349,5 +388,40 @@ export function saveBlob(blob: Blob, filename: string): void {
 
 export function isHlsLink(url: string): boolean {
   /* A piped stream's own URL ends in the pipe's path, so ask what it proxies. */
-  return /\.m3u8(\?|#|$)/i.test(pipedTarget(url) || url);
+  return HLS_SHAPE.test(pipedTarget(url) || url);
 }
+
+/** Which of these links is a playlist. The extension lies in both directions —
+ *  vixsrc and viduki name theirs `/playlist/…` with no `.m3u8` at all, while a
+ *  VidNest media segment is called `….mp4` — so a row that is handed to the
+ *  browser as a plain file saves 200 kB of `#EXTM3U` text wearing an .mp4 name. */
+const HLS_SHAPE = /(\/playlist\/|[?&](?:type=video|format=m3u8|m3u8=1)\b|\.m3u8(?:\?|#|$))/i;
+
+const sniffedUrls = new Map<string, Promise<boolean>>();
+
+/** Ask the first bytes what the file name refused to say. */
+export function hlsByContent(url: string, referer?: string): Promise<boolean> {
+  if (isHlsLink(url)) return Promise.resolve(true);
+  let known = sniffedUrls.get(url);
+  if (!known) {
+    known = readHeader(url, referer);
+    sniffedUrls.set(url, known);
+  }
+  return known;
+}
+
+async function readHeader(url: string, referer?: string): Promise<boolean> {
+  try {
+    const res = await raw(url, referer);
+    if (!res.ok || !res.body) return false;
+    const reader = res.body.getReader();
+    const first = await reader.read();
+    /* The rest of a feature film is not needed to recognise a manifest. */
+    void reader.cancel().catch(() => undefined);
+    const head = new TextDecoder().decode(first.value ?? new Uint8Array());
+    return head.slice(0, 16).includes("#EXTM3U");
+  } catch {
+    return false;
+  }
+}
+

@@ -9,6 +9,7 @@
  * server-side and fails over to the iframe view for token-handshake hosts.
  */
 import { api } from "@/lib/api";
+import { browserDecodesHevc } from "@/lib/playback-health";
 import { isHlsUrl } from "@/lib/video-url";
 
 /** Hosts that serve a player page (not a stream) — candidates for resolution. */
@@ -80,9 +81,12 @@ export function isEmbedUrl(raw: string | null | undefined): boolean {
 export async function resolveEmbedStream(
   embedUrl: string,
 ): Promise<EmbedResolveResult> {
-  return api.get<EmbedResolveResult>(
-    `/embed/stream?url=${encodeURIComponent(embedUrl.trim())}`,
-  );
+  const q = new URLSearchParams({ url: embedUrl.trim() });
+  /* Providers hold some titles only as HEVC. Only this browser knows whether it
+     can decode that, and the Worker must not guess: say so once, and a title
+     that would otherwise show the provider's player runs under our controls. */
+  if (browserDecodesHevc()) q.set("hevc", "1");
+  return api.get<EmbedResolveResult>(`/embed/stream?${q.toString()}`);
 }
 
 /** Ask a provider API that needs nothing but the TMDB id for a stream.
@@ -176,6 +180,10 @@ export const DIRECT_RACE_URL = "api:direct";
  * viewer waits for the fastest provider instead of one chain after another.
  * Settles as soon as a source yields candidates; failures never hold it back,
  * and a page whose chain is slow is simply dropped.
+ *
+ * A chain that answers *after* the win is not thrown away: `onReady` still sees
+ * its playable links, so the rest of the lineup is loaded by the time the viewer
+ * taps another server chip instead of starting a fresh resolve from nothing.
  */
 export async function raceEmbedStreams(
   urls: string[],
@@ -185,6 +193,7 @@ export async function raceEmbedStreams(
     season?: number;
     episode?: number;
   } | null,
+  onReady?: (ready: { url: string; candidates: EmbedCandidate[] }) => void,
 ): Promise<EmbedRaceResult> {
   const targets = urls.filter((u) => u && u.trim()).map((u) => u.trim());
   const canAskDirect = Boolean(direct?.tmdbId && String(direct.tmdbId).replace(/\D/g, ""));
@@ -211,8 +220,8 @@ export async function raceEmbedStreams(
        viewer's browser can pull them, so every candidate is fetched once from
        here before the race is allowed to settle on it. */
     const accept = async (url: string, cands: EmbedCandidate[], why: string) => {
-      if (settled || !cands.length) {
-        if (!cands.length) miss(why);
+      if (!cands.length) {
+        if (!settled) miss(why);
         return;
       }
       const tested = await Promise.all(
@@ -224,8 +233,12 @@ export async function raceEmbedStreams(
           })),
       );
       const usable = tested.filter((t) => t.ok).map((t) => t.c);
-      if (usable.length) take(url, usable);
-      else miss("Its links only answer inside the provider's own session.");
+      if (!usable.length) {
+        if (!settled) miss("Its links only answer inside the provider's own session.");
+        return;
+      }
+      onReady?.({ url, candidates: usable });
+      take(url, usable);
     };
 
     if (canAskDirect) {
@@ -253,6 +266,10 @@ export interface EmbedPageProbe {
   /** Why a provider was judged dead, when the Worker could say more than
    *  "no page" — shown to the viewer instead of framing a wall they cannot use. */
   reason?: string;
+  /** The provider refused *our Worker* (its CDN blocks datacenter egress) while
+   *  its page still loads for the viewer's browser. `live` stays true: this is
+   *  our reach being limited, not the server being dead. */
+  blocked?: boolean;
 }
 
 /** Is this provider page actually alive — and really the title it was asked for?

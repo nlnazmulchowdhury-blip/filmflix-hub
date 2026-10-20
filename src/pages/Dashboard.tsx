@@ -14,12 +14,14 @@ import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
 import { AD_BANNERS } from "@/lib/ad-banners";
+import { readSavedTitles, removeSavedTitle, type SavedTitle } from "@/lib/saved-titles";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
+  Bookmark,
   CalendarClock,
   Clapperboard,
   CreditCard,
@@ -29,11 +31,16 @@ import {
   Trash2,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 export default function Dashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  /* Provider titles saved on this device — the server-side watchlist below can
+     only hold a catalog row, so these keep their own list. */
+  const [savedLocal, setSavedLocal] = useState<SavedTitle[]>([]);
+  useEffect(() => setSavedLocal(readSavedTitles()), []);
   const screenings = useQuery(api.screenings.listMine);
   const myOrders = useQuery(api.orders.listMine);
   const contributions = useQuery(
@@ -191,7 +198,7 @@ export default function Dashboard() {
                 <Skeleton key={i} className="aspect-[2/3] rounded-xl" />
               ))}
             </div>
-          ) : watchlist.length === 0 ? (
+          ) : watchlist.length === 0 && savedLocal.length === 0 ? (
             <CardContent className="py-10 text-center text-sm text-muted-foreground">
               Nothing saved yet — open a movie and press{" "}
               <Heart className="inline size-3.5 fill-primary text-primary" />{" "}
@@ -234,6 +241,63 @@ export default function Dashboard() {
                             err instanceof Error ? err.message : "Failed to remove",
                           );
                         }
+                      }}
+                      className="absolute right-2 top-2 rounded-full bg-black/70 p-1.5 text-white/90 opacity-0 transition-opacity hover:bg-destructive group-hover:opacity-100"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          )}
+          {savedLocal.length > 0 && (
+            <CardContent className="border-t border-border/50 p-6">
+              <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                <Bookmark className="size-4" />
+                Saved on this device
+              </p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+                {savedLocal.map((t) => (
+                  <div key={t.key} className="group relative">
+                    <Link
+                      to={`/movie/${t.key.replace(":", "-")}`}
+                      state={
+                        t.tmdbId
+                          ? {
+                              external: "vaplayer",
+                              tmdbId: t.tmdbId,
+                              kind: t.kind ?? "movie",
+                              title: t.title,
+                              posterUrl: t.posterUrl ?? undefined,
+                            }
+                          : undefined
+                      }
+                      className="block"
+                    >
+                      <div className="aspect-[2/3] overflow-hidden rounded-xl border border-border/50 bg-muted transition-transform group-hover:scale-[1.03]">
+                        {t.posterUrl ? (
+                          <img
+                            src={t.posterUrl}
+                            alt={t.title}
+                            className="size-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex size-full items-center justify-center text-muted-foreground/40">
+                            <Clapperboard className="size-6" />
+                          </div>
+                        )}
+                      </div>
+                      <p className="mt-2 truncate text-sm font-medium">{t.title}</p>
+                    </Link>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${t.title} from saved`}
+                      title="Remove from saved"
+                      onClick={() => {
+                        removeSavedTitle(t.key);
+                        setSavedLocal(readSavedTitles());
+                        toast.success("Removed from saved");
                       }}
                       className="absolute right-2 top-2 rounded-full bg-black/70 p-1.5 text-white/90 opacity-0 transition-opacity hover:bg-destructive group-hover:opacity-100"
                     >

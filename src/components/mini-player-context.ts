@@ -5,6 +5,20 @@ export interface PlayerDub {
   videoUrl: string;
 }
 
+/** One audio rendition the stream itself carries (`EXT-X-MEDIA:TYPE=AUDIO`).
+ *  This is how a film can be in several languages without our catalog knowing
+ *  anything about it — the provider's playlist says so. */
+export interface PlayerAudioTrack {
+  /** hls.js track id; `-1` means "let the player choose" (the default). */
+  id: number;
+  /** What the playlist names it: "English", "Italian"… */
+  name: string;
+  /** ISO code from the playlist when present: "eng", "ita". */
+  lang?: string;
+  /** The rendition the playlist marks DEFAULT. */
+  isDefault: boolean;
+}
+
 /** Extra quality rendition (480p/720p/…) with its own file URL. */
 export interface PlayerQuality {
   label: string;
@@ -94,6 +108,13 @@ export interface MiniPlayerContextValue {
   activeDub: string | null;
   /** Switch audio version without losing the playback position. */
   setDub: (label: string | null) => void;
+  /** Audio renditions the CURRENT stream carries — read off the playlist, so a
+   *  provider title can be multi-language without a catalog row. */
+  audioTracks: PlayerAudioTrack[];
+  /** Track id now playing; null = whatever the playlist defaulted to. */
+  activeAudioTrack: number | null;
+  /** Hear the film in another language, in place, without losing the second. */
+  setAudioTrack: (id: number) => void;
   /** --- Viewer settings (YouTube-style gear menu) --- */
   /** Night mode: dims the picture for dark-room viewing. */
   nightMode: boolean;
@@ -148,6 +169,9 @@ export const MiniPlayerContext = createContext<MiniPlayerContextValue>({
   handleSurfaceMouseLeave: () => undefined,
   activeDub: null,
   setDub: () => undefined,
+  audioTracks: [],
+  activeAudioTrack: null,
+  setAudioTrack: () => undefined,
   nightMode: false,
   setNightMode: () => undefined,
   loop: false,

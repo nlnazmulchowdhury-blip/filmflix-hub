@@ -53,6 +53,12 @@ export interface VidlinkSource {
   referer: string;
   /** The signed CloudFront cookie its CDN gates on. */
   cookie: string;
+  /** What the handshake actually served. `"file"` is a progressive mp4 whose
+   *  exact codec and URL the provider itself named, so the caller can trust it
+   *  without re-probing (whose 429 would kill a stream the browser can play). */
+  kind?: "hls" | "file";
+  /** The codec the provider declared for this source, lower-cased. */
+  codec?: string;
 }
 
 /** Its page fetcher, with one extra channel: this API only answers with a
@@ -273,15 +279,41 @@ function headerOf(headers: Record<string, unknown> | undefined, name: string): s
   return "";
 }
 
+/** Its `qualities` map is keyed by height and every entry names its own codec:
+ *  one title can be H.264 at 480 and HEVC at 1080. Take the tallest rendition
+ *  *this* player can decode, and never an HEVC file unless the viewer's own
+ *  browser said it decodes HEVC (`?hevc=1`, from `browserDecodesHevc()`). */
+function pickFileQuality(
+  qualities: Record<string, any> | undefined,
+  allowHevc: boolean,
+): { url: string; quality: string; codec: string } | null {
+  const rows = Object.entries(qualities ?? {})
+    .filter(([, q]) => q?.type === "mp4" && typeof q?.url === "string" && /^https?:\/\//.test(q.url))
+    .map(([h, q]) => ({
+      height: Number(h) || 0,
+      url: q.url as string,
+      codec: String(q.codecName ?? "").toLowerCase(),
+    }))
+    .sort((a, b) => b.height - a.height);
+  const best = rows.find((r) => allowHevc || (r.codec && r.codec !== "hevc"));
+  if (!best) return null;
+  return {
+    url: best.url,
+    quality: best.height === 2160 ? "4K" : best.height ? `${best.height}p` : "File",
+    codec: best.codec,
+  };
+}
+
 /** Ask its API for one title and keep the answer our player can actually use.
  *
  *  Empty means "vidlink has nothing we can play here" — the title is not in its
- *  catalog, or it only holds it as HEVC, which paints a black rectangle for
- *  every browser without hardware HEVC. The caller then leaves the chip on the
+ *  catalog, or it only holds it as HEVC and this viewer cannot decode HEVC,
+ *  which paints a black rectangle. The caller then leaves the chip on the
  *  provider's own player instead of handing over a dead stream. */
 export async function vidlinkSources(
   title: VidlinkTitle,
   get: PageGetter,
+  opts: { allowHevc?: boolean } = {},
 ): Promise<{ sources: VidlinkSource[]; reason: string }> {
   const tail = title.type === "tv" ? `/${title.season}/${title.episode}` : "";
   const page = `https://${VIDLINK_HOST}/${title.type}/${title.tmdbId}${tail}`;
@@ -315,11 +347,32 @@ export async function vidlinkSources(
   const s = obj?.stream ?? {};
   const codec = String(s?.playbackMetadata?.codecName ?? "").toLowerCase();
   const playlist = typeof s.playlist === "string" ? s.playlist.trim() : "";
-  if (s.type !== "hls" || !playlist)
+  if (s.type !== "hls" || !playlist) {
+    /* Its progressive answer. `requiresProxy` is its own flag for "our CDN only
+       answers a proxied request", so this goes through `/embed/proxy` with the
+       provider's referer exactly like its HLS does. */
+    const file = pickFileQuality(s.qualities, Boolean(opts.allowHevc));
+    if (!file)
+      return {
+        sources: [],
+        reason: opts.allowHevc
+          ? `vidlink only has this title as ${String(s.type ?? "nothing").toUpperCase()}`
+          : `vidlink holds this title only as HEVC, which this player cannot decode.`,
+      };
     return {
-      sources: [],
-      reason: `vidlink only has this title as ${String(s.type ?? "nothing").toUpperCase()}`,
+      sources: [
+        {
+          url: file.url,
+          quality: file.quality,
+          kind: "file" as const,
+          codec: file.codec,
+          referer: headerOf(s.fileHeaders, "Referer") || `https://${VIDLINK_HOST}/`,
+          cookie: headerOf(s.fileHeaders, "Cookie"),
+        },
+      ],
+      reason: "",
     };
+  }
   if (codec && codec !== "h264" && codec !== "avc")
     return { sources: [], reason: `vidlink's stream for this title is ${codec.toUpperCase()}-only` };
   const url = /^https?:\/\//.test(playlist) ? playlist : "";
