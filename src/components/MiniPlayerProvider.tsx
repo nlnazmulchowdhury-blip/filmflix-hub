@@ -146,7 +146,9 @@ function setHlsSource(
          in the viewer's console on every embed server. */
       activeTokenCtx = { token: { current: "" }, hosts: new Set() };
       disposeTokenRefresh = attachTokenRefresh(src, activeTokenCtx, (fresh) => {
-        const live = document.querySelector("video");
+        /* The engine's own element — not the first `<video>` in the document,
+           which during a pre-roll is the ad's creative. */
+        const live = activeHls?.media as HTMLVideoElement | null;
         if (live && !live.paused) buildHls(live, fresh);
       });
     }
@@ -1758,6 +1760,10 @@ function VideoSurface({
         )}
         <video
           ref={videoRef}
+          /* The one element in this page that is the movie. A pre-roll's own
+             `<video>` mounts inside the same box, so anything that looks for
+             "the video" by tag alone can end up watching or mutating the ad. */
+          data-film="movie"
           /* undefined, never "": an empty src attribute makes the browser
              resolve it against the current URL and refetch this very page as
              media, which React warns about and the element then errors on. */

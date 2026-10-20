@@ -974,7 +974,11 @@ export default function PlayerStage({
      a picture, and comes back if the picture stalls mid-film. */
   const [pictureUp, setPictureUp] = useState(false);
   useEffect(() => {
-    const el = containerRef.current?.querySelector("video");
+    /* The film's own element, never the first `<video>` in the box: while a
+       pre-roll is up its creative is mounted inside this same container ahead of
+       it, and a watcher that read that element would call the ad's first frame
+       the film's arrival. */
+    const el = containerRef.current?.querySelector<HTMLVideoElement>("[data-film]");
     if (!el) return;
     /* `loadstart` is the reset: a new source drops readyState to 0, so the mark
        comes back on its own without a second effect. */
@@ -1472,7 +1476,7 @@ export default function PlayerStage({
 
   /* Picture-in-picture: pop the video into a floating OS window. */
   const togglePip = useCallback(async () => {
-    const v = document.querySelector("video");
+    const v = document.querySelector("[data-film]");
     const video = v as (HTMLVideoElement & {
       requestPictureInPicture?: () => Promise<unknown>;
       webkitSetPresentationMode?: (m: string) => void;
@@ -1513,7 +1517,7 @@ export default function PlayerStage({
       } else {
         // Last resort (iPhone Safari): fullscreen the underlying video via
         // the native controls when the container API is unavailable.
-        const v = document.querySelector("video");
+        const v = document.querySelector("[data-film]");
         const video = v as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
         video?.webkitEnterFullscreen?.();
       }

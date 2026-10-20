@@ -31,7 +31,7 @@ export const HILLTOP_BANNER_VAST_TAG =
  *  out is not part of this knob: Skip always opens after five seconds no matter
  *  how long the ad is held. Set back to 0 for the shipped rule: the ad dies the
  *  moment a frame of the movie arrives. */
-export const AD_TEST_SECONDS = 20;
+export const AD_TEST_SECONDS = 0;
 
 export interface VastAd {
   /** The creative itself — a progressive file we can point a `<video>` at. */
