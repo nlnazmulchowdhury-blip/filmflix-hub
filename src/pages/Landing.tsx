@@ -19,11 +19,8 @@ import {
   type TmdbItem,
 } from "@/lib/tmdb";
 import ThemeToggle from "@/components/ThemeToggle";
-import AdBanner from "@/components/AdBanner";
-import AdContainer from "@/components/AdContainer";
 import AdEdgeRail from "@/components/AdEdgeRail";
-import AdPosterCard from "@/components/AdPosterCard";
-import { AD_BANNERS } from "@/lib/ad-banners";
+import AdVideoBanner from "@/components/AdVideoBanner";
 import { api } from "@/convex/_generated/api";
 import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
@@ -49,7 +46,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -142,22 +138,6 @@ function highlightMatch(title: string, term: string) {
       {title.slice(end)}
     </>
   );
-}
-
-/** One poster-shaped ad slot per this many grid cards. */
-const AD_GRID_EVERY = 6;
-
-/** Drop an ad card into the grid every `every` posters. */
-function interleaveAds(nodes: ReactNode[], every = AD_GRID_EVERY): ReactNode[] {
-  const out: ReactNode[] = [];
-  nodes.forEach((node, i) => {
-    out.push(node);
-    /* Never trail the last poster with an ad — that reads as an ad row. */
-    if ((i + 1) % every === 0 && i + 1 < nodes.length) {
-      out.push(<AdPosterCard key={`grid-ad-${i}`} index={i} />);
-    }
-  });
-  return out;
 }
 
 export default function Landing() {
@@ -804,12 +784,6 @@ export default function Landing() {
           </motion.form>
         </section>
 
-        {/* Top banner: leaderboard on desktop, 320×50 on phones. */}
-        <section className="mt-6 flex justify-center">
-          <AdBanner {...AD_BANNERS.leaderboard} className="hidden sm:block" />
-          <AdBanner {...AD_BANNERS.mobile} className="sm:hidden" />
-        </section>
-
         {/* Category sections — chips come from the embed catalog's genres. */}
         <section className="mt-6 sm:mt-8">
           <div className="flex flex-wrap items-center gap-2 pb-1 sm:justify-center">
@@ -1004,7 +978,7 @@ export default function Landing() {
               </Card>
             ) : (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-                {interleaveAds([
+                {[
                   ...localResults.map((m: any, i: any) => (
                     <MovieCard key={m._id} movie={m} index={i} />
                   )),
@@ -1018,22 +992,20 @@ export default function Landing() {
                       onPlay={playExternal}
                     />
                   )),
-                ])}
+                ]}
               </div>
             )
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-                {interleaveAds(
-                  tmdbItems.map((item, i) => (
-                    <VidSrcResultCard
-                      key={`${item.kind}-${item.tmdbId}`}
-                      hit={tmdbToHit(item)}
-                      index={i % 10}
-                      onPlay={() => playTmdb(item)}
-                    />
-                  )),
-                )}
+                {tmdbItems.map((item, i) => (
+                  <VidSrcResultCard
+                    key={`${item.kind}-${item.tmdbId}`}
+                    hit={tmdbToHit(item)}
+                    index={i % 10}
+                    onPlay={() => playTmdb(item)}
+                  />
+                ))}
                 {/* Skeletons for the first batch, or a light tail while loading more. */}
                 {tmdbLoading &&
                   Array.from({ length: tmdbItems.length === 0 ? 12 : 6 }).map(
@@ -1078,13 +1050,13 @@ export default function Landing() {
           )}
         </section>
 
-        {/* Mid-content ad row — 300×250 rectangle, PR container unit, half-page. */}
-        <section className="mt-10 flex flex-wrap items-center justify-center gap-6">
-          <AdBanner {...AD_BANNERS.square} />
-          <AdContainer />
-          <div className="hidden sm:block">
-            <AdBanner {...AD_BANNERS.halfpage} />
-          </div>
+        {/* HilltopAds' in-page video banners (zone #7535489), played by our own
+            element. One card on a phone, two side by side from `sm` up; the
+            second never asks the network for an ad it cannot show. Nothing
+            renders when the network has no creative. */}
+        <section className="mt-10 flex flex-wrap items-start justify-center gap-6">
+          <AdVideoBanner slot={0} />
+          <AdVideoBanner slot={1} minWidth={640} />
         </section>
 
         {/* Quick links row */}
@@ -1152,11 +1124,6 @@ export default function Landing() {
               </Button>
             </CardContent>
           </Card>
-        </section>
-
-        {/* Footer banner (468×60). */}
-        <section className="mt-12 flex justify-center">
-          <AdBanner {...AD_BANNERS.banner} />
         </section>
       </main>
 
