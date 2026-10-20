@@ -29,6 +29,8 @@ import {
   type ServerAudio,
 } from "@/lib/embed-languages";
 import { browserDecodesHevc, onPlaybackFailure } from "@/lib/playback-health";
+import { AD_TEST_SECONDS, fetchHilltopVast, type VastAd } from "@/lib/vast";
+import PreRollAd from "@/components/PreRollAd";
 import {
   refererFor,
   setSnifferReferer,
@@ -276,7 +278,8 @@ export default function PlayerStage({
      resolver could reproduce — so it could only ever run on the provider's own
      screen. That token is minted here now, so an H.264 title plays under our
      controls; a title vidlink only holds as HEVC still needs its player, which
-     is why this chip stays below the ones that always answer with a stream. */  if (vidboxTarget && !off("vidbox"))
+     is why this chip stays below the ones that always answer with a stream. */
+  if (vidboxTarget && !off("vidbox"))
     servers.push({
       key: "vidbox",
       label: `Server ${++serverNo}`,
@@ -321,8 +324,8 @@ export default function PlayerStage({
     setAeEpisode(episode ?? 1);
   }, [episode]);
 
-  /* Drama is still iframe-only (its back end answers nobody), so its provider
-     player keeps the whole stage with only a strip of ours above it. */
+  /* Drama is still iframe-only: its back end answers nobody, so its provider
+     player keeps the whole stage with only our bar above it. */
   const usingAutoembed = server === "drama";
   /* Read once, up here: below, `iframeOnlyServer` narrows `server` along the
      provider-framing path and a second `server === "anime"` looks impossible. */
@@ -552,21 +555,49 @@ export default function PlayerStage({
     }
   })();
 
-  /* A provider's own page is what is on screen. Our design still sits above it:
-     those framed blocks are z-[60], so the band this state swaps in for the
-     native bar is layered over them, and the picture stays click-through so the
-     provider's play button keeps working underneath. It goes at the TOP edge on
-     purpose: every provider puts its play, seek and volume along the bottom, so
-     a bar down there would cover the very controls this state sends the viewer
-     to use. VidNest keys its pages per episode, so its stepper rides along. */
+  /* A provider's own page is what is on screen, and our design sits above it:
+     those framed blocks are z-[60] and the native bar layers over them at
+     z-[61]. That trade gives up the provider's own play/seek/volume along its
+     bottom edge — a cross-origin frame cannot be seeked, muted or read from
+     here, so the bar's media buttons are disabled rather than fake, while the
+     server chip, the stepper and fullscreen keep working for real. VidNest keys
+     its pages per episode, so its stepper rides along. */
   const providerMode =
     embedIframe ||
     usingAutoembed && Boolean(iframeServerUrl) && providerFramed;
-  const framedEpisodeStepper = providerMode && (usingAutoembed || animeServer);
+  /* Only providers keyed per episode need the stepper, and a film never does —
+     `kind` can be unknown on a synthetic route, so hide it for movies rather
+     than show an "Ep 1" that changes nothing. */
+  const framedEpisodeStepper =
+    providerMode && kind !== "movie" && (usingAutoembed || animeServer);
   const providerUrl = (embedUrl || embedSource || iframeServerUrl || "") as string;
   const providerName =
     (embedIframe ? embedHost : servers.find((s) => s.key === server)?.sub?.split(" · ")[0]) ||
     "Provider";
+
+  /* Over a framed provider our bar is painted for the design, but the media
+     controls drive our own element, which sits behind that page — so they are
+     left inert and say why, rather than moving a picture we cannot move. */
+  const inertTitle = `${providerName}'s player runs this film — these controls drive our own stream, not its page`;
+  const INERT = "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent";
+
+  /* The bar's left slot carries a clock on our own streams; over a frame it
+     names the host instead — same footprint, and tapping it still opens the
+     resolver log the old top band used to. */
+  const providerSlot =
+    embedStatus === "resolving"
+      ? "Trying…"
+      : embedStatus === "failed" && embedBlocked
+        ? `${providerName} refused us`
+        : embedStatus === "failed" && !embedCarried
+          ? `${providerName} · none`
+          : providerName;
+  const providerSlotTitle =
+    embedStatus === "failed" && embedBlocked
+      ? `${providerName} refused this site's resolver but serves you — press play on its picture, and tap for what every server answered`
+      : embedStatus === "failed" && !embedCarried
+        ? `${providerName} may not carry this title — tap to see what every server answered`
+        : `${providerName} is running the film — its own play, seek and volume sit inside its page, so ours are switched off. Tap for what every server answered.`;
 
   /* Every ad-free provider available for this title/episode, honouring the
      servers an admin switched off. These are what the race asks in parallel.
@@ -962,6 +993,82 @@ export default function PlayerStage({
     return () => events.forEach((e) => el.removeEventListener(e, mark));
   }, [embedStream, mode]);
   const streamWarming = Boolean(embedStream) && !pictureUp;
+
+  /* ------------------------------------------------------------ pre-roll */
+
+  /* The one gap on this page that belongs to nobody but us is the wait between
+     the viewer's click and the server's first frame, so that is the only place
+     an ad may appear: it paints over our own cover, the film keeps loading
+     behind it, and it is gone the moment a frame arrives — even mid-ad. It never
+     sits over a provider's page, and a load that answers fast never sees it. */
+  const [vast, setVast] = useState<VastAd | null>(null);
+  const [adUp, setAdUp] = useState(false);
+  const adShownFor = useRef("");
+  const adLastAt = useRef(0);
+  const stageLoading =
+    (awaitingPlayer || streamWarming) && !embedDead && !providerFramed && !raceSpent;
+
+  useEffect(() => {
+    const ac = new AbortController();
+    const stop = setTimeout(() => ac.abort(), 12_000);
+    fetchHilltopVast(ac.signal)
+      .then((ad) => {
+        clearTimeout(stop);
+        setVast(ad);
+      })
+      .catch(() => undefined);
+    return () => {
+      clearTimeout(stop);
+      ac.abort();
+    };
+  }, [raceKey]);
+
+  useEffect(() => {
+    if (!adUp) return;
+    /* TEST KNOB: while AD_TEST_SECONDS is above 0 the ad keeps the box for its
+       pinned length, so the film's arrival must not dismiss it — the timer below
+       does, and the film waits underneath with its sound off. */
+    if (!stageLoading && AD_TEST_SECONDS <= 0) setAdUp(false);
+  }, [adUp, stageLoading]);
+
+  useEffect(() => {
+    if (!adUp || AD_TEST_SECONDS <= 0) return;
+    const stop = setTimeout(() => setAdUp(false), AD_TEST_SECONDS * 1000);
+    return () => clearTimeout(stop);
+  }, [adUp]);
+
+  /* An ad owns the sound while it is up. The film is deliberately not paused for
+     it — a paused element stalls hls.js's own recovery and the frame never comes
+     back — so it is muted instead, and gets its volume at the hand-off. A viewer
+     who had the film muted keeps it muted, and one who unmutes it mid-ad is not
+     muted again behind their back. */
+  const adMutedFilm = useRef(false);
+  useEffect(() => {
+    if (adUp && !muted) {
+      adMutedFilm.current = true;
+      controls.toggleMute();
+    } else if (!adUp) {
+      if (adMutedFilm.current && muted) controls.toggleMute();
+      adMutedFilm.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adUp]);
+
+  useEffect(() => {
+    if (adUp || !vast || !stageLoading) return;
+    /* One ad per viewing of a title, and never two in quick succession: a
+       viewer stepping through servers or episodes must not be re-advertised at
+       every step. */
+    const key = `${raceKey}|${server}`;
+    if (adShownFor.current === key) return;
+    const t = setTimeout(() => {
+      if (Date.now() - adLastAt.current < 45_000) return;
+      adShownFor.current = key;
+      adLastAt.current = Date.now();
+      setAdUp(true);
+    }, 1_500);
+    return () => clearTimeout(t);
+  }, [adUp, vast, stageLoading, raceKey, server]);
 
   const selectServer = (key: string) => {
     /* Tapping a server is the viewer changing their mind about a language
@@ -1592,7 +1699,8 @@ export default function PlayerStage({
             </span>
             {/* While the race runs the orbit is the whole message. A miss is not
                 the viewer's problem to read: the reason lives in the resolver log
-                behind the top band, and the cover just offers another server. */}
+                behind the bar's status slot, and the cover just offers another
+                server. */}
             {!raceSpent && (
               <p className="relative z-10 max-w-[86vw] text-center text-xs text-white/70">
                 Loading this server's player…
@@ -1600,7 +1708,7 @@ export default function PlayerStage({
             )}
             {providerReady && !providerOpen && (
               <p className="relative z-10 max-w-[86vw] text-center text-xs text-white/70">
-                {`Press play and ${embedHost || providerName}'s own player starts here — its seek and volume sit on its screen.`}
+                {`Press play and ${providerName}'s own player starts here — click its picture to pause; its seek and volume hide under our bar.`}
               </p>
             )}
             <div className="relative z-10 mt-1 flex max-w-[94vw] flex-wrap items-center justify-center gap-2">
@@ -1640,6 +1748,10 @@ export default function PlayerStage({
           </div>
         )}
 
+        {/* The ad belongs to the wait, not to the movie: it is painted over our
+            own loading cover and unmounted the moment the film has a frame. */}
+        {adUp && vast && <PreRollAd ad={vast} onDone={() => setAdUp(false)} />}
+
         {/* Same beat on a chip that can only show the provider's own page: its
             first paint is silent to us, so our mark opens the box for a few
             seconds and then fades out — click-through the whole time, so the
@@ -1656,16 +1768,15 @@ export default function PlayerStage({
           </div>
         )}
 
-        {/* The Videasy drama player: iframe-only, so it keeps the whole stage.
-            Our chrome lives in one top band for every framed provider — see the
-            `providerMode` block below — because a provider's own play, seek and
-            volume always sit along its bottom edge. */}
+        {/* An iframe-only server (VidBox, Videasy) keeps the whole stage for its
+            own player, with our native bar over its bottom edge — see the
+            `providerMode` blocks below. */}
         {usingAutoembed && iframeServerUrl && providerFramed && (
           <div className="absolute inset-0 z-[60] bg-black">
             <iframe
               key={iframeServerUrl}
               src={iframeServerUrl}
-              title={`${title} — Drama`}
+              title={`${title} — ${providerName}`}
               className="absolute inset-0 size-full border-0"
               allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"
               allowFullScreen
@@ -1690,125 +1801,15 @@ export default function PlayerStage({
                 HTTP 200, so no probe can tell it from a working player. Say out
                 loud which host is showing and where to go instead — that is the
                 one case where a framed provider page reads as a broken site. It
-                is said from the top band, so this page keeps its bottom edge. */}
+                is said from the top band, the one edge our bar leaves free. */}
           </div>
         )}
 
-        {/* Our design over a provider's own player, along the TOP edge. It keeps
-            the native bar's gradient and buttons, but only the ones that really
-            act on a framed page: server, open-the-provider, fullscreen. The
-            things to *do* with the title live in the row under the box.
-            A scrubber or volume slider would be decoration here — this site
-            cannot seek, mute or read the time of a cross-origin player — and the
-            band ignores clicks except on its buttons, which leaves the provider's
-            own play/seek/volume along its bottom edge completely usable. */}
-        {providerMode && (
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-[61] bg-gradient-to-b from-black/90 via-black/55 to-transparent px-2 pb-9 pt-2 max-sm:pb-6 max-sm:pt-1.5 sm:px-4">
-            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 sm:gap-x-2.5">
-              {/* Stepper + status travel together: on a phone they share the row
-                  under the buttons, since a stepper, two labels and two icons need
-                  width the player does not have. `contents` at sm+ folds them back
-                  into the single desktop row. The status line says what this state
-                  is and why, and opens the resolver log when tapped. */}
-              <div className="flex min-w-0 items-center gap-x-1.5 max-sm:order-last max-sm:basis-full sm:contents">
-                {framedEpisodeStepper && (
-                  <EpisodeStepper episode={aeEpisode} onChange={setAeEpisode} />
-                )}
-                <button
-                  type="button"
-                  onClick={() => setEmbedPanelOpen(true)}
-                  className={`pointer-events-auto min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-white/10 ${
-                    embedStatus === "failed" && !embedCarried ? "text-amber-200" : "text-white/70"
-                  }`}
-                  title={
-                    embedStatus === "failed"
-                      ? "No provider gave a stream this site could play, so the provider's own player is shown"
-                      : "Every provider is being tried at once — the first stream that answers plays here"
-                  }
-                >
-                  <span className="hidden font-semibold text-white sm:inline">{title} · </span>
-                  {embedStatus === "resolving"
-                    ? (
-                        <>
-                          <span className="sm:hidden">Trying every server for a stream…</span>
-                          <span className="hidden sm:inline">
-                            Trying every server for an ad-free stream…
-                          </span>
-                        </>
-                      )
-                    : embedStatus === "failed" && embedBlocked
-                      ? (
-                          <>
-                            <span className="sm:hidden">
-                              {providerName} refused our resolver
-                            </span>
-                            <span className="hidden sm:inline">
-                              {providerName} refused our resolver but serves you — press play
-                              on its screen
-                            </span>
-                          </>
-                        )
-                      : embedStatus === "failed" && !embedCarried
-                        ? (
-                            <>
-                              <span className="sm:hidden">
-                                {providerName} — may not carry this
-                              </span>
-                              <span className="hidden sm:inline">
-                                {providerName} may not carry this title — try another server
-                              </span>
-                            </>
-                          )
-                      : embedStatus === "failed"
-                        ? (
-                            /* Only reachable once our own play button handed the box
-                               over, so this says what is true then: it is running. */
-                            <>
-                              <span className="sm:hidden">
-                                {providerName} is running the film
-                              </span>
-                              <span className="hidden sm:inline">
-                                {providerName} is running the film — its seek and volume sit on its
-                                screen
-                              </span>
-                            </>
-                          )
-                        : `${providerName} is running the film`}
-                </button>
-              </div>
-              <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-1">
-                <ServerSwitcher
-                  servers={servers}
-                  activeKey={server}
-                  onSelect={selectServer}
-                  open={serverOpen}
-                  setOpen={setServerOpen}
-                  align="right"
-                  drop="down"
-                />
-                <a
-                  href={providerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-                  aria-label="Open the provider directly"
-                  title="If the player stays blank, open the provider directly"
-                >
-                  <ExternalLink className="size-5" />
-                </a>
-                <button
-                  type="button"
-                  onClick={toggleFullscreen}
-                  className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
-                  aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-                  title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-                >
-                  {fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Nothing of ours goes along the TOP edge any more: a provider paints its
+            own title there, and two labels on one line read as a broken page. All
+            of our chrome — including the status line and the link that opens the
+            provider in its own tab — lives in the one bottom bar, the same bar
+            every other server uses. */}
 
         {/* Every embed server on this title answered with an error page: say so
             plainly rather than framing the provider's stack trace as a player. */}
@@ -1941,26 +1942,36 @@ export default function PlayerStage({
           </div>
         )}
 
-        {/* Controls — float up from the bottom edge on hover/tap. Hidden while a
-            provider page holds the box; our bar above it takes the edge instead. */}
+        {/* Controls — float up from the bottom edge on hover/tap. Over a framed
+            provider this same bar is the bar, painted on top of its page at a
+            higher z, and it stays up because a cross-origin frame gives no
+            pointer signal back to us to auto-hide on. Its backing goes solid
+            there: the provider's own play, seek and volume sit along the bottom
+            of its page, and a wash they showed through read as two players. */}
         <div
           onMouseEnter={() => setHoveringControls(true)}
           onMouseLeave={() => setHoveringControls(false)}
-          className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2 pb-2.5 pt-10 transition-all duration-300 ease-out max-sm:pt-6 sm:px-4 ${
+          className={`absolute inset-x-0 bottom-0 px-2 pb-2.5 pt-10 transition-all duration-300 ease-out max-sm:pt-6 sm:px-4 ${
             providerMode
-              ? "hidden"
-              : controlsVisible || !playing
-                ? "translate-y-0 opacity-100"
-                : "pointer-events-none translate-y-3 opacity-0"
+              ? "z-[61] bg-gradient-to-t from-black via-black/95 to-black/75"
+              : "z-20 bg-gradient-to-t from-black/95 via-black/70 to-transparent"
+          } ${
+            providerMode || controlsVisible || !playing
+              ? "translate-y-0 opacity-100"
+              : "pointer-events-none translate-y-3 opacity-0"
           }`}
         >
-          {/* Progress / seek bar — click to jump, drag to scrub. */}
+          {/* Progress / seek bar — click to jump, drag to scrub. Over a framed
+              provider it is the same line at the same height, only dimmed: this
+              site cannot seek a page it cannot read. */}
           <div
             ref={scrubRef}
             data-player-scrubber
-            className="group/scrub mb-2 flex h-6 cursor-pointer touch-none items-center"
+            className={`group/scrub mb-2 flex h-6 touch-none items-center transition-opacity ${
+              providerMode ? "opacity-45" : "cursor-pointer"
+            }`}
             onPointerDown={(e) => {
-              if (duration <= 0) return;
+              if (providerMode || duration <= 0) return;
               try {
                 e.currentTarget.setPointerCapture(e.pointerId);
               } catch {
@@ -2015,14 +2026,35 @@ export default function PlayerStage({
           </div>
 
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 sm:gap-x-2.5">
-            <span className="w-10 shrink-0 text-[11px] font-medium tabular-nums text-white/80">
-              {formatTime(currentTime)}
-            </span>
+            {providerMode ? (
+              /* The clock's slot names the host running the film instead — same
+                 footprint, and it still opens the resolver log the way the top
+                 band used to. */
+              <button
+                type="button"
+                onClick={() => setEmbedPanelOpen(true)}
+                className={`max-w-[42%] shrink-0 truncate rounded-lg px-1 py-0.5 text-left text-[11px] font-medium tabular-nums text-white/80 transition-colors hover:bg-white/10 ${
+                  embedStatus === "failed" && !embedCarried ? "text-amber-200" : ""
+                }`}
+                title={providerSlotTitle}
+              >
+                {providerSlot}
+              </button>
+            ) : (
+              <span className="w-10 shrink-0 text-[11px] font-medium tabular-nums text-white/80">
+                {formatTime(currentTime)}
+              </span>
+            )}
+            {framedEpisodeStepper && (
+              <EpisodeStepper episode={aeEpisode} onChange={setAeEpisode} />
+            )}
             <button
               type="button"
               onClick={() => controls.togglePlay()}
-              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${INERT}`}
               aria-label={playing ? "Pause" : "Play"}
+              disabled={providerMode}
+              title={providerMode ? inertTitle : undefined}
             >
               {playing ? (
                 <Pause className="size-5 fill-current" />
@@ -2033,27 +2065,33 @@ export default function PlayerStage({
             <button
               type="button"
               onClick={() => seekBy(-10)}
-              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${INERT}`}
               aria-label="Back 10 seconds"
+              disabled={providerMode}
+              title={providerMode ? inertTitle : undefined}
             >
               <RotateCcw className="size-4" />
             </button>
             <button
               type="button"
               onClick={() => seekBy(10)}
-              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${INERT}`}
               aria-label="Forward 10 seconds"
+              disabled={providerMode}
+              title={providerMode ? inertTitle : undefined}
             >
               <RotateCw className="size-4" />
             </button>
 
             {/* Volume: hover-expand on desktop, plain mute toggle on touch. */}
-            <div className="group/vol flex items-center max-sm:hidden">
+            <div className={`group/vol flex items-center max-sm:hidden ${providerMode ? "w-9" : ""}`}>
               <button
                 type="button"
                 onClick={() => controls.toggleMute()}
-                className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+                className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${INERT}`}
                 aria-label={muted ? "Unmute" : "Mute"}
+                disabled={providerMode}
+                title={providerMode ? inertTitle : undefined}
               >
                 {muted || volume === 0 ? (
                   <VolumeX className="size-5" />
@@ -2063,23 +2101,29 @@ export default function PlayerStage({
                   <Volume2 className="size-5" />
                 )}
               </button>
-              <div className="w-0 overflow-hidden opacity-0 transition-all duration-300 group-hover/vol:w-24 group-hover/vol:opacity-100 group-focus-within/vol:w-24 group-focus-within/vol:opacity-100">
-                <Slider
-                  value={[muted ? 0 : Math.round(volume * 100)]}
-                  max={100}
-                  step={1}
-                  onValueChange={(val) => controls.setVolume((val[0] ?? 0) / 100)}
-                  className="w-24 [&_[data-slot=slider-track]]:bg-white/25 [&_[data-slot=slider-range]]:bg-primary [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-primary [&_[data-slot=slider-thumb]]:bg-white"
-                  aria-label="Volume"
-                />
-              </div>
+              {/* A slider that opened over a provider's page would drag our own
+                  hidden element's volume — a control that only looks alive. */}
+              {!providerMode && (
+                <div className="w-0 overflow-hidden opacity-0 transition-all duration-300 group-hover/vol:w-24 group-hover/vol:opacity-100 group-focus-within/vol:w-24 group-focus-within/vol:opacity-100">
+                  <Slider
+                    value={[muted ? 0 : Math.round(volume * 100)]}
+                    max={100}
+                    step={1}
+                    onValueChange={(val) => controls.setVolume((val[0] ?? 0) / 100)}
+                    className="w-24 [&_[data-slot=slider-track]]:bg-white/25 [&_[data-slot=slider-range]]:bg-primary [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-primary [&_[data-slot=slider-thumb]]:bg-white"
+                    aria-label="Volume"
+                  />
+                </div>
+              )}
             </div>
             {/* Touch devices have no hover — show the mute toggle here instead. */}
             <button
               type="button"
               onClick={() => controls.toggleMute()}
-              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15 sm:hidden"
+              className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 sm:hidden ${INERT}`}
               aria-label={muted ? "Unmute" : "Mute"}
+              disabled={providerMode}
+              title={providerMode ? inertTitle : undefined}
             >
               {muted || volume === 0 ? (
                 <VolumeX className="size-5" />
@@ -2090,7 +2134,11 @@ export default function PlayerStage({
               )}
             </button>
 
-            <span className="w-10 shrink-0 text-[11px] font-medium tabular-nums text-white/80">
+            <span
+              className={`shrink-0 text-[11px] font-medium tabular-nums text-white/80 ${
+                providerMode ? "hidden" : "w-10"
+              }`}
+            >
               {formatTime(duration)}
             </span>
 
@@ -2103,8 +2151,24 @@ export default function PlayerStage({
             {/* Which language the film is heard in, beside the server that
                 carries it: a viewer picks a source and its voice together, and
                 the pick is still there in fullscreen, where the row under the
-                box is not. */}
-            {(servers.length > 1 || dubs.length > 0 || audioTracks.length > 0) && (
+                box is not. Over a framed provider the chip holds its place in
+                the row but cannot be picked — the audio belongs to that page. */}
+            {providerMode ? (
+              <div className="relative shrink-0" data-player-menu>
+                <button
+                  type="button"
+                  disabled
+                  className={`flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15 ${INERT}`}
+                  aria-label="Audio language"
+                  title={inertTitle}
+                >
+                  <Languages className="size-5 shrink-0" />
+                  <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">
+                    Language
+                  </span>
+                </button>
+              </div>
+            ) : servers.length > 1 || dubs.length > 0 || audioTracks.length > 0 ? (
               <LanguageMenu
                 tracks={audioTracks}
                 activeTrack={activeAudioTrack}
@@ -2121,7 +2185,7 @@ export default function PlayerStage({
                 open={langOpen}
                 setOpen={setLangOpen}
               />
-            )}
+            ) : null}
 
             {/* Playback server — switch between this site's file and the embed
                 servers. Shown whenever more than one server is available. */}
@@ -2136,7 +2200,28 @@ export default function PlayerStage({
               />
             )}
 
-            {/* Settings gear: night mode, loop, rotate, captions, speed, quality. */}
+            {/* The one thing on this row that always reaches a framed page: the
+                provider's own tab, where its play, seek and volume do work.
+                Below `sm` it steps out — Share › Open provider page under the
+                box says the same thing, and the extra chip is what pushed our
+                phone bar onto a third row over a 275 px picture. */}
+            {providerMode && (
+              <a
+                href={providerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hidden shrink-0 rounded-lg p-2 text-white transition-colors hover:bg-white/15 sm:flex"
+                aria-label="Open the provider directly"
+                title={`${providerName}'s own page — its controls work there`}
+              >
+                <ExternalLink className="size-5" />
+              </a>
+            )}
+
+            {/* Settings gear: night mode, loop, rotate, captions, speed, quality.
+                Every one of those acts on our own media element, so over a framed
+                provider it is switched off like the rest of them — the wrapper
+                stays, it holds the row's right edge up. */}
             <div className="relative ml-auto shrink-0" data-player-menu>
               <button
                 type="button"
@@ -2145,18 +2230,19 @@ export default function PlayerStage({
                   setSettingsView("main");
                   setLangOpen(false);
                 }}
-                className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${
+                className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${INERT} ${
                   settingsOpen || nightMode || loop || rotation !== 0 || playbackRate !== 1 || activeQuality || activeSubtitle
                     ? "text-primary"
                     : ""
                 }`}
                 aria-label="Player settings"
-                title="Settings"
+                disabled={providerMode}
+                title={providerMode ? inertTitle : "Settings"}
               >
                 <Settings className="size-5" />
               </button>
 
-              {settingsOpen && (
+              {!providerMode && settingsOpen && (
                 <div className="absolute bottom-full right-0 z-30 mb-2 w-[264px] max-w-[86vw] overflow-hidden rounded-2xl border border-white/15 bg-black/95 py-1.5 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur">
                   {settingsView === "main" && (
                     <>
@@ -2309,9 +2395,10 @@ export default function PlayerStage({
             <button
               type="button"
               onClick={togglePip}
-              className="rounded-lg p-2 text-white transition-colors hover:bg-white/15"
+              className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${INERT}`}
               aria-label="Picture-in-picture"
-              title="Picture-in-picture"
+              title={providerMode ? inertTitle : "Picture-in-picture"}
+              disabled={providerMode}
             >
               <PictureInPicture2 className="size-5" />
             </button>
@@ -2368,7 +2455,7 @@ export default function PlayerStage({
               {saved ? "Saved" : "Save"}
             </button>
           )}
-          <ShareMenu title={title} providerUrl={providerUrl} />
+          <ShareMenu providerUrl={providerUrl} />
         </div>
       )}
     </div>
@@ -2827,15 +2914,10 @@ function DownloadMenu({
   })();
 
   return (
-    <div
-      className="relative shrink-0"
-      data-player-menu
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
+    <div className="relative shrink-0" data-player-menu>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => setOpen(!open)}
         className={
           tone === "chip"
             ? CHIP
@@ -3269,27 +3351,12 @@ function LanguageMenu({
 
 /* ------------------------- Share menu (under the box) ------------------------- */
 
-/** The apps a viewer actually sends a film through, plus the plain link. This
- *  is a decision about the title, not about playback, so it lives under the box
- *  where the bar's auto-hide can never take it away mid-share. */
-function ShareMenu({ title, providerUrl }: { title: string; providerUrl?: string }) {
+/** Copy the link, or open the provider's own page. This is a decision about the
+ *  title, not about playback, so it lives under the box where the bar's
+ *  auto-hide can never take it away mid-share. */
+function ShareMenu({ providerUrl }: { providerUrl?: string }) {
   const [open, setOpen] = useState(false);
   const url = typeof window === "undefined" ? "" : window.location.href;
-  const text = `Watch “${title}” on FilmFlix`;
-  const links = [
-    {
-      label: "WhatsApp",
-      href: `https://wa.me/?text=${encodeURIComponent(`${text} ${url}`)}`,
-    },
-    {
-      label: "Telegram",
-      href: `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(title)}`,
-    },
-    {
-      label: "Facebook",
-      href: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`,
-    },
-  ];
   const item =
     "flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-popover-foreground transition-colors hover:bg-muted";
 
@@ -3336,18 +3403,6 @@ function ShareMenu({ title, providerUrl }: { title: string; providerUrl?: string
               <Link2 className="size-3.5" />
               Copy link
             </button>
-            {links.map((l) => (
-              <a
-                key={l.label}
-                href={l.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => setOpen(false)}
-                className={item}
-              >
-                {l.label}
-              </a>
-            ))}
             {providerUrl && (
               <>
                 <div className="my-1 h-px bg-border/60" />

@@ -27,6 +27,11 @@
  *              so the Worker opens it without running their code — see
  *              worker/src/xpass.ts — and its ladders are plain H.264 HLS.
  *
+ *  A vidfast/ythd.org server used to sit here too. It is gone: its inner player
+ *  is `data.vidsrc.sh` — the same VidSrc back end the deleted VidSrc server had
+ *  — and that API answers recent TMDB ids with a different film's file, so a
+ *  viewer could be handed the wrong movie with no way for us to check.
+ *
  *  All of them accept TMDB numeric ids for movies and TV. */
 
 const VIDBOX_BASE = "https://vidlink.pro";
