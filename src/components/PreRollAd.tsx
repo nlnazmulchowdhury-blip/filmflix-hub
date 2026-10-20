@@ -222,9 +222,11 @@ export default function PreRollAd({ ad, onDone }: { ad: VastAd; onDone: () => vo
       {/* The reference skin: round transport buttons along the left, the way out
           along the right, and the ad's own progress line on the bottom edge. The
           line is a read-out, not a scrubber — no network lets a viewer jump
-          through a paid impression. */}
-      <div className="absolute inset-x-0 bottom-0">
-        <div className="flex items-center justify-between gap-2 p-2 sm:p-3">
+          through a paid impression. `touch-manipulation` matters more than it
+          looks: without it a phone holds the first tap for a possible
+          double-tap-zoom, and a viewer who means Skip gets nothing. */}
+      <div className="absolute inset-x-0 bottom-0 [&_button]:touch-manipulation">
+        <div className="flex items-center justify-between gap-2 p-2 pb-3 sm:p-3">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -262,13 +264,17 @@ export default function PreRollAd({ ad, onDone }: { ad: VastAd; onDone: () => vo
           <div className="flex items-center gap-2">
             <button
               type="button"
+              /* The whole creative is a clickable surface, so a Skip tap that
+                 lands a few pixels off opens the advertiser's page instead. The
+                 way out therefore gets the biggest target on the bar, and it
+                 keeps a label at every width — an icon alone is a guess. */
               onClick={() => {
                 if (!canSkip) return;
                 fireOnce("skip");
                 onDone();
               }}
               disabled={!canSkip}
-              className="flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-sm transition-colors enabled:hover:bg-black/90 disabled:opacity-60"
+              className="pointer-events-auto flex min-h-11 items-center gap-1.5 rounded-full bg-black/70 px-4 py-2 text-xs font-semibold text-white backdrop-blur-sm transition-colors enabled:hover:bg-black/90 disabled:opacity-60"
             >
               {canSkip ? "Skip" : `Skip in ${toSkip}s`}
               {canSkip && <SkipForward className="size-3.5" />}
