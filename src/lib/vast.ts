@@ -26,12 +26,21 @@ export const HILLTOP_BANNER_ZONE = "7535489";
 export const HILLTOP_BANNER_VAST_TAG =
   "https://unfoldedtrade.com/dZmaF.zbd-GdNevfZgG_Ui/jcknlN-ynYozp1q2_YsXtNu0va-Wx0ymzcA2_lCkDPESFZ-6HbI2J5Kl_aMWNQO9PN-zRUSzTNUT_QW5XNYwZ";
 
-/** TEST KNOB — seconds every pre-roll is pinned to. Above 0 the ad ignores the
- *  film's first frame and runs this long, closing itself at that second. The way
- *  out is not part of this knob: Skip always opens after five seconds no matter
- *  how long the ad is held. Set back to 0 for the shipped rule: the ad dies the
- *  moment a frame of the movie arrives. */
+/** TEST KNOB — seconds every pre-roll is cut off at. Above 0 the creative ends
+ *  at this many seconds whatever it asked for, which is how the owner inspects
+ *  the ad at a fixed length. Set back to 0 for the shipped rule: the ad runs the
+ *  full length the network handed out and closes itself at its end. */
 export const AD_TEST_SECONDS = 0;
+
+/** How long a viewer may be held before the way out opens, counted on the
+ *  creative's own clock from the moment it took the box. */
+export const AD_SKIP_AFTER = 5;
+
+/** When this creative's way out opens: a network that asks for a longer count is
+ *  answered with its own number, a shorter one is raised to five, and an
+ *  unskippable creative still gets five — the viewer never owes an ad more. */
+export const adSkipSeconds = (ad: Pick<VastAd, "skipOffset">) =>
+  Math.min(ad.skipOffset ?? AD_SKIP_AFTER, AD_SKIP_AFTER);
 
 export interface VastAd {
   /** The creative itself — a progressive file we can point a `<video>` at. */

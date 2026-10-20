@@ -1,12 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2, Pause, Play, SkipForward, Volume2, VolumeX } from "lucide-react";
 import { API_BASE } from "@/lib/api";
-import { ping, type VastAd } from "@/lib/vast";
-
-/** How long a viewer can be held on an ad before they may leave: the film is
- *  waiting behind this box, and a trapped viewer blames the site rather than the
- *  network. A creative that offers a way out sooner gets the sooner one. */
-const SKIP_AFTER = 5;
+import { adSkipSeconds, ping, type VastAd } from "@/lib/vast";
 
 /** How long we wait for a creative to produce a picture before giving the box
  *  back. An ad that never paints is a black rectangle over a film that is
@@ -25,9 +20,10 @@ const ROUND =
 /**
  * One HilltopAds VAST creative, played by our own media element while the film
  * is still loading. Nothing about the film's player is handed over: this is a
- * separate element on top of the stage, it starts muted so it can never steal
- * the film's sound, and it is gone the moment the first frame of the movie
- * arrives — even mid-ad.
+ * separate element on top of the stage and it starts muted so it can never steal
+ * the film's sound. The creative gets its full length — however many seconds or
+ * minutes the network asked for — and gives the box back when it ends by itself
+ * or when the viewer skips it, which is theirs after five seconds.
  */
 export default function PreRollAd({ ad, onDone }: { ad: VastAd; onDone: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -51,7 +47,11 @@ export default function PreRollAd({ ad, onDone }: { ad: VastAd; onDone: () => vo
       guarantee, so the re-mute guard below stands down. */
   const touchedSound = useRef(false);
 
-  const total = Math.max(mediaTotal, ad.duration);
+  /* The creative runs as long as the network said it runs. Its declared length
+     is the promise, so it outranks the file's own — a 15-second spot delivered as
+     a longer file ends at fifteen, and one that never declared anything gets the
+     element's duration instead. */
+  const total = ad.duration > 0 ? ad.duration : mediaTotal;
 
   /* Full-screen is asked of this box, so the icon has to follow what the browser
      actually did rather than what we last wanted. */
@@ -147,7 +147,9 @@ export default function PreRollAd({ ad, onDone }: { ad: VastAd; onDone: () => vo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const skipAt = Math.min(ad.skipOffset ?? SKIP_AFTER, SKIP_AFTER);
+  /* Five seconds of the creative's own clock, never more: after that the way out
+     is the viewer's to take, and they may leave without ending the ad early. */
+  const skipAt = adSkipSeconds(ad);
   const canSkip = elapsed >= skipAt;
   /* The button counts down to the moment the viewer may leave, not to the end of
      the creative — a 44-second ad that says "skip in 41s" when it will let them

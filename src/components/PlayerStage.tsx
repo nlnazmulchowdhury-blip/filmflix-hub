@@ -1002,13 +1002,20 @@ export default function PlayerStage({
 
   /* The one gap on this page that belongs to nobody but us is the wait between
      the viewer's click and the server's first frame, so that is the only place
-     an ad may appear: it paints over our own cover, the film keeps loading
-     behind it, and it is gone the moment a frame arrives — even mid-ad. It never
-     sits over a provider's page, and a load that answers fast never sees it. */
+     an ad may appear: it paints over our own cover while the film loads. Once it
+     has the box it keeps it for the creative's whole length — a frame arriving
+     behind it does not cut it short — and the movie takes the stage back when
+     the ad ends by itself or when the viewer skips it, which is theirs after
+     five seconds. It never sits over a provider's page, and a load that answers
+     fast never sees it. */
   const [vast, setVast] = useState<VastAd | null>(null);
   const [adUp, setAdUp] = useState(false);
   const adShownFor = useRef("");
   const adLastAt = useRef(0);
+  /* Where the film's second hand stood when the ad took the box, or -1 while no
+     ad has one to give back. The film keeps running muted behind the creative,
+     so this is the mark it is brought back to when the ad is done. */
+  const adFilmMark = useRef(-1);
   const stageLoading =
     (awaitingPlayer || streamWarming) && !embedDead && !providerFramed && !raceSpent;
 
@@ -1027,25 +1034,20 @@ export default function PlayerStage({
     };
   }, [raceKey]);
 
-  useEffect(() => {
-    if (!adUp) return;
-    /* TEST KNOB: while AD_TEST_SECONDS is above 0 the ad keeps the box for its
-       pinned length, so the film's arrival must not dismiss it — the timer below
-       does, and the film waits underneath with its sound off. */
-    if (!stageLoading && AD_TEST_SECONDS <= 0) setAdUp(false);
-  }, [adUp, stageLoading]);
-
+  /* TEST KNOB: above 0 the creative is cut off at this many seconds whatever it
+     asked for, which is how the owner looks at the ad for a fixed length. The
+     shipped rule needs no timer: the ad ends when its own length is done. */
   useEffect(() => {
     if (!adUp || AD_TEST_SECONDS <= 0) return;
     const stop = setTimeout(() => setAdUp(false), AD_TEST_SECONDS * 1000);
     return () => clearTimeout(stop);
   }, [adUp]);
 
-  /* An ad owns the sound while it is up. The film is deliberately not paused for
-     it — a paused element stalls hls.js's own recovery and the frame never comes
-     back — so it is muted instead, and gets its volume at the hand-off. A viewer
-     who had the film muted keeps it muted, and one who unmutes it mid-ad is not
-     muted again behind their back. */
+  /* An ad owns the sound and the box while it is up. The film is deliberately not
+     paused for it — a paused element stalls hls.js's own recovery and the frame
+     never comes back — so it is muted instead, and gets its volume and its place
+     back at the hand-off. A viewer who had the film muted keeps it muted, and one
+     who unmutes it mid-ad is not muted again behind their back. */
   const adMutedFilm = useRef(false);
   useEffect(() => {
     if (adUp && !muted) {
@@ -1054,6 +1056,16 @@ export default function PlayerStage({
     } else if (!adUp) {
       if (adMutedFilm.current && muted) controls.toggleMute();
       adMutedFilm.current = false;
+      /* The film ran the whole time behind a creative nobody was watching, so it
+         is brought back to where the ad found it: a viewer who sat through a
+         minute of advertisement is not owed minute one of the film's opening.
+         Only an ad that actually held the box is paid back — the -1 mark says
+         there was none, so a title resuming mid-film keeps its place. */
+      if (adFilmMark.current >= 0) {
+        const drift = currentTime - adFilmMark.current;
+        adFilmMark.current = -1;
+        if (drift > 1) controls.seekBy(-drift);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adUp]);
@@ -1069,6 +1081,7 @@ export default function PlayerStage({
       if (Date.now() - adLastAt.current < 45_000) return;
       adShownFor.current = key;
       adLastAt.current = Date.now();
+      adFilmMark.current = currentTime;
       setAdUp(true);
     }, 1_500);
     return () => clearTimeout(t);
@@ -1753,7 +1766,8 @@ export default function PlayerStage({
         )}
 
         {/* The ad belongs to the wait, not to the movie: it is painted over our
-            own loading cover and unmounted the moment the film has a frame. */}
+            own loading cover and keeps the box for the creative's whole length,
+            handing the film back when it ends or when the viewer skips it. */}
         {adUp && vast && <PreRollAd ad={vast} onDone={() => setAdUp(false)} />}
 
         {/* Same beat on a chip that can only show the provider's own page: its
