@@ -9,7 +9,7 @@
  *   - the file is played by *our* element, so the film's volume, seek bar and
  *     server chips are never handed to the network's player.
  */
-import { API_BASE } from "@/lib/api";
+import { apiBase, fetchWithFailover } from "@/lib/apiConfig";
 
 export const HILLTOP_ZONE = "7535233";
 
@@ -58,7 +58,9 @@ export interface VastAd {
   trackings: Record<string, string[]>;
 }
 
-const pipe = (url: string) => `${API_BASE}/embed/proxy?url=${encodeURIComponent(url)}`;
+/** Built per call: the pipe follows whichever backend is live, and a byte pipe
+ *  cannot fail over once the creative is streaming. */
+const pipe = (url: string) => `${apiBase()}/embed/proxy?url=${encodeURIComponent(url)}`;
 
 function firstText(doc: Document | Element, tag: string): string {
   const el = doc.getElementsByTagName(tag)[0];
@@ -89,7 +91,12 @@ function parseOffset(raw: string, total: number): number | null {
 
 async function getXml(url: string, signal: AbortSignal): Promise<Document | null> {
   try {
-    const res = await fetch(pipe(url), { signal });
+    /* The wrapper chain is a handful of small XML documents, so it can use the
+       failover client: a spent account costs an impression otherwise wonnable.
+       Only the creative's own bytes are pinned to one backend, because a
+       stream cannot change account mid-play. */
+    const full = new URL(pipe(url));
+    const res = await fetchWithFailover(`${full.pathname}${full.search}`, { signal });
     if (!res.ok) return null;
     const body = await res.text();
     /* A pipe that answers with our own error JSON is a miss, not an ad. */

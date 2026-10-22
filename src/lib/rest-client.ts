@@ -15,20 +15,24 @@
  * programming error: DEV-only loud reference so a missing route is caught
  * during development, and a rejected promise in production.
  *
- * `useQuery` refetches on mount + focus + every REFRESH_MS while the tab is
- * visible — not Convex's websocket granularity, but plenty for a catalog,
- * watchlist and admin panels (the Worker had no live subscriptions either in
- * its Convex mode? it did; the pages refreshed on route change only).
+ * `useQuery` refetches on mount, every REFRESH_MS while the tab is visible, and
+ * as soon as any mutation completes — not Convex's websocket granularity, but
+ * plenty for a catalog, watchlist and admin panels (the Worker had no live
+ * subscriptions either in its Convex mode? it did; the pages refreshed on route
+ * change only).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getToken } from "./api";
+import { fetchWithFailover } from "./apiConfig";
 
-/** Same rule as lib/api.ts: VITE_API_BASE wins, else the known Worker host. */
-const BASE = import.meta.env.VITE_API_BASE?.trim()
-  ? import.meta.env.VITE_API_BASE.trim()
-  : "https://filmflix-hub.nlnazmulchowdhury.workers.dev";
-const REFRESH_MS = 30_000;
+/** The host is decided per call by lib/apiConfig.ts, not pinned here. */
+/** How often a mounted query re-asks the Worker. It used to be 30 s, and one
+ *  idle Landing tab burned ~2 Worker requests a minute on that alone; nothing
+ *  here is live enough to need it. A local save refreshes mounted queries
+ *  immediately instead, so the rest of the interval only has to catch other
+ *  people's changes. */
+const REFRESH_MS = 5 * 60_000;
 
 export class NotImplementedError extends Error {
   constructor(fn: string) {
@@ -160,6 +164,11 @@ export const WORKER_MAP: Record<
 
 const pending = { read: new Map<string, Promise<any>>() };
 
+/** Every mounted query's immediate refetch. A mutation writes through the
+ *  Worker, so the panels that show its result want it now — under the old 30 s
+ *  poll they waited instead, and the whole site paid for that polling. */
+const wakeups = new Set<() => void>();
+
 /** The REST call behind every shimmed hook. Route table drives it. */
 export async function callWorker<T = any>(key: string, args?: any): Promise<T> {
   const route = WORKER_MAP[key];
@@ -167,10 +176,9 @@ export async function callWorker<T = any>(key: string, args?: any): Promise<T> {
     throw new NotImplementedError(key);
   }
   const method = route.method;
-  const url = `${BASE}${route.path(args)}`;
   const token = getToken();
   const hasBody = method === "POST" || method === "PATCH" || method === "DELETE";
-  const res = await fetch(url, {
+  const res = await fetchWithFailover(route.path(args), {
     method,
     headers: {
       ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -232,13 +240,13 @@ export function useQuery<T = any>(
   useEffect(() => {
     void load(true);
     if (skipped) return;
-    const onFocus = () => void load(true);
-    window.addEventListener("focus", onFocus);
+    const wake = () => void load(true);
+    wakeups.add(wake);
     const t = window.setInterval(() => {
       if (document.visibilityState === "visible") void load(true);
     }, REFRESH_MS);
     return () => {
-      window.removeEventListener("focus", onFocus);
+      wakeups.delete(wake);
       window.clearInterval(t);
     };
   }, [load]);
@@ -254,8 +262,10 @@ export function useMutation(
   return useCallback(
     async <T = any,>(args?: any): Promise<T> => {
       const data = await call(key, args);
-      // Cache-bust so dependent queries refetch on their next tick.
+      // Cache-bust, and let every mounted query pick the write up now rather
+      // than on the next poll tick — the poll is minutes long.
       pending.read.clear();
+      for (const wake of [...wakeups]) wake();
       return (data && typeof data === "object" && "result" in data ? data.result : data) as T;
     },
     [key],

@@ -21,7 +21,7 @@
  *    load reports failure rather than saving ciphertext.
  */
 import { Transmuxer } from "mux.js/lib/mp4/transmuxer";
-import { API_BASE } from "@/lib/api";
+import { apiBase } from "@/lib/apiConfig";
 
 /** ArrayBuffer-backed view — WebCrypto and Blob both reject the generic
  *  `Uint8Array<ArrayBufferLike>` in this TS lib configuration. */
@@ -55,7 +55,7 @@ export function proxyUrl(url: string, referer?: string, name?: string): string {
   const q = new URLSearchParams({ url });
   if (referer) q.set("ref", referer);
   if (name) q.set("name", name);
-  return `${API_BASE}/embed/proxy?${q.toString()}`;
+  return `${apiBase()}/embed/proxy?${q.toString()}`;
 }
 
 interface FetchOpts {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2, Pause, Play, SkipForward, Volume2, VolumeX } from "lucide-react";
-import { API_BASE } from "@/lib/api";
+import { apiBase } from "@/lib/apiConfig";
 import { adSkipSeconds, ping, type VastAd } from "@/lib/vast";
 
 /** How long we wait for a creative to produce a picture before giving the box
@@ -211,7 +211,7 @@ export default function PreRollAd({ ad, onDone }: { ad: VastAd; onDone: () => vo
              too, the ad is abandoned — the movie must not be made to wait for a
              creative that will not paint. */
           if (src === ad.videoUrl)
-            setSrc(`${API_BASE}/embed/proxy?url=${encodeURIComponent(ad.videoUrl)}`);
+            setSrc(`${apiBase()}/embed/proxy?url=${encodeURIComponent(ad.videoUrl)}`);
           else {
             /* 403 is the VAST code for "the creative would not display", which is
                exactly what the network needs to know it lost this impression. */

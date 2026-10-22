@@ -7,7 +7,11 @@ CREATE TABLE IF NOT EXISTS users (
   name          TEXT,
   role          TEXT,               -- 'admin' | 'member' | NULL
   is_anonymous  INTEGER NOT NULL DEFAULT 0,
-  created_at    INTEGER NOT NULL
+  created_at    INTEGER NOT NULL,
+  /* Added by ALTER on the live database long after this file was written, so a
+     fresh backend built from here used to reject every seeded row. */
+  password_hash TEXT,
+  password_salt TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (

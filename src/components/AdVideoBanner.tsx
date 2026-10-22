@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
-import { API_BASE } from "@/lib/api";
+import { apiBase } from "@/lib/apiConfig";
 import {
   HILLTOP_BANNER_VAST_TAG,
   fetchHilltopVastAds,
@@ -159,7 +159,7 @@ export default function AdVideoBanner({
             /* One retry through our pipe: a creative CDN that gates on Referer
                still answers a request that carries none of the browser's. */
             if (src === ad.videoUrl)
-              setSrc(`${API_BASE}/embed/proxy?url=${encodeURIComponent(ad.videoUrl)}`);
+              setSrc(`${apiBase()}/embed/proxy?url=${encodeURIComponent(ad.videoUrl)}`);
             else if (ad.errorUrl) ping([ad.errorUrl.replace(/\[ERRORCODE\]/gi, "403")]);
           }}
         />

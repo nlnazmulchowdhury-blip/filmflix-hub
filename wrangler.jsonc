@@ -1,6 +1,9 @@
 {
   "$schema": "./worker/wrangler.jsonc",
   "name": "filmflix-hub",
+  /* Pinned: wrangler otherwise picks an account from whatever token it finds,
+     and the wrong one here would deploy over a different backend. */
+  "account_id": "901b2fc2dd5d011e38c765b523831572",
   "main": "./worker/src/index.ts",
   "compatibility_date": "2026-08-10",
   "compatibility_flags": ["nodejs_compat"],

@@ -1,0 +1,37 @@
+{
+	/* The third failover backend. Same code as ../wrangler.jsonc, deployed to the
+     Filmbdcine account, so a viewer whose request is refused by both of the
+     first two accounts still gets served — and the daily free-tier ceiling is
+     counted per account, so a third one is real headroom rather than a spare.
+     Deploy with:
+       XDG_CONFIG_HOME=C:/Users/nlnaz/ff-cinema-auth npx wrangler deploy -c wrangler.cinema.jsonc
+     Never with a bare `npx wrangler deploy` — wrangler picks the account from
+     whatever token it happens to find, and the wrong one here would overwrite a
+     live backend. */
+	"$schema": "./worker/node_modules/wrangler/config-schema.json",
+	"name": "filmbd1",
+	/* Pinned so a deploy can never land on another account's `filmbd1`, and so
+     `d1 execute` cannot quietly pick a different account for this database. */
+	"account_id": "ee77e5f98f29557bb934782f8ddca554",
+	"main": "./worker/src/index.ts",
+	"compatibility_date": "2026-08-10",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "filmflix-hub-cinema",
+			"database_id": "729228ec-348b-484f-914d-1e1f0c177421"
+		}
+	],
+	/* No cron, same as the backup: the primary's 6-hourly link-health sweep would
+     otherwise ask every provider twice as often and the admin panel reads health
+     from the primary anyway. */
+	"vars": {
+		"OTP_FROM_NAME": "FilmFlix"
+	}
+}

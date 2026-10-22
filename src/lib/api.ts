@@ -2,14 +2,17 @@
  * FilmFlix API client — talks to the Cloudflare Worker (D1) backend.
  * Session token lives in localStorage; the worker enforces roles.
  *
- * BASE: VITE_API_BASE wins, else YTDefault to the known Worker hostname.
+ * There is no fixed base URL here any more: every call goes through
+ * `fetchWithFailover()` (lib/apiConfig.ts), which asks whichever Worker is
+ * answering first and falls over to the other account on a 429, a 5xx or a
+ * dead socket — on the request the viewer was making anyway, never a probe.
+ *
  * Falling back to "" (same-origin) serves the Pages SPA for every API
  * call — the browser asked for /movies and got index.html (405/HTML).
  */
 
-const FALLBACK_API_BASE = "https://filmflix-hub.nlnazmulchowdhury.workers.dev";
-const BASE = import.meta.env.VITE_API_BASE?.trim() ? import.meta.env.VITE_API_BASE.trim() : FALLBACK_API_BASE;
-export const API_BASE = BASE;
+import { fetchWithFailover } from "./apiConfig";
+
 const TOKEN_KEY = "ff-session-token";
 
 export function getToken(): string | null {
@@ -40,7 +43,7 @@ async function request<T>(
   body?: unknown,
 ): Promise<T> {
   const token = getToken();
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetchWithFailover(path, {
     method,
     headers: {
       ...(body !== undefined ? { "content-type": "application/json" } : {}),

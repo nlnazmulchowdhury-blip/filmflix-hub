@@ -77,6 +77,11 @@ export function isEmbedUrl(raw: string | null | undefined): boolean {
   }
 }
 
+/** Asks currently in flight, keyed by the Worker request. Opening a server chip
+ *  a moment after the menu's warm-up race started would otherwise ask the same
+ *  provider page twice — the answer is minted for one session either way. */
+const streamAsks = new Map<string, Promise<EmbedResolveResult>>();
+
 /** Ask the Worker to resolve an embed page URL to playable stream candidates. */
 export async function resolveEmbedStream(
   embedUrl: string,
@@ -86,7 +91,14 @@ export async function resolveEmbedStream(
      can decode that, and the Worker must not guess: say so once, and a title
      that would otherwise show the provider's player runs under our controls. */
   if (browserDecodesHevc()) q.set("hevc", "1");
-  return api.get<EmbedResolveResult>(`/embed/stream?${q.toString()}`);
+  const ask = `/embed/stream?${q.toString()}`;
+  const running = streamAsks.get(ask);
+  if (running) return running;
+  const prom = api
+    .get<EmbedResolveResult>(ask)
+    .finally(() => streamAsks.delete(ask));
+  streamAsks.set(ask, prom);
+  return prom;
 }
 
 /** Ask a provider API that needs nothing but the TMDB id for a stream.

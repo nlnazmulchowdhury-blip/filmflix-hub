@@ -1,6 +1,7 @@
 import { Loader2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { fetchWithFailover } from "@/lib/apiConfig";
 
 /**
  * "Upload" button for the admin movie form: opens a file picker, streams the
@@ -29,18 +30,21 @@ export default function UploadFileButton({
   const handleFile = async (file: File) => {
     setBusy(true);
     try {
-      const res1 = await fetch(`/uploads/url`, { method: "POST" });
+      /* Three calls, one backend: these are the Worker's R2 routes, so they
+         need the same failover decision as every other API call rather than a
+         root-relative path that only works if Pages ever proxies to the Worker. */
+      const res1 = await fetchWithFailover(`/uploads/url`, { method: "POST" });
       const target = await res1.json();
       if (!res1.ok) throw new Error(target?.error ?? `Upload setup failed (${res1.status})`);
 
-      const res2 = await fetch(`/uploads/object/${target.storageId}`, {
+      const res2 = await fetchWithFailover(`/uploads/object/${target.storageId}`, {
         method: "PUT",
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file,
       });
       if (!res2.ok) throw new Error(`Upload failed (${res2.status})`);
 
-      const res3 = await fetch(`/uploads/finish`, {
+      const res3 = await fetchWithFailover(`/uploads/finish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ storageId: target.storageId }),

@@ -1,0 +1,35 @@
+{
+	/* The failover backup. Same code as ../wrangler.jsonc, deployed to the second
+     Cloudflare account, so a viewer whose primary account is rate-limited or
+     down still gets served. Deploy with:
+       npx wrangler deploy -c wrangler.backup.jsonc
+     Never with a bare `npx wrangler deploy` — that would push this Worker over
+     the top of the live primary. */
+	"$schema": "./worker/node_modules/wrangler/config-schema.json",
+	"name": "filmbd",
+	/* Pinned to the backup account — see wrangler.cinema.jsonc for why. */
+	"account_id": "cf8bf4968191cadacef61ae76a237b5d",
+	"main": "./worker/src/index.ts",
+	"compatibility_date": "2026-08-10",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "filmflix-hub-backup",
+			/* Fill in from: npx wrangler d1 create filmflix-hub-backup */
+			"database_id": "c8b5b7b9-51cf-4400-b982-9927f1c1fb9f"
+		}
+	],
+	/* No cron here on purpose. The primary's 6-hourly job re-checks every movie
+     URL through this Worker's egress; a second copy of it would ask the same
+     providers twice as often and buy nothing, because the admin panel reads
+     link health from the primary. */
+	"vars": {
+		"OTP_FROM_NAME": "FilmFlix"
+	}
+}
