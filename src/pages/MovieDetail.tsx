@@ -487,6 +487,13 @@ export default function MovieDetail() {
         airDate: e.airDate ?? null,
       }));
 
+  /* Episodes and "More videos" are two answers to the same question — what to
+     watch next — so a title that has its own episode list never shows the
+     related-titles grid under it. While the guide is still on its way the
+     episode list is already claimed, so the grid stays out of the way too. */
+  const showsEpisodes =
+    (isSeries || hasLocalEpisodes) && (episodeRows.length > 0 || guideLoading);
+
   /* The provider page of whatever the stage is on. Changing this is what
      swaps the episode: PlayerStage feeds it to the embed resolver and the
      provider iframe. */
@@ -699,8 +706,9 @@ export default function MovieDetail() {
               onToggleSave={toggleSave}
             />
 
-            {/* More videos — titles related to this one from the embed catalog. */}
-            {related.length > 0 && (
+            {/* More videos — titles related to this one from the embed catalog.
+                Only for a title with no episodes of its own to offer. */}
+            {related.length > 0 && !showsEpisodes && (
               <section aria-label="More videos">
                 <h2 className="font-display flex items-center gap-2 text-lg font-bold tracking-tight">
                   <ListVideo className="size-5 text-primary" />
