@@ -66,6 +66,11 @@ export default function InstallPrompt() {
      cover them, so it stays out of the movie page. */
   if (!visible || pathname.startsWith("/movie/")) return null;
 
+  /* /tv puts the picture at the very top, so a top-anchored card would cover
+     the player and swallow the tap that pauses it. This page hangs the card at
+     the bottom instead, under everything being watched. */
+  const anchor = pathname === "/tv" ? "bottom-3" : "top-3";
+
   const dismiss = () => {
     setVisible(false);
     try {
@@ -91,7 +96,7 @@ export default function InstallPrompt() {
   };
 
   return (
-    <div className="fixed inset-x-3 top-3 z-[70] sm:left-1/2 sm:right-auto sm:w-[420px] sm:-translate-x-1/2">
+    <div className={`fixed inset-x-3 z-[70] sm:left-1/2 sm:right-auto sm:w-[420px] sm:-translate-x-1/2 ${anchor}`}>
       <div className="overflow-hidden rounded-2xl border border-primary/30 bg-card/95 shadow-[0_20px_60px_-16px_rgba(0,0,0,0.6)] backdrop-blur">
         <div className="flex items-start gap-3 p-3.5">
           <div className="mt-0.5 shrink-0">
