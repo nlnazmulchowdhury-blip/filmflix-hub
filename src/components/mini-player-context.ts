@@ -25,6 +25,22 @@ export interface PlayerQuality {
   videoUrl: string;
 }
 
+/** One rendition of the stream that is actually playing. hls.js reads the whole
+ *  ladder off the master playlist, so a provider title can offer 480p/720p/1080p
+ *  without our catalog knowing anything about it — the same trick
+ *  `PlayerAudioTrack` plays for languages. */
+export interface PlayerLevel {
+  /** hls.js level index, usable straight as `hls.currentLevel`. */
+  id: number;
+  /** Picture height in pixels; 0 when the playlist never says. */
+  height: number;
+  /** bits/s — tells two same-height renditions apart. */
+  bitrate: number;
+  /** The rendition actually on screen right now. Under Auto this is the one
+   *  hls.js just chose, which the viewer deserves to see. */
+  playing: boolean;
+}
+
 /** Subtitle/caption track backed by a WebVTT file. */
 export interface PlayerSubtitle {
   label: string;
@@ -132,6 +148,14 @@ export interface MiniPlayerContextValue {
   activeQuality: string | null;
   /** Switch quality file without losing the playback position. */
   setQuality: (label: string | null) => void;
+  /** Resolutions the CURRENT stream carries, read off its own master playlist,
+   *  so a provider title can be multi-resolution without a catalog row. */
+  levels: PlayerLevel[];
+  /** Level now playing; null = Auto, where hls.js picks per bandwidth. */
+  activeLevel: number | null;
+  /** Pin one resolution in place, without losing the second. `-1` hands the
+   *  choice back to Auto. */
+  setLevel: (id: number) => void;
   /** Active subtitle track: null = captions off. */
   activeSubtitle: string | null;
   setSubtitle: (label: string | null) => void;
@@ -182,6 +206,9 @@ export const MiniPlayerContext = createContext<MiniPlayerContextValue>({
   setPlaybackRate: () => undefined,
   activeQuality: null,
   setQuality: () => undefined,
+  levels: [],
+  activeLevel: null,
+  setLevel: () => undefined,
   activeSubtitle: null,
   setSubtitle: () => undefined,
   streamSubtitleLabels: [],

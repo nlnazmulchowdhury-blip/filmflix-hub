@@ -28,6 +28,7 @@ import {
   type MiniPlayerMovie,
   type PlayerAudioTrack,
   type PlayerControls,
+  type PlayerLevel,
   type PlayerRotation,
 } from "./mini-player-context";
 import { convexSiteUrl, isHlsUrl, isOurPipeUrl, playableVideoUrl } from "@/lib/video-url";
@@ -90,6 +91,10 @@ let activeHls: Hls | null = null;
 let audioTracksSink:
   | ((tracks: PlayerAudioTrack[], currentId: number | null) => void)
   | null = null;
+/** Same hand-off for the resolution ladder the playlist declares. */
+let levelsSink:
+  | ((levels: PlayerLevel[], currentId: number | null) => void)
+  | null = null;
 
 /** The languages one playlist offers, in the shape the UI can list. */
 function audioRenditions(hls: Hls): PlayerAudioTrack[] {
@@ -101,6 +106,20 @@ function audioRenditions(hls: Hls): PlayerAudioTrack[] {
       lang: t.lang,
       isDefault: Boolean(t.default),
     }));
+}
+
+/** The resolutions one playlist offers, in ladder order. */
+function videoLevels(hls: Hls): PlayerLevel[] {
+  /* `currentLevel` is the rendition being loaded even while Auto is in charge,
+     so "Auto · 720p" can say what the viewer is actually getting. */
+  const playing = hls.currentLevel;
+  return (hls.levels ?? []).map((l, idx) => ({
+    /* hls.js indexes its own ladder, and `currentLevel` speaks that language. */
+    id: idx,
+    height: l.height || 0,
+    bitrate: l.bitrate || 0,
+    playing: idx === playing,
+  }));
 }
 /** Token auto-refresh + loader stamping for the active IP-bound stream. */
 let activeTokenCtx: TokenContext | null = null;
@@ -226,13 +245,20 @@ function buildHls(el: HTMLVideoElement, src: string) {
      in three languages without our catalog knowing anything about it. */
   const reportAudio = () =>
     audioTracksSink?.(audioRenditions(hls), hls.audioTrack >= 0 ? hls.audioTrack : null);
+  /* Which resolutions this stream can be watched in, and whether hls.js is
+     still choosing them by itself. `autoLevelEnabled` is the honest test —
+     `currentLevel` reads as a plain index even while Auto is in charge. */
+  const reportLevels = () =>
+    levelsSink?.(videoLevels(hls), hls.autoLevelEnabled ? null : hls.currentLevel);
   hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, reportAudio);
   hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, reportAudio);
+  hls.on(Hls.Events.LEVELS_UPDATED, reportLevels);
   hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
     /* Feed the media sniffer: hls.js knows every resolution the CDN offers,
        which is exactly the list IDM shows next to the browser button. */
     reportHlsLevels(src, data.levels ?? []);
     reportAudio();
+    reportLevels();
     if (resumeAt > 0) el.currentTime = resumeAt;
     el.playbackRate = rate;
     el.play().catch(() => undefined);
@@ -240,6 +266,7 @@ function buildHls(el: HTMLVideoElement, src: string) {
   hls.on(Hls.Events.LEVEL_SWITCHED, (_evt, data) => {
     const level = hls.levels?.[data.level as number];
     if (level) reportHlsLevels(src, [level]);
+    reportLevels();
   });
   /* Provider CDNs blip: a segment 502s, a manifest is slow, one level paints a
      codec the element rejects. hls.js leaves all of that fatal — a stream that
@@ -336,6 +363,42 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setAudioTracks([]);
     setActiveAudioTrack(null);
+  }, [movie?.videoUrl]);
+  /** Resolutions the CURRENT stream carries, and which one is pinned. */
+  const [levels, setLevels] = useState<PlayerLevel[]>([]);
+  const [activeLevel, setActiveLevel] = useState<number | null>(null);
+  useEffect(() => {
+    levelsSink = (next, currentId) => {
+      /* Auto re-reports on every bandwidth-driven switch. Re-rendering the
+         whole player for a ladder that has not changed is a waste the viewer
+         would feel as a stutter. */
+      setLevels((prev) =>
+        prev.length === next.length &&
+        prev.every(
+          (p, i) =>
+            p.id === next[i].id &&
+            p.height === next[i].height &&
+            p.bitrate === next[i].bitrate &&
+            p.playing === next[i].playing,
+        )
+          ? prev
+          : next,
+      );
+      setActiveLevel((prev) => (prev === currentId ? prev : currentId));
+    };
+    return () => {
+      levelsSink = null;
+    };
+  }, []);
+  /** Watch at one resolution instead of letting hls.js decide. -1 = Auto. */
+  const setLevel = useCallback((id: number) => {
+    if (!activeHls) return;
+    activeHls.currentLevel = id;
+    setActiveLevel(id < 0 ? null : id);
+  }, []);
+  useEffect(() => {
+    setLevels([]);
+    setActiveLevel(null);
   }, [movie?.videoUrl]);
 
   /* --------------------- Viewer settings (gear menu) -------------------- */
@@ -745,6 +808,9 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       setPlaybackRate,
       activeQuality,
       setQuality,
+      levels,
+      activeLevel,
+      setLevel,
       activeSubtitle,
       setSubtitle: setActiveSubtitle,
       streamSubtitleLabels,
@@ -782,6 +848,9 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       setPlaybackRate,
       activeQuality,
       setQuality,
+      levels,
+      activeLevel,
+      setLevel,
       activeSubtitle,
       streamSubtitleLabels,
       start,

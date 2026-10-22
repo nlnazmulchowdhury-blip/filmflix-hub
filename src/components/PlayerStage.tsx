@@ -2,6 +2,7 @@ import {
   useMiniPlayer,
   type PlayerAudioTrack,
   type PlayerDub,
+  type PlayerLevel,
 } from "@/components/mini-player-context";
 import { animeEmbedUrl, dramaEmbedUrl } from "@/lib/autoembed";
 import { vidboxEmbedUrl, vixsrcEmbedUrl, nxshaEmbedUrl, vidukiEmbedUrl } from "@/lib/vaplayer";
@@ -51,6 +52,7 @@ import {
   Maximize,
   Minimize,
   Moon,
+  MonitorPlay,
   MoreHorizontal,
   Pause,
   PictureInPicture2,
@@ -162,6 +164,9 @@ export default function PlayerStage({
     setPlaybackRate,
     activeQuality,
     setQuality,
+    levels,
+    activeLevel,
+    setLevel,
     activeSubtitle,
     setSubtitle,
     streamSubtitleLabels,
@@ -177,6 +182,7 @@ export default function PlayerStage({
   /** Cursor is over the control bar — keep the bar up while it is. */
   const [hoveringControls, setHoveringControls] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
+  const [qualityOpen, setQualityOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const scrubbingRef = useRef(false);
   const scrubRef = useRef<HTMLDivElement | null>(null);
@@ -634,6 +640,15 @@ export default function PlayerStage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rememberRaced]);
 
+  /* Only worth asking what the other servers carry when the viewer looks at
+     the server menu: opening a chip then finds its links already resolved,
+     exactly as the background warm used to give. Once per title+episode. */
+  useEffect(() => {
+    if (!serverOpen || usingEmbed || warmedFor.current === raceKey) return;
+    warmedFor.current = raceKey;
+    warmAdFree();
+  }, [serverOpen, usingEmbed, raceKey, warmAdFree]);
+
   const playEmbedCandidate = useCallback(
     (c: EmbedCandidate) => {
       setEmbedStream(c.url);
@@ -855,13 +870,10 @@ export default function PlayerStage({
     }
     if (!usingEmbed) {
       /* Server 1 has the film on our own server and Server 6 answers nobody
-         ad-free, so neither has a race to win — but every other server is still
-         asked for it in the background, which is what makes opening a chip here
-         instant instead of another wait through that provider's page. */
-      if (warmedFor.current !== raceKey) {
-        warmedFor.current = raceKey;
-        warmAdFree();
-      }
+         ad-free, so neither has a race to win. The lineup is asked when the
+         viewer opens the chip menu instead — see the warming effect below:
+         racing every title in the background spent a round of provider asks on
+         titles whose server was never changed. */
       return;
     }
     /* A retry is armed by disarming it first: the effect re-runs for the title,
@@ -1351,27 +1363,30 @@ export default function PlayerStage({
   /* Auto-hide lives in the provider (shared with the mini card). Here we
      only hold it open while a menu is open. */
   useEffect(() => {
-    setControlsHold(langOpen || settingsOpen || serverOpen || downloadOpen);
-  }, [langOpen, settingsOpen, serverOpen, downloadOpen, setControlsHold]);
+    setControlsHold(
+      langOpen || settingsOpen || serverOpen || qualityOpen || downloadOpen,
+    );
+  }, [langOpen, settingsOpen, serverOpen, qualityOpen, downloadOpen, setControlsHold]);
 
   /* Dismiss a player menu from anywhere. The box's own capture handler cannot
      see taps on the picture: the video and its tap-zones are mounted by the
      provider into a slot of their own, so on a phone — where the only way out
      of a menu is a tap — an open menu used to stay open forever. */
   useEffect(() => {
-    if (!langOpen && !settingsOpen && !serverOpen && !downloadOpen) return;
+    if (!langOpen && !settingsOpen && !serverOpen && !qualityOpen && !downloadOpen) return;
     const onDown = (e: Event) => {
       const t = e.target as HTMLElement | null;
       if (t?.closest?.("[data-player-menu]")) return;
       setLangOpen(false);
       setSettingsOpen(false);
       setServerOpen(false);
+      setQualityOpen(false);
       setDownloadOpen(false);
       setSettingsView("main");
     };
     document.addEventListener("pointerdown", onDown, true);
     return () => document.removeEventListener("pointerdown", onDown, true);
-  }, [langOpen, settingsOpen, serverOpen, downloadOpen]);
+  }, [langOpen, settingsOpen, serverOpen, qualityOpen, downloadOpen]);
 
   /* Native pointerleave on the whole player box (video + control bar):
      when the mouse leaves the player, hide the controls immediately.
@@ -2218,6 +2233,43 @@ export default function PlayerStage({
               />
             )}
 
+            {/* How sharp to watch it — right where the server was picked, since
+                a resolution belongs to the source that carries it. The ladder
+                comes from the playlist itself, so a provider title with 480p /
+                720p / 1080p renditions gets the choice without our catalog
+                knowing anything. A stream that ships one variant shows nothing:
+                there is nothing to pick, and a dead control on a phone bar is
+                worse than no control. */}
+            {providerMode ? (
+              levels.length > 1 || qualities.length > 0 ? (
+                <div className="relative shrink-0" data-player-menu>
+                  <button
+                    type="button"
+                    disabled
+                    className={`flex items-center gap-1.5 rounded-lg px-2 py-2 text-white transition-colors hover:bg-white/15 ${INERT}`}
+                    aria-label="Resolution"
+                    title={inertTitle}
+                  >
+                    <MonitorPlay className="size-5 shrink-0" />
+                    <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">
+                      Quality
+                    </span>
+                  </button>
+                </div>
+              ) : null
+            ) : (
+              <QualityMenu
+                levels={levels}
+                activeLevel={activeLevel}
+                onSelectLevel={setLevel}
+                qualities={qualities}
+                activeQuality={activeQuality}
+                onSelectQuality={setQuality}
+                open={qualityOpen}
+                setOpen={setQualityOpen}
+              />
+            )}
+
             {/* The one thing on this row that always reaches a framed page: the
                 provider's own tab, where its play, seek and volume do work.
                 Below `sm` it steps out — Share › Open provider page under the
@@ -2247,6 +2299,7 @@ export default function PlayerStage({
                   setSettingsOpen((v) => !v);
                   setSettingsView("main");
                   setLangOpen(false);
+                  setQualityOpen(false);
                 }}
                 className={`rounded-lg p-2 text-white transition-colors hover:bg-white/15 ${INERT} ${
                   settingsOpen || nightMode || loop || rotation !== 0 || playbackRate !== 1 || activeQuality || activeSubtitle
@@ -3359,6 +3412,158 @@ function LanguageMenu({
           {probe === "done" && count === 0 && (
             <p className="px-3 py-2 text-[11px] text-white/50">
               None of these servers says which language it carries.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------- Resolution control (beside the server pick) ------------------- */
+
+/** What the film is watched at, and what else it could be. Two sources feed one
+ *  list: the renditions the playing playlist declares — hls.js can pin any of
+ *  them in place, so the second, the mute and the volume all survive the pick —
+ *  and the separate quality files an admin attached to the catalog row, which
+ *  are different URLs and so change the source. A stream that ships one variant
+ *  has nothing to offer, and the chip stays out of the bar. */
+function QualityMenu({
+  levels,
+  activeLevel,
+  onSelectLevel,
+  qualities,
+  activeQuality,
+  onSelectQuality,
+  open,
+  setOpen,
+}: {
+  levels: PlayerLevel[];
+  activeLevel: number | null;
+  onSelectLevel: (id: number) => void;
+  qualities: { label: string; videoUrl: string }[];
+  activeQuality: string | null;
+  onSelectQuality: (label: string | null) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  /* Tallest first, which is how every other player lists them. */
+  const ladder = [...levels].sort((a, b) => b.height - a.height || b.bitrate - a.bitrate);
+  const labelOf = (l: PlayerLevel) =>
+    l.height ? `${l.height}p` : `${Math.max(1, Math.round(l.bitrate / 1_000_000))} Mbps`;
+  /** What Auto is serving this second, so the row can say what it is worth. */
+  const serving = ladder.find((l) => l.playing);
+  const pinned = activeLevel === null ? undefined : ladder.find((l) => l.id === activeLevel);
+  const autoOn = activeQuality === null && activeLevel === null;
+
+  type Row = { key: string; label: string; hint: string; on: boolean; choose: () => void };
+  const rows: Row[] = [];
+  if (ladder.length > 0 || qualities.length > 0)
+    rows.push({
+      key: "auto",
+      label: "Auto",
+      hint: serving ? `now ${labelOf(serving)}` : "",
+      on: autoOn,
+      choose: () => {
+        onSelectQuality(null);
+        onSelectLevel(-1);
+      },
+    });
+  ladder.forEach((l) =>
+    rows.push({
+      key: `level-${l.id}`,
+      label: labelOf(l),
+      hint: l.bitrate && l.height ? `${(l.bitrate / 1_000_000).toFixed(1)} Mb/s` : "",
+      on: activeQuality === null && activeLevel === l.id,
+      choose: () => {
+        /* A pinned file and a pinned rendition cannot both be true: the level
+           belongs to whichever stream is playing now. */
+        onSelectQuality(null);
+        onSelectLevel(l.id);
+      },
+    }),
+  );
+  qualities.forEach((q) =>
+    rows.push({
+      key: `file-${q.label}`,
+      label: q.label,
+      hint: "File",
+      on: activeQuality === q.label,
+      choose: () => onSelectQuality(q.label),
+    }),
+  );
+
+  /* One rendition and no extra file = the only choice is the one already made. */
+  if (ladder.length < 2 && qualities.length === 0) return null;
+
+  const current =
+    activeQuality ?? (pinned ? labelOf(pinned) : serving ? `Auto · ${labelOf(serving)}` : "Auto");
+
+  /* This chip sits mid-row, so a menu that simply opens rightward walked off
+     the phone screen. Measured at the moment it opens: the panel may use every
+     pixel between this button's left edge and the viewport, and never more. */
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [maxW, setMaxW] = useState(0);
+
+  return (
+    <div className="relative shrink-0" data-player-menu>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => {
+          if (!open) {
+            const r = btnRef.current?.getBoundingClientRect();
+            setMaxW(r ? Math.max(150, window.innerWidth - r.left - 12) : 0);
+          }
+          setOpen(!open);
+        }}
+        className={`flex items-center gap-1.5 rounded-lg px-2 py-2 transition-colors hover:bg-white/15 ${
+          open || !autoOn ? "text-primary" : "text-white"
+        }`}
+        aria-label={`Resolution: ${current}`}
+        aria-expanded={open}
+        title={`Watch at another resolution — now ${current}`}
+      >
+        <MonitorPlay className="size-5 shrink-0" />
+        <span className="hidden whitespace-nowrap text-xs font-semibold min-[380px]:inline">
+          {current}
+        </span>
+      </button>
+      {open && (
+        /* Opens rightward from its own left edge, like the language menu: on a
+           phone this chip sits mid-row and a right-anchored panel walked off
+           the screen. */
+        /* min-width beats max-width in CSS, so both are set inline here. */
+        <div
+          style={maxW ? { minWidth: Math.min(190, maxW), maxWidth: maxW } : undefined}
+          className="absolute bottom-full left-0 z-30 mb-2 max-h-[46vh] min-w-[190px] overflow-y-auto rounded-xl border border-white/15 bg-black/95 py-1 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.95)] backdrop-blur"
+        >
+          <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
+            Resolution
+          </p>
+          {rows.map((r) => (
+            <button
+              key={r.key}
+              type="button"
+              onClick={() => {
+                r.choose();
+                setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/10 ${
+                r.on ? "bg-primary/25 font-semibold text-primary" : ""
+              }`}
+            >
+              {r.label}
+              <span
+                className={`shrink-0 text-[10px] ${r.on ? "text-primary" : "text-white/45"}`}
+              >
+                {r.on ? "✓" : r.hint}
+              </span>
+            </button>
+          ))}
+          {ladder.length === 0 && qualities.length > 0 && (
+            <p className="border-t border-white/10 px-3 py-2 text-[11px] leading-snug text-white/50">
+              This stream ships one resolution; the others are separate files.
             </p>
           )}
         </div>
