@@ -12,6 +12,11 @@
       "database_id": "7f734098-dc9a-4e75-9305-6483aad82b84"
     }
   ],
+  // Browser Rendering: one real Chrome, used only to read Screenscape's
+  // language rows off its own player (see src/screenscapeLangs.ts). Needs the
+  // Workers Paid plan; without it, that route answers 501 and the rest is
+  // unaffected.
+  "browser": { "binding": "BROWSER" },
   // R2: enable R2 in the dashboard, then restore this block (see README)
   "triggers": {
     "crons": ["0 */6 * * *"]

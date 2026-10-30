@@ -9,14 +9,28 @@ import { sendOtpEmail } from "./email";
 import { vidsrcRoutes } from "./vidsrc";
 import { tmdbRoutes } from "./tmdb";
 import { embedResolveRoutes } from "./embedresolve";
+import { screenscapeLangsRoutes } from "./screenscapeLangs";
 import { supportRoutes } from "./support";
 import { tvCategoryRoutes } from "./tvCategories";
 import { appBuildRoutes } from "./appbuilds";
 import { uploadRoutes } from "./uploads";
 import { hashPassword, verifyPassword, newSalt, newToken, SESSION_TTL_SECONDS } from "./password";
+import {
+  referralRoutes,
+  settleDay,
+  assignReferralCode,
+  noteUserIp,
+  ipOf,
+  todayDhaka,
+  dhakaDate,
+} from "./referrals";
 
 export interface Bindings {
   DB: D1Database;
+  /** Browser Rendering: a real Chrome to read Screenscape's language rows off
+   *  its own page. Absent on an account without the binding — the route then
+   *  answers 501 and the language menu simply offers our own servers. */
+  BROWSER?: Fetcher;
   /* R2: optional — until the bucket is enabled, the /uploads routes degrade. */
   DUBS?: R2Bucket;
   UPLOADS?: R2Bucket;
@@ -30,6 +44,12 @@ export interface Bindings {
   /* TMDB v3 API key (read token or api_key) — powers the landing "All Movies"
      browse grid. */
   TMDB_API_KEY?: string;
+  /* Referral earnings: today's site-wide ad revenue comes from here once the
+     key exists; until then HILLTOP_FALLBACK_EARNING (or $10) is split. */
+  HILLTOP_API_KEY?: string;
+  HILLTOP_API_URL?: string;
+  HILLTOP_FALLBACK_EARNING?: string;
+  REFERRAL_SHARE_PCT?: string;
 }
 
 export type Env = { Bindings: Bindings } & { Variables: { userId?: string; role?: string | null } };
@@ -75,20 +95,20 @@ async function createSession(db: D1Database, userId: string) {
 /* auth helpers                                                        */
 /* ------------------------------------------------------------------ */
 
-async function userForToken(db: D1Database, authHeader: string | undefined) {
+export async function userForToken(db: D1Database, authHeader: string | undefined) {
   const raw = authHeader?.replace(/^Bearer\s+/i, "").trim();
   if (!raw) return null;
   const hash = await sha256(raw);
   const row = await db
     .prepare(
-      `SELECT u.id, u.email, u.name, u.role, u.is_anonymous, s.expires_at
+      `SELECT u.id, u.email, u.name, u.role, u.is_anonymous, u.created_at, s.expires_at
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.token = ?`,
     )
     .bind(hash)
     .first<{
       id: string; email: string | null; name: string | null;
-      role: string | null; is_anonymous: number; expires_at: number;
+      role: string | null; is_anonymous: number; created_at: number; expires_at: number;
     }>();
   if (!row) return null;
   if (row.expires_at < Date.now()) {
@@ -101,6 +121,7 @@ async function userForToken(db: D1Database, authHeader: string | undefined) {
     name: row.name,
     role: row.role,
     isAnonymous: !!row.is_anonymous,
+    createdAt: row.created_at,
   };
 }
 
@@ -221,6 +242,9 @@ app.post("/auth/verify-otp", async (c) => {
   await c.env.DB.prepare(
     `INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
   ).bind(await sha256(raw), user.id, Date.now() + SESSION_TTL_MS).run();
+  /* An emailed-code account earns a referral link from the moment it exists. */
+  await assignReferralCode(c.env.DB, user.id);
+  await noteUserIp(c.env.DB, user.id, ipOf(c));
   return c.json({ token: raw, userId: user.id });
 });
 
@@ -234,6 +258,7 @@ app.post("/auth/guest", async (c) => {
   await c.env.DB.prepare(
     `INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
   ).bind(await sha256(raw), uid, Date.now() + SESSION_TTL_MS).run();
+  await noteUserIp(c.env.DB, uid, ipOf(c));
   return c.json({ token: raw, userId: uid });
 });
 
@@ -280,6 +305,8 @@ app.post("/auth/register", async (c) => {
      VALUES (?, ?, ?, NULL, 0, ?, ?, ?)`,
   ).bind(uid, mail, (name ?? "").trim() || mail.split("@")[0], Date.now(), hash, salt).run();
   const raw = await createSession(c.env.DB, uid);
+  await assignReferralCode(c.env.DB, uid);
+  await noteUserIp(c.env.DB, uid, ipOf(c));
   return c.json({ token: raw, userId: uid });
 });
 
@@ -298,6 +325,8 @@ app.post("/auth/login", async (c) => {
       .bind(mail, row.id).run();
   }
   const raw = await createSession(c.env.DB, row.id);
+  await assignReferralCode(c.env.DB, row.id);
+  await noteUserIp(c.env.DB, row.id, ipOf(c));
   return c.json({ token: raw, userId: row.id });
 });
 
@@ -1229,6 +1258,7 @@ app.route("/tmdb", tmdbRoutes);
 /* embed → m3u8 resolver (Server 3: play provider streams ad-free)     */
 /* ------------------------------------------------------------------ */
 
+app.route("/embed/screenscape", screenscapeLangsRoutes);
 app.route("/embed", embedResolveRoutes);
 
 /* ------------------------------------------------------------------ */
@@ -1239,14 +1269,36 @@ app.route("/support", supportRoutes);
 app.route("/tv/categories", tvCategoryRoutes);
 app.route("/app/builds", appBuildRoutes);
 app.route("/uploads", uploadRoutes);
+app.route("/referrals", referralRoutes);
 
 /* ------------------------------------------------------------------ */
-/* cron: link health every 6h                                          */
+/* cron: link health every 6h, referral settlement at 23:59 Dhaka      */
 /* ------------------------------------------------------------------ */
 
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledController, env: Bindings) {
+  async scheduled(event: ScheduledController, env: Bindings) {
+    /* Two triggers share this handler; 17:59 UTC is 23:59 in Bangladesh, the
+       moment the day's ad revenue is final. */
+    if (event.cron === "59 17 * * *") {
+      const res = await settleDay(env, todayDhaka());
+      console.log(
+        `referrals: ${res.date} $${res.earnings} over ${res.visits} visits ` +
+          `→ $${res.paid} to ${res.referrers} referrers (${res.source})`,
+      );
+      /* Clicks in the final minute of the day miss tonight's pool. Fold them
+         into yesterday's settlement at yesterday's own revenue — never today's,
+         which would mix two days' money. */
+      const yesterday = dhakaDate(Date.now() - 86_400_000);
+      const prev = await env.DB.prepare(
+        `SELECT total_hilltop_earning FROM daily_earnings WHERE date = ?`,
+      ).bind(yesterday).first<{ total_hilltop_earning: number }>();
+      if (prev) {
+        const late = await settleDay(env, yesterday, prev.total_hilltop_earning);
+        if (late.paid > 0) console.log(`referrals: late clicks for ${yesterday} paid $${late.paid}`);
+      }
+      return;
+    }
     const res = await runLinkCheck(env.DB);
     if (res.failed > 0) console.log(`linkHealth: ${res.failed}/${res.checked} URLs failing`);
   },

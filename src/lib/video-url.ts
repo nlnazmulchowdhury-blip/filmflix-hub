@@ -20,9 +20,12 @@ export function playableVideoUrl(
   const isOwnSubtitle = movie?.subtitles?.some((s) => s.url === url) ?? false;
   if (isOwnSubtitle) return url;
   // HLS playlists (token-signed or plain) must go straight to hls.js —
-  // see isHlsUrl. Everything else keeps the mixed-content proxy rules.
+  // see isHlsUrl. Our own Worker pipes are already the proxy: wrapping them
+  // again would point the player at an endpoint that never answers.
   const needsProxy =
-    (!url.startsWith("https://") || isForceProxyUrl(url)) && !isHlsUrl(url);
+    (!url.startsWith("https://") || isForceProxyUrl(url)) &&
+    !isHlsUrl(url) &&
+    !isOurPipeUrl(url);
   if (!needsProxy) return url;
   return `${siteUrl.replace(/\/+$/, "")}/video-proxy?url=${encodeURIComponent(url)}`;
 }
@@ -78,8 +81,13 @@ export function isHlsUrl(raw: string | null | undefined): boolean {
  */
 export function isOurPipeUrl(raw: string | null | undefined): boolean {
   try {
-    return new URL((raw ?? "").trim(), window.location.href).pathname.endsWith(
-      "/embed/proxy",
+    const path = new URL((raw ?? "").trim(), window.location.href).pathname;
+    /* `/embed/dash` serves the manifest and `/embed/dash/s/…` its segments —
+       both are this Worker's own byte pipe, same as `/embed/proxy`. */
+    return (
+      path.endsWith("/embed/proxy") ||
+      path.endsWith("/embed/dash") ||
+      path.includes("/embed/dash/")
     );
   } catch {
     return false;

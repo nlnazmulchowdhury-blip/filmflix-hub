@@ -3,9 +3,11 @@ import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { MiniPlayerProvider } from "@/components/MiniPlayerProvider";
 import AnalyticsTracker from "@/components/AnalyticsTracker";
+import ReferralTracker from "@/components/ReferralTracker";
 import { startMediaSniffer } from "@/lib/media-sniffer";
 import HelpCenterWidget from "@/components/HelpCenterWidget";
 import InstallPrompt from "@/components/InstallPrompt";
+import PhoneTabBar from "@/components/PhoneTabBar";
 import { ThemeProvider } from "next-themes";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import React, { StrictMode, useEffect, lazy, Suspense } from "react";
@@ -19,6 +21,7 @@ const AuthPage = lazy(() => import("./pages/Auth.tsx"));
 const MovieDetail = lazy(() => import("./pages/MovieDetail.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Checkout = lazy(() => import("./pages/Checkout.tsx"));
+const Profile = lazy(() => import("./pages/Profile.tsx"));
 const Admin = lazy(() => import("./pages/Admin.tsx"));
 const Tv = lazy(() => import("./pages/Tv.tsx"));
 const Downloads = lazy(() => import("./pages/Downloads.tsx"));
@@ -164,6 +167,7 @@ createRoot(document.getElementById("root")!).render(
         <MiniPlayerProvider>
         <RouteSyncer />
         <AnalyticsTracker />
+        <ReferralTracker />
         <InstallPrompt />
         {/* Floating help-center chat — hidden on the admin route */}
         <HelpCenterRouteGate />
@@ -181,6 +185,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Dashboard />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/profile"
+                element={
+                  <RequireAuth>
+                    <Profile />
                   </RequireAuth>
                 }
               />
@@ -206,6 +218,8 @@ createRoot(document.getElementById("root")!).render(
             </Routes>
           </PageFade>
           </Suspense>
+          {/* Phone navigation — the same bar on every route. */}
+          <PhoneTabBar />
         </MiniPlayerProvider>
         </BrowserRouter>
         <Toaster />

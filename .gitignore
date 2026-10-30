@@ -1,4 +1,5 @@
 .env.local
+.env.development.local
 .env.production
 node_modules
 dist
@@ -22,8 +23,11 @@ dev.log
 __pycache__/
 *.pyc
 *.log
+*.tsbuildinfo
 .dev.pid
 .wrangler/
+worker/.wrangler-test/
+tmp-ref/
 
 # Bun lockfile — Pages must install with npm (package-lock.json).
 # A tracked bun.lock makes the Pages build image choose Bun and the

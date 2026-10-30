@@ -187,3 +187,53 @@ CREATE TABLE IF NOT EXISTS support_messages (
   seen_by_admin INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_support_user ON support_messages(user_id);
+
+/* ------------------------------------------------------------------ */
+/* referral earnings                                                   */
+/* ------------------------------------------------------------------ */
+
+/* One row per counted click. A visitor's IP counts once per 24 h per referrer;
+   the referrer's own session and own last_ip are refused outright. */
+CREATE TABLE IF NOT EXISTS referral_visits (
+  id          TEXT PRIMARY KEY,
+  referrer_id TEXT NOT NULL,
+  visitor_ip  TEXT NOT NULL,
+  movie_id    TEXT,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ref_visits_ref ON referral_visits(referrer_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ref_visits_ip ON referral_visits(referrer_id, visitor_ip, created_at);
+
+/* One row per settled day: the site-wide HilltopAds figure and the visit total
+   it is divided by. `source` says where the figure came from (hilltop-api,
+   placeholder, manual) so a placeholder run is never mistaken for real money. */
+CREATE TABLE IF NOT EXISTS daily_earnings (
+  id                    TEXT PRIMARY KEY,
+  date                  TEXT NOT NULL UNIQUE,
+  total_hilltop_earning REAL NOT NULL DEFAULT 0,
+  total_visits          INTEGER NOT NULL DEFAULT 0,
+  source                TEXT,
+  settled_at            INTEGER NOT NULL
+);
+
+/* What each referrer was credited for a day. Re-running a settlement updates
+   the row and credits only the delta, so a late click is neither lost nor
+   paid twice. */
+CREATE TABLE IF NOT EXISTS referral_earnings (
+  id          TEXT PRIMARY KEY,
+  referrer_id TEXT NOT NULL,
+  date        TEXT NOT NULL,
+  visits      INTEGER NOT NULL DEFAULT 0,
+  amount      REAL NOT NULL DEFAULT 0,
+  paid_at     INTEGER NOT NULL,
+  UNIQUE(referrer_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_ref_earn_ref ON referral_earnings(referrer_id, date);
+
+/* For databases created before the referral feature, run these once:
+   ALTER TABLE users ADD COLUMN referral_code TEXT;
+   ALTER TABLE users ADD COLUMN balance REAL NOT NULL DEFAULT 0;
+   ALTER TABLE users ADD COLUMN pending_balance REAL NOT NULL DEFAULT 0;
+   ALTER TABLE users ADD COLUMN last_ip TEXT;
+   CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code);
+   (The Worker also applies them itself on first use.) */

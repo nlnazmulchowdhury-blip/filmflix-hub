@@ -17,6 +17,11 @@
 	"observability": {
 		"enabled": true
 	},
+	/* Same Chrome as the primary's — the language menu asks whichever backend
+     answers first. */
+	"browser": {
+		"binding": "BROWSER"
+	},
 	"d1_databases": [
 		{
 			"binding": "DB",

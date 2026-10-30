@@ -20,7 +20,7 @@ import { api } from "@/lib/api";
  * fully controllable and fully visible from the admin panel.
  */
 
-type ServerKey = "vidbox" | "vidapi" | "nxsha" | "anime" | "viduki" | "drama" | "original";
+type ServerKey = "vidbox" | "vidapi" | "nxsha" | "screenscape" | "anime" | "viduki" | "drama" | "original";
 /* Same lineup order as the player menu, so an admin reading "Server 3" in the
    viewer's screenshot finds the same row here. */
 const SERVER_META: { key: ServerKey; name: string; provider: string; needs: string }[] = [
@@ -29,6 +29,7 @@ const SERVER_META: { key: ServerKey; name: string; provider: string; needs: stri
   { key: "vidapi", name: "vixsrc", provider: "vixsrc.to · HLS player", needs: "TMDB id" },
   { key: "anime", name: "Anime · VidNest", provider: "vidnest.fun", needs: "TMDB id" },
   { key: "viduki", name: "viduki", provider: "play.xpass.top · ladders read server-side", needs: "TMDB id" },
+  { key: "screenscape", name: "nxsha · Screenscape", provider: "nxsha.screenscape.me · provider frame", needs: "TMDB id" },
   { key: "vidbox", name: "vidbox", provider: "vidlink.pro · ours on H.264, else its player", needs: "TMDB id or embed URL" },
   { key: "drama", name: "Drama · Videasy", provider: "player.videasy.to", needs: "TMDB id" },
 ];
@@ -143,6 +144,7 @@ export default function MovieInspector({
       vidbox: hasTmdb || Boolean(form.embedUrl),
       vidapi: hasTmdb,
       nxsha: hasTmdb,
+      screenscape: hasTmdb,
       anime: hasTmdb,
       viduki: hasTmdb,
       drama: hasTmdb,

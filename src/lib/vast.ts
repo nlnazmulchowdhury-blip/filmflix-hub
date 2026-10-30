@@ -9,7 +9,7 @@
  *   - the file is played by *our* element, so the film's volume, seek bar and
  *     server chips are never handed to the network's player.
  */
-import { apiBase, fetchWithFailover } from "@/lib/apiConfig";
+import { fetchWithFailover } from "@/lib/apiConfig";
 
 export const HILLTOP_ZONE = "7535233";
 
@@ -58,10 +58,7 @@ export interface VastAd {
   trackings: Record<string, string[]>;
 }
 
-/** Built per call: the pipe follows whichever backend is live, and a byte pipe
- *  cannot fail over once the creative is streaming. */
-const pipe = (url: string) => `${apiBase()}/embed/proxy?url=${encodeURIComponent(url)}`;
-
+/** The tag and its wrappers are fetched through our own byte pipe. */
 function firstText(doc: Document | Element, tag: string): string {
   const el = doc.getElementsByTagName(tag)[0];
   return el?.textContent?.trim() ?? "";
@@ -94,9 +91,15 @@ async function getXml(url: string, signal: AbortSignal): Promise<Document | null
     /* The wrapper chain is a handful of small XML documents, so it can use the
        failover client: a spent account costs an impression otherwise wonnable.
        Only the creative's own bytes are pinned to one backend, because a
-       stream cannot change account mid-play. */
-    const full = new URL(pipe(url));
-    const res = await fetchWithFailover(`${full.pathname}${full.search}`, { signal });
+       stream cannot change account mid-play.
+       The path is handed over as-is: `fetchWithFailover` joins it onto
+       whichever base is active, and that base is a bare `/api` in a preview
+       build. Parsing an absolute URL there used to throw before a single byte
+       was asked for, which is why no ad ever showed on a preview. */
+    const res = await fetchWithFailover(
+      `/embed/proxy?url=${encodeURIComponent(url)}`,
+      { signal },
+    );
     if (!res.ok) return null;
     const body = await res.text();
     /* A pipe that answers with our own error JSON is a miss, not an ad. */
@@ -191,12 +194,17 @@ export async function fetchHilltopVastAds(
   return ads;
 }
 
-/** The first creative the zone hands back — what the pre-roll plays. */
+/** The first creative the zone hands back — what the pre-roll plays. A zone
+ *  that answers with an empty document (no fill for this viewer right now) is
+ *  asked through the second tag before the stage goes without an ad: two zones
+ *  fill better than one, and it costs nothing on a normal answer. */
 export async function fetchHilltopVast(
   signal: AbortSignal,
   tag: string = HILLTOP_VAST_TAG,
 ): Promise<VastAd | null> {
-  return (await fetchHilltopVastAds(signal, tag))[0] ?? null;
+  const own = await fetchHilltopVastAds(signal, tag);
+  if (own.length || tag !== HILLTOP_VAST_TAG) return own[0] ?? null;
+  return (await fetchHilltopVastAds(signal, HILLTOP_BANNER_VAST_TAG))[0] ?? null;
 }
 
 /** VAST tracking is a plain GET. The macros are the only ones that matter here:

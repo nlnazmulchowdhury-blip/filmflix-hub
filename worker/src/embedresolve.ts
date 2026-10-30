@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import type { Env } from "./index";
 import { NXSHA_HOST, nxshaStreams, nxshaTmdbOf, type NxshaTitle } from "./nxsha";
 import { vidlinkSources, vidlinkTitleOf } from "./vidlink";
@@ -34,7 +35,7 @@ interface Candidate {
   url: string;
   via: string;
   quality?: string;
-  kind?: "hls" | "file";
+  kind?: "hls" | "file" | "dash";
   codec?: "h264" | "hevc" | "unknown";
   cors?: boolean;
 }
@@ -262,7 +263,7 @@ export async function resolveEmbedStream(
  *  it can render. Only the first 64 KB is ever read. */
 interface StreamProbe {
   ok: boolean;
-  kind: "hls" | "file" | "dead";
+  kind: "hls" | "file" | "dash" | "dead";
   codec: "h264" | "hevc" | "unknown";
   cors: boolean;
 }
@@ -389,7 +390,8 @@ async function rankPlayable(
     })
     .map((x) => ({
       ...x.c,
-      kind: x.p.kind === "hls" ? ("hls" as const) : ("file" as const),
+      kind:
+        x.p.kind === "hls" ? ("hls" as const) : x.p.kind === "dash" ? ("dash" as const) : ("file" as const),
       codec: x.p.codec,
       cors: x.p.cors,
     }));
@@ -497,7 +499,7 @@ async function durbinSources(
   }
 }
 
-embedResolveRoutes.get("/direct", async (c) => {
+async function resolveDirectAnswer(c: Context<Env>): Promise<Response> {
   const tmdb = (c.req.query("tmdb") ?? "").replace(/\D/g, "");
   if (!tmdb) return c.json({ candidates: [], error: "no usable id" }, 400);
   const kind = c.req.query("kind") === "tv" ? "tv" : "movie";
@@ -524,7 +526,11 @@ embedResolveRoutes.get("/direct", async (c) => {
     console.error("direct resolve failed", err);
     return c.json({ candidates: [], error: "direct resolver crashed" }, 502);
   }
-});
+}
+
+embedResolveRoutes.get("/direct", (c) =>
+  cachedAnswer(c.req.raw, () => resolveDirectAnswer(c)),
+);
 
 /* ---------------- vixsrc handshake (its playlist is built in JS) ------------- */
 
@@ -639,15 +645,20 @@ function nxshaTitleOf(raw: string): NxshaTitle | null {
 
 /** A byte-pipe link to one upstream resource, rewritten on the way out.
  *  `cookie` carries the case where the CDN signs the path into a cookie rather
- *  than the URL, so the pipe has to present it on every hop. */
+ *  than the URL, so the pipe has to present it on every hop. `headerless` is
+ *  for a CDN that refuses everything browser-shaped (vidlink's mp4 host answers
+ *  428 to a browser User-Agent and 429 to the site's own referer): that hop
+ *  goes out bare, and `ref=` empty is how the pipe is told to omit both. */
 function pipeUrl(
   target: string,
   referer: string,
   self: string,
   cookie = "",
+  headerless = false,
 ): string {
   const q = new URLSearchParams({ url: target, ref: referer, rewrite: "1" });
   if (cookie) q.set("ck", cookie);
+  if (headerless) q.set("ua", "none");
   return `${self}?${q.toString()}`;
 }
 
@@ -661,13 +672,14 @@ function rewritePlaylist(
   referer: string,
   self: string,
   cookie = "",
+  headerless = false,
 ): string {
   const wrap = (uri: string): string => {
     const abs = safeUrl(new URL(uri.trim(), base).href)?.href;
     /* Already piped, or not a fetchable resource at all: leave the line alone
        rather than hand back a URI the player cannot resolve. */
     if (!abs || abs.startsWith(self)) return uri;
-    return pipeUrl(abs, referer, self, cookie);
+    return pipeUrl(abs, referer, self, cookie, headerless);
   };
   return text
     .split(/\r?\n/)
@@ -682,7 +694,58 @@ function rewritePlaylist(
     .join("\n");
 }
 
-embedResolveRoutes.get("/stream", async (c) => {
+/** Provider answers live for minutes, but the walk that mints them costs
+ *  seconds of handshakes and probes — and the player asks again on every mount,
+ *  chip switch and reload. A short edge cache turns that repeat open into one
+ *  hop; a miss is never cached, so a title the scrapers did not have is asked
+ *  again on the next pass. `fresh=1` is the retry path's way of saying the
+ *  cached link already died in the player. */
+const ANSWER_TTL_S = 120;
+
+async function cachedAnswer(
+  request: Request,
+  produce: () => Promise<Response>,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const fresh = url.searchParams.has("fresh");
+  url.searchParams.delete("fresh");
+  const key = new Request(url.toString(), { method: "GET" });
+  let cache: Cache | undefined;
+  try {
+    cache = caches.default;
+  } catch {
+    cache = undefined;
+  }
+  if (cache && !fresh) {
+    try {
+      const hit = await cache.match(key);
+      if (hit) return hit;
+    } catch {
+      /* A cache the runtime refuses to read is only slower, never wrong. */
+    }
+  }
+  const res = await produce();
+  if (cache && res.ok && !fresh) {
+    try {
+      const body = (await res.clone().json()) as { candidates?: unknown[] };
+      if (Array.isArray(body.candidates) && body.candidates.length)
+        await cache.put(
+          key,
+          new Response(JSON.stringify(body), {
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              "cache-control": `public, max-age=${ANSWER_TTL_S}`,
+            },
+          }),
+        );
+    } catch {
+      /* An answer that cannot round-trip through JSON is simply not cached. */
+    }
+  }
+  return res;
+}
+
+async function resolveStreamAnswer(c: Context<Env>): Promise<Response> {
   const url = c.req.query("url") ?? "";
   if (!safeUrl(url))
     return c.json({ candidates: [], hops: [], error: "invalid url" }, 400);
@@ -721,8 +784,21 @@ embedResolveRoutes.get("/stream", async (c) => {
          these hosts refuse a Worker's connection outright (a bare 403 with no
          body), so their links would be re-probed and thrown away by the
          candidate step below while another scraper's stream went unasked. */
+      /* The walk already fetches a scraper's first links to decide whether to
+         keep it; probing those same links again below would double the walk's
+         network cost for a verdict this Worker already has. */
+      const probed = new Map<string, Promise<StreamProbe>>();
+      const probeOnce = (u: string, ref: string) => {
+        const key = `${u}\u0000${ref}`;
+        let p = probed.get(key);
+        if (!p) {
+          p = probeStream(u, ref);
+          probed.set(key, p);
+        }
+        return p;
+      };
       const sources = await nxshaStreams(nxsha, fetchPage, async (u, ref) => {
-        const p = await probeStream(u, ref);
+        const p = await probeOnce(u, ref);
         return p.ok && p.codec !== "hevc";
       });
       if (!sources.length)
@@ -743,7 +819,7 @@ embedResolveRoutes.get("/stream", async (c) => {
             via: `nxsha · ${s.provider}`,
             quality: s.quality,
           },
-          p: probeStream(s.url, s.referer),
+          p: probeOnce(s.url, s.referer),
         })),
       );
       return c.json({
@@ -814,23 +890,41 @@ embedResolveRoutes.get("/stream", async (c) => {
           hops: [url],
           error: reason || "vidlink has no stream for this title.",
         });
-      const self = `${new URL(c.req.url).origin}/embed/proxy`;
+      const origin = new URL(c.req.url).origin;
+      const self = `${origin}/embed/proxy`;
+      const dashSelf = `${origin}/embed/dash`;
       const candidates = await rankPlayable(
         sources.map((s) => ({
           c: {
-            url: pipeUrl(s.url, s.referer, self, s.cookie),
+            /* A DASH title cannot ride the query-string pipe: its MPD names its
+               segments by relative file name, and a `?url=` cannot act as the
+               base those resolve against. It gets the path-shaped pipe instead,
+               which the manifest route rewrites the base of. */
+            url:
+              s.kind === "dash"
+                ? `${dashSelf}?url=${encodeURIComponent(s.url)}&ck=${encodeURIComponent(s.cookie)}`
+                : pipeUrl(
+                    s.url,
+                    s.headerless ? "" : s.referer,
+                    self,
+                    s.cookie,
+                    Boolean(s.headerless),
+                  ),
             via: "vidlink handshake",
             quality: s.quality,
           },
           /* A file it signed and named is its own proof: probing that CDN from
              here only adds a 429 that writes the stream off, while the viewer
              reads it through our pipe — and the page preflights the pipe itself
-             before handing it to the player. */
+             before handing it to the player. The DASH answer is the same kind
+             of proof: its MPD and segments were fetched by this Worker with
+             that cookie while the handshake was being worked out, and the
+             player reads them through the pipe, never from the CDN. */
           p:
-            s.kind === "file"
+            s.kind === "file" || s.kind === "dash"
               ? Promise.resolve<StreamProbe>({
                   ok: true,
-                  kind: "file",
+                  kind: s.kind,
                   codec:
                     s.codec === "hevc" || s.codec === "h265"
                       ? "hevc"
@@ -901,7 +995,11 @@ embedResolveRoutes.get("/stream", async (c) => {
     console.error("embed resolve failed", err);
     return c.json({ candidates: [], hops: [], error: "resolver crashed" }, 502);
   }
-});
+}
+
+embedResolveRoutes.get("/stream", (c) =>
+  cachedAnswer(c.req.raw, () => resolveStreamAnswer(c)),
+);
 
 /* ---------------- qualities (per-resolution download links) ---------------- */
 
@@ -1276,6 +1374,158 @@ embedResolveRoutes.get("/pageinfo", async (c) => {
    and abort the file. */
 const RANGE_HEADERS = ["content-length", "content-range", "last-modified", "etag"];
 
+/* ---------------- DASH pipe (vidlink's HEVC titles) ----------------
+ *
+ * An MPD names its segments by relative file name, so the query-string pipe is
+ * no use here: `?url=` cannot be the base a relative name resolves against, and
+ * the provider rewrites its own player URLs the same way. The manifest is served
+ * from /embed/dash with a <BaseURL> pointing at the path-shaped pipe below, so
+ * `init-stream0.m4s` both resolves and fetches through us exactly as written.
+ * The signed cookie its CDN gates on travels inside that path and never reaches
+ * the browser as a header it could not send. */
+
+function b64url(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function unb64url(s: string): string {
+  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  return new TextDecoder().decode(Uint8Array.from(bin, (ch) => ch.charCodeAt(0)));
+}
+
+/** Keep one video rendition in an MPD, leaving audio untouched. The player
+ *  asks for this when the viewer pins a resolution: MSE on this platform
+ *  cannot swap HEVC renditions inside one source, so the engine is restarted
+ *  on a manifest that only carries the chosen rung. */
+function onlyVideoRepresentation(mpd: string, rep: string): string {
+  return mpd.replace(
+    /(<AdaptationSet[^>]*contentType="video"[^>]*>)([\s\S]*?)(<\/AdaptationSet>)/i,
+    (_whole, open: string, body: string, close: string) =>
+      open +
+      body.replace(
+        /<Representation[^>]*\/>|<Representation[^>]*>[\s\S]*?<\/Representation>/g,
+        (r) => (r.match(/id="([^"]+)"/)?.[1] === rep ? r : ""),
+      ) +
+      close,
+  );
+}
+
+/** Manifests are the slowest hop of a start: the player asks for the master,
+ *  then the variant it names, and each is a trip to a CDN that may sit half a
+ *  world away. They change only when the provider rotates its tokens, so a
+ *  minute of edge cache keeps a re-open (and every seek-triggered refetch) off
+ *  the upstream path. Segments are never cached here. */
+const MANIFEST_TTL_S = 60;
+
+async function manifestCacheGet(key: Request): Promise<Response | null> {
+  try {
+    return (await caches.default.match(key)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function manifestCachePut(key: Request, res: Response): Promise<void> {
+  try {
+    await caches.default.put(key, res);
+  } catch {
+    /* Not cached is only slower. */
+  }
+}
+
+embedResolveRoutes.get("/dash", async (c) => {
+  const mpd = safeUrl(c.req.query("url") ?? "");
+  if (!mpd) return c.json({ error: "invalid url" }, 400);
+  const cookie = c.req.query("ck") ?? "";
+  const rep = (c.req.query("rep") ?? "").trim();
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const hit = await manifestCacheGet(cacheKey);
+  if (hit) return hit;
+  try {
+    const res = await fetch(mpd.href, {
+      redirect: "follow",
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Referer: mpd.origin + "/",
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+    });
+    if (!res.ok) {
+      void res.body?.cancel().catch(() => undefined);
+      return new Response(null, { status: res.status || 502 });
+    }
+    const text = await res.text();
+    if (!/<MPD[\s>]/i.test(text))
+      return c.json({ error: "upstream answered something that is not a manifest" }, 502);
+    const base = safeUrl(res.url)?.href ?? mpd.href;
+    const dir = base.slice(0, base.lastIndexOf("/") + 1);
+    const origin = new URL(c.req.url).origin;
+    const segBase = `${origin}/embed/dash/s/${b64url(dir)}/${b64url(cookie)}/`;
+    /* Segment names stay relative on purpose: dash.js substitutes its own
+       `$RepresentationID$` / `$Number$` templates into them, which an encoded
+       link would have broken. */
+    const narrowed = /^[A-Za-z0-9_-]+$/.test(rep)
+      ? onlyVideoRepresentation(text, rep)
+      : text;
+    const out = narrowed.replace(
+      /<Period\b[^>]*>/i,
+      (m) => `${m}\n    <BaseURL>${segBase}</BaseURL>`,
+    );
+    const answer = new Response(out, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/dash+xml",
+        "Cache-Control": `public, max-age=${MANIFEST_TTL_S}`,
+      },
+    });
+    await manifestCachePut(cacheKey, answer.clone());
+    return answer;
+  } catch (err) {
+    console.error("dash manifest failed", err);
+    return c.json({ error: "fetch failed" }, 502);
+  }
+});
+
+embedResolveRoutes.get("/dash/s/:dir/:ck/:file", async (c) => {
+  const dir = safeUrl(unb64url(c.req.param("dir")));
+  const file = c.req.param("file");
+  if (!dir || !/^[A-Za-z0-9._-]+$/.test(file)) return c.json({ error: "invalid path" }, 400);
+  const cookie = unb64url(c.req.param("ck"));
+  const range = c.req.header("range");
+  try {
+    const res = await fetch(dir.href + file, {
+      redirect: "follow",
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Referer: dir.origin + "/",
+        Accept: "*/*",
+        ...(cookie ? { Cookie: cookie } : {}),
+        ...(range ? { Range: range } : {}),
+      },
+    });
+    if (!res.ok || !res.body) {
+      void res.body?.cancel().catch(() => undefined);
+      return new Response(null, { status: res.status || 502 });
+    }
+    const headers: Record<string, string> = {
+      "Content-Type": res.headers.get("content-type") ?? "application/octet-stream",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=3600",
+    };
+    for (const h of RANGE_HEADERS) {
+      const v = res.headers.get(h);
+      if (v) headers[h] = v;
+    }
+    return new Response(res.body, { status: res.status, headers });
+  } catch (err) {
+    console.error("dash segment failed", err);
+    return c.json({ error: "fetch failed" }, 502);
+  }
+});
+
 embedResolveRoutes.get("/proxy", async (c) => {
   const url = c.req.query("url") ?? "";
   const safe = safeUrl(url);
@@ -1284,7 +1534,14 @@ embedResolveRoutes.get("/proxy", async (c) => {
      every URI it names re-pointed at this same endpoint, so a provider whose
      CDN only answers its own referer can still be watched in our player. */
   const rewrite = c.req.query("rewrite") === "1";
-  const referer = c.req.query("ref") ?? safe.origin + "/";
+  /* `ref=` empty (and a `ua=none` that comes with it) is a headerless hop: some
+     CDNs refuse to serve a video at all when the request looks like a browser
+     or names the provider — vidlink's mp4 host answers 428 to any browser
+     User-Agent and 429 to a vidlink Referer — and answer a bare request with
+     the bytes. Omitted, `ref` still defaults to the upstream origin. */
+  const refQuery = c.req.query("ref");
+  const referer = refQuery === undefined ? safe.origin + "/" : refQuery;
+  const headerless = c.req.query("ua") === "none" || referer === "";
   /* A CDN that gates on a signed cookie (CloudFront, on vidlink's pipes) hands
      it to us as a query parameter, and every manifest URI this route rewrites
      carries the same one — so the segments stream through without the browser
@@ -1296,13 +1553,19 @@ embedResolveRoutes.get("/proxy", async (c) => {
      CDN that dislikes a Range on one answers 4xx — so the ask is retried
      without the header rather than reported as a dead stream. */
   const range = c.req.header("range");
+  /* A manifest is the same rewrite every time it is asked for, and the player
+     asks twice per start (master, then the variant it named). Byte requests and
+     Range probes always go upstream untouched. */
+  const manifestKey = rewrite && !range ? new Request(c.req.url, { method: "GET" }) : null;
+  if (manifestKey) {
+    const hit = await manifestCacheGet(manifestKey);
+    if (hit) return hit;
+  }
   const ask = (withRange: boolean) =>
     fetch(safe.href, {
       redirect: "follow",
       headers: {
-        "User-Agent": BROWSER_UA,
-        Referer: referer,
-        Origin: safe.origin,
+        ...(headerless ? {} : { "User-Agent": BROWSER_UA, Referer: referer, Origin: safe.origin }),
         Accept: "*/*",
         ...(cookie ? { Cookie: cookie } : {}),
         ...(withRange && range ? { Range: range } : {}),
@@ -1328,14 +1591,19 @@ embedResolveRoutes.get("/proxy", async (c) => {
       const text = await res.text();
       const base = safeUrl(res.url)?.href ?? safe.href;
       const self = `${new URL(c.req.url).origin}/embed/proxy`;
-      return new Response(rewritePlaylist(text, new URL(base), referer, self, cookie), {
-        status: 200,
-        headers: {
-          "Content-Type": res.headers.get("content-type") ?? "application/vnd.apple.mpegurl",
-          /* Its variant links carry their own short-lived tokens. */
-          "Cache-Control": "no-cache, no-store, must-revalidate",
+      const answer = new Response(
+        rewritePlaylist(text, new URL(base), referer, self, cookie, headerless),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": res.headers.get("content-type") ?? "application/vnd.apple.mpegurl",
+            /* Its variant links carry their own short-lived tokens. */
+            "Cache-Control": `public, max-age=${MANIFEST_TTL_S}`,
+          },
         },
-      });
+      );
+      if (manifestKey) await manifestCachePut(manifestKey, answer.clone());
+      return answer;
     }
     if (!res.ok || !res.body)
       return new Response(null, { status: res.status || 502 });

@@ -10,6 +10,9 @@
  * The handshake is not actually a session: the key is a constant inside that
  * WASM, the nonce the client always sends is 24 zero bytes, and the plaintext
  * is `<TMDB id in ASCII> · 4 zero bytes · unix time as 4 big-endian bytes`.
+ * That time is also the token's leash — its API only honours a stamp within
+ * about half a minute of its own clock — so `vidlinkSources` mints against the
+ * clock the answer itself reports, never just ours.
  * So the token can be minted here — which is what `secretbox` below does, with
  * XSalsa20-Poly1305 vendored in (Workers' WebCrypto has no secretbox, and this
  * keeps the deploy free of a new dependency).
@@ -39,6 +42,10 @@ const NONCE = new Uint8Array(24);
 
 const ASK_TIMEOUT_MS = 9_000;
 
+/** Seconds of headroom the token's stamp needs over the API's own clock; see
+ *  `ask()` for why a stamp read from our clock is not enough. */
+const TOKEN_AHEAD_S = 60;
+
 export interface VidlinkTitle {
   tmdbId: string;
   type: "movie" | "tv";
@@ -55,10 +62,17 @@ export interface VidlinkSource {
   cookie: string;
   /** What the handshake actually served. `"file"` is a progressive mp4 whose
    *  exact codec and URL the provider itself named, so the caller can trust it
-   *  without re-probing (whose 429 would kill a stream the browser can play). */
-  kind?: "hls" | "file";
+   *  without re-probing (whose 429 would kill a stream the browser can play).
+   *  `"dash"` is an MPD for a title it holds only as HEVC: its mp4 ladder sits
+   *  on a host that refuses both browsers and Cloudflare, while its DASH
+   *  segments answer either one that presents the signed cookie. */
+  kind?: "hls" | "file" | "dash";
   /** The codec the provider declared for this source, lower-cased. */
   codec?: string;
+  /** Its progressive CDN refuses every browser-shaped request — a browser
+   *  User-Agent draws a 428 and a vidlink Referer a 429 — and only answers a
+   *  bare one, so the pipe must forward neither. */
+  headerless?: boolean;
 }
 
 /** Its page fetcher, with one extra channel: this API only answers with a
@@ -317,36 +331,92 @@ export async function vidlinkSources(
 ): Promise<{ sources: VidlinkSource[]; reason: string }> {
   const tail = title.type === "tv" ? `/${title.season}/${title.episode}` : "";
   const page = `https://${VIDLINK_HOST}/${title.type}/${title.tmdbId}${tail}`;
-  const api = `${VIDLINK_API}/api/b/${title.type}/${vidlinkToken(title.tmdbId)}${tail}?multiLang=0`;
-  let obj: any;
-  try {
+  const ask = async (
+    at: number,
+    env: "hls" | "webkit",
+  ): Promise<{ res: Response; text: string }> => {
+    const api = `${VIDLINK_API}/api/b/${title.type}/${vidlinkToken(title.tmdbId, at)}${tail}?multiLang=0`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), ASK_TIMEOUT_MS);
-    let res: Response;
     try {
       /* The one header that decides the container. Without it the API answers
          its default — a single HEVC MP4 that our player can only paint black
-         for — and with it a client that reports HLS support gets H.264. */
-      res = await get(api, page, { "X-Playback-Environment": "hls" });
+         for — and with it a client that reports HLS support gets H.264. The
+         `webkit` value is its own client's label for "this browser decodes
+         HEVC", and is what makes it answer a DASH rendition of an HEVC title
+         instead of that dead MP4. */
+      const res = await get(api, page, { "X-Playback-Environment": env });
+      return { res, text: await res.text() };
     } finally {
       clearTimeout(timer);
     }
-    const text = await res.text();
-    /* A wall page or a bare `null` both mean it will not serve this title. */
-    if (!res.ok || !text.trim() || text.trim() === "null")
-      return { sources: [], reason: "vidlink does not carry this title" };
-    try {
-      obj = JSON.parse(text);
-    } catch {
-      return { sources: [], reason: "vidlink answered something that was not a stream" };
+  };
+  const useful = (x: { res: Response; text: string }) =>
+    x.res.ok && x.text.trim() && x.text.trim() !== "null";
+  /** One full handshake in a given container. `null` is its "not carried",
+   *  `undefined` an answer that was not a stream. */
+  const handshake = async (env: "hls" | "webkit"): Promise<any> => {
+    /* Its checker wants the stamp a little ahead of its own clock: one stamped
+       "now" comes back as a bare `null`, and so does anything older — while a
+       minute or an hour of headroom is accepted. So mint with headroom, and if
+       that is still refused, add more against the clock the answer reports. */
+    const local = Math.floor(Date.now() / 1000);
+    let answer = await ask(local + TOKEN_AHEAD_S, env);
+    if (!useful(answer)) {
+      const server = Math.floor(Date.parse(answer.res.headers.get("date") ?? "") / 1000);
+      if (Number.isFinite(server) && server > local)
+        answer = await ask(server + TOKEN_AHEAD_S, env);
     }
+    if (!useful(answer)) return null;
+    try {
+      return JSON.parse(answer.text);
+    } catch {
+      return undefined;
+    }
+  };
+  /** Its DASH rendition, as a source: the MPD plus the signed cookie its CDN
+   *  gates every segment on. */
+  const dashOf = (s: any): VidlinkSource | null => {
+    const mpd = typeof s?.playlist === "string" ? s.playlist.trim() : "";
+    if (s?.type !== "dash" || !/^https?:\/\//.test(mpd)) return null;
+    const heights = (s.playbackMetadata?.resolutions ?? []) as unknown[];
+    const h = Number(heights[0]) || 0;
+    return {
+      url: mpd,
+      quality: h ? (h === 2160 ? "4K" : `${h}p`) : "",
+      kind: "dash" as const,
+      codec: String(s.playbackMetadata?.codecName ?? "hevc").toLowerCase(),
+      referer: headerOf(s.playlistHeaders, "Referer") || new URL(mpd).origin + "/",
+      cookie: headerOf(s.playlistHeaders, "Cookie"),
+    };
+  };
+
+  let obj: any;
+  try {
+    obj = await handshake("hls");
   } catch (err) {
     return { sources: [], reason: `vidlink API failed: ${String(err)}` };
   }
+  if (obj === null) return { sources: [], reason: "vidlink does not carry this title" };
+  if (obj === undefined)
+    return { sources: [], reason: "vidlink answered something that was not a stream" };
 
   const s = obj?.stream ?? {};
   const codec = String(s?.playbackMetadata?.codecName ?? "").toLowerCase();
   const playlist = typeof s.playlist === "string" ? s.playlist.trim() : "";
+  if (s.type === "dash" || (s.type !== "hls" && opts.allowHevc)) {
+    /* Its HEVC answer. The `hls` ask hands back the progressive mp4 ladder for
+       these titles, and that host refuses a browser and a Cloudflare Worker
+       alike — its own player therefore never uses it either, and streams the
+       title as DASH. So ask again the way its client does on an HEVC-capable
+       browser, and take the MPD. The ladder below is only the last resort. */
+    try {
+      const dash = dashOf(s) ?? dashOf((await handshake("webkit"))?.stream);
+      if (dash) return { sources: [dash], reason: "" };
+    } catch {
+      /* fall through to the ladder: a dead host still beats no answer */
+    }
+  }
   if (s.type !== "hls" || !playlist) {
     /* Its progressive answer. `requiresProxy` is its own flag for "our CDN only
        answers a proxied request", so this goes through `/embed/proxy` with the
@@ -359,6 +429,10 @@ export async function vidlinkSources(
           ? `vidlink only has this title as ${String(s.type ?? "nothing").toUpperCase()}`
           : `vidlink holds this title only as HEVC, which this player cannot decode.`,
       };
+    /* Its progressive answer names no headers at all. That CDN turns a browser
+       User-Agent into a 428 and a vidlink Referer into a 429, so the source
+       says so and the pipe forwards neither. */
+    const fileReferer = headerOf(s.fileHeaders, "Referer");
     return {
       sources: [
         {
@@ -366,14 +440,16 @@ export async function vidlinkSources(
           quality: file.quality,
           kind: "file" as const,
           codec: file.codec,
-          referer: headerOf(s.fileHeaders, "Referer") || `https://${VIDLINK_HOST}/`,
+          referer: fileReferer,
           cookie: headerOf(s.fileHeaders, "Cookie"),
+          headerless: !fileReferer,
         },
       ],
       reason: "",
     };
   }
-  if (codec && codec !== "h264" && codec !== "avc")
+  const hevcPlaylist = codec === "hevc" || codec === "h265";
+  if (codec && codec !== "h264" && codec !== "avc" && !(hevcPlaylist && opts.allowHevc))
     return { sources: [], reason: `vidlink's stream for this title is ${codec.toUpperCase()}-only` };
   const url = /^https?:\/\//.test(playlist) ? playlist : "";
   if (!url) return { sources: [], reason: "vidlink gave a playlist we cannot fetch" };

@@ -1,14 +1,29 @@
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import type { Doc } from "@/convex/_generated/dataModel";
+import { warmTitleStreams } from "@/lib/embed-resolver";
 import { Play, Star } from "lucide-react";
 import { motion } from "framer-motion";
 import { Link } from "react-router";
 
 type Movie = Doc<"movies">;
 
+/** A press says which title is about to open, so the provider walks start here
+ *  instead of after the player has mounted and painted its cover. Nothing plays
+ *  from this: the asks are exactly the ones the route's race would make — the
+ *  client dedupes and remembers them, so opening the card costs nothing extra.
+ *  Deliberately not hover: sweeping a grid would ask every provider for every
+ *  poster the pointer crossed. */
 export default function MovieCard({ movie, index = 0 }: { movie: Movie; index?: number }) {
   const rating = movie.rating != null ? movie.rating.toFixed(1) : null;
+
+  const warm = () => {
+    if (!movie.tmdbId) return;
+    warmTitleStreams({
+      tmdbId: movie.tmdbId,
+      kind: movie.kind === "series" ? "series" : "movie",
+    });
+  };
 
   return (
     <motion.div
@@ -16,7 +31,12 @@ export default function MovieCard({ movie, index = 0 }: { movie: Movie; index?: 
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, delay: Math.min(index * 0.04, 0.4), ease: "easeOut" }}
     >
-      <Link to={`/movie/${movie._id}`} className="group block focus-visible:outline-none">
+      <Link
+        to={`/movie/${movie._id}`}
+        className="group block focus-visible:outline-none"
+        onPointerDown={warm}
+        onFocus={warm}
+      >
         <Card className="card-lift group relative overflow-hidden rounded-xl border-border/60 bg-card p-0 hover:border-primary/40 hover:shadow-[0_16px_48px_-16px_rgba(0,0,0,0.8)] hover:shadow-primary/10">
           <div className="relative aspect-[2/3] overflow-hidden bg-muted">
             {movie.posterUrl ? (

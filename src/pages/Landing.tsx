@@ -9,6 +9,7 @@ import VidSrcResultCard, {
   type VidSrcHit,
 } from "@/components/VidSrcResultCard";
 import { vidsrcEmbedUrl } from "@/lib/vidsrc";
+import { warmTitleStreams } from "@/lib/embed-resolver";
 import { rememberExternalHint } from "@/lib/vaplayer";
 import {
   browseTmdb,
@@ -25,18 +26,18 @@ import { movieCategoryNames } from "@/lib/categories";
 import { useAuth } from "@/hooks/use-auth";
 import { useAction, useQuery } from "convex/react";
 import {
+  ChevronLeft,
+  ChevronRight,
   Dices,
   Film,
+  Loader2,
   LogOut,
-  Menu,
   Play,
   Search,
   ShieldCheck,
   Tv,
+  UserRound,
   X,
-  Loader2,
-  ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import {
@@ -48,13 +49,6 @@ import {
 } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
 
 /** Lowercase, strip punctuation, collapse whitespace — forgiving matching. */
 function normalizeText(s: string) {
@@ -378,6 +372,11 @@ export default function Landing() {
      carry no embed id (keyless pad entries) resolve their title to an IMDb id
      first and play through Server 1 (VidSrc). */
   const playTmdb = async (item: TmdbItem) => {
+    /* The route has to fetch its own title data and mount before it can ask a
+       provider anything; the walk started here is that head start, and it is
+       the same ask the player's race makes (deduped and remembered), not an
+       extra one. */
+    if (item.tmdbId) warmTitleStreams({ tmdbId: item.tmdbId, kind: item.kind });
     if (item.embedUrl) {
       const state = {
         external: "vaplayer",
@@ -511,7 +510,6 @@ export default function Landing() {
     navigate(`/movie/${pick._id}`);
   };
 
-  const [menuOpen, setMenuOpen] = useState(false);
   const navLinkClass =
     "text-sm font-medium text-muted-foreground transition-colors hover:text-foreground";
 
@@ -556,109 +554,31 @@ export default function Landing() {
             </Link>
           </nav>
           <div className="flex items-center gap-0.5 sm:gap-2">
-            {/* Mobile: hamburger + slide-in menu (desktop keeps the inline nav). */}
-            <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-              <SheetTrigger asChild>
+            {isAuthenticated ? (
+              <>
+                <Button
+                  asChild
+                  variant="ghost"
+                  size="icon"
+                  className="hidden text-muted-foreground md:inline-flex"
+                >
+                  <Link to="/profile" aria-label="Profile" title="Profile">
+                    <UserRound className="size-4" />
+                  </Link>
+                </Button>
                 <Button
                   variant="ghost"
-                  size="icon-sm"
-                  className="md:hidden text-muted-foreground hover:text-foreground"
-                  aria-label="Open menu"
+                  size="icon"
+                  className="hidden text-muted-foreground md:inline-flex"
+                  onClick={async () => {
+                    await signOut();
+                  }}
+                  aria-label="Sign out"
+                  title="Sign out"
                 >
-                  <Menu className="size-5" />
+                  <LogOut className="size-4" />
                 </Button>
-              </SheetTrigger>
-              <SheetContent side="right" className="w-72">
-                <SheetHeader>
-                  <SheetTitle className="font-display">Menu</SheetTitle>
-                </SheetHeader>
-                <nav className="flex flex-col gap-1 px-4 pb-6">
-                  {[
-                    { label: "Home", to: "/" },
-                    {
-                      label: "Random",
-                      action: () => {
-                        setMenuOpen(false);
-                        surprise();
-                      },
-                    },
-                    { label: "Providers", href: "#providers" },
-                    {
-                      label: "Library",
-                      to: isAuthenticated
-                        ? "/dashboard"
-                        : "/auth?returnTo=%2Fdashboard",
-                    },
-                    { label: "TV", to: "/tv" },
-                    { label: "Download", to: "/download" },
-                    ...(isAuthenticated
-                      ? [
-                          {
-                            label: "Sign out",
-                            action: () => {
-                              setMenuOpen(false);
-                              void signOut();
-                            },
-                          },
-                        ]
-                      : []),
-                  ].map((item) =>
-                    item.action ? (
-                      <button
-                        key={item.label}
-                        type="button"
-                        onClick={item.action}
-                        className="rounded-lg px-3 py-2.5 text-left text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                      >
-                        {item.label}
-                      </button>
-                    ) : item.href ? (
-                      <a
-                        key={item.label}
-                        href={item.href}
-                        onClick={() => setMenuOpen(false)}
-                        className="rounded-lg px-3 py-2.5 text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                      >
-                        {item.label}
-                      </a>
-                    ) : (
-                      <Link
-                        key={item.label}
-                        to={item.to ?? "/"}
-                        onClick={() => setMenuOpen(false)}
-                        className="rounded-lg px-3 py-2.5 text-base font-medium text-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                      >
-                        {item.label}
-                      </Link>
-                    ),
-                  )}
-                </nav>
-              </SheetContent>
-            </Sheet>
-            {/* Random pick stays reachable on phones where the nav is hidden. */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="md:hidden text-muted-foreground hover:text-foreground"
-              onClick={surprise}
-              aria-label="Random movie"
-              title="Random movie"
-            >
-              <Dices className="size-4" />
-            </Button>
-            {isAuthenticated ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="hidden text-muted-foreground md:inline-flex"
-                onClick={async () => {
-                  await signOut();
-                }}
-                aria-label="Sign out"
-                title="Sign out"
-              >
-                <LogOut className="size-4" />
-              </Button>
+              </>
             ) : (
               <Button asChild size="sm" className="gap-2 px-3 sm:px-4">
                 <Link to="/auth?returnTo=%2F">
@@ -1147,6 +1067,7 @@ export default function Landing() {
           our internal team.
         </p>
       </footer>
+
     </div>
   );
 }

@@ -85,6 +85,57 @@ function swapSrcKeepingPosition(
  *  setting el.src to a .m3u8 would only work on Safari, so non-Safari
  *  browsers get this wired in setHlsSource. One instance at a time. */
 let activeHls: Hls | null = null;
+/** The handful of dash.js members this player touches. v5 dropped the v4
+ *  quality helpers (`setQualityFor`, `getQualityFor`, `getBitrateInfoListFor`)
+ *  and speaks in representations instead, so the engine is described here. */
+interface DashTrack {
+  index?: number;
+  lang?: string;
+  labels?: { audio?: string[] };
+  default?: boolean;
+}
+interface DashRepresentation {
+  id: string;
+  height?: number;
+  bandwidth?: number;
+}
+interface DashPlayer {
+  initialize(el: HTMLVideoElement, src: string, autoPlay: boolean): void;
+  attachSource(src: string): void;
+  destroy(): void;
+  on(type: string, listener: (e?: { error?: string }) => void): void;
+  getVideoElement(): HTMLVideoElement;
+  getTracksFor(type: string): DashTrack[];
+  getCurrentTrackFor(type: string): DashTrack | null;
+  setCurrentTrack(track: DashTrack): void;
+  getRepresentationsByType(type: string): DashRepresentation[];
+  getCurrentRepresentationForType(type: string): DashRepresentation | null;
+  updateSettings(cfg: unknown): void;
+}
+interface DashModule {
+  MediaPlayer: (() => { create(): DashPlayer }) & { events: Record<string, string> };
+}
+/** The single DASH engine — dash.js feeds the SAME media element through MSE,
+ *  so seek, mute, volume, PiP and fullscreen keep working untouched. It is a
+ *  dynamic import: the library is only ever needed by providers whose only
+ *  playable rendition is an HEVC manifest. */
+let activeDash: DashPlayer | null = null;
+/** Whether the DASH engine still picks its own rendition (Auto). */
+let dashAutoVideo = true;
+/** The current ladder, keyed by the chip's numeric id: a rendition is picked
+ *  by representation id, while the chip (like hls.js) counts positions. */
+let dashReps: string[] = [];
+/** The manifest a pinned rendition is filtered from, and the rung the viewer
+ *  chose. Chrome cannot swap HEVC renditions inside one MediaSource, so a
+ *  quality pick re-inits the engine on a one-rendition manifest instead. */
+let dashBaseSrc: string | null = null;
+let dashPinned: number | null = null;
+/** The full ladder, read once from the unfiltered manifest: a pinned rebuild
+ *  only carries one rendition, and the chip must still offer every rung. */
+let dashLadder: { id: string; height: number; bandwidth: number }[] | null = null;
+/** The manifest a build in flight is for — an import that resolves after the
+ *  viewer already moved on must not hijack the element. */
+let dashWanted: string | null = null;
 /** Where the mounted provider listens for the audio renditions a stream
  *  carries. The engine is module-level (one at a time, survives surface swaps)
  *  while the language list is React state, so the two meet here. */
@@ -197,7 +248,20 @@ function stopEngine() {
   activeHls = null;
 }
 
-/** Tear down the module-level HLS engine (surface unmount / movie close). */
+/** Retire the DASH engine, keeping the second it had reached for the same
+ *  reason `stopEngine` does — `destroy()` resets the media element too. */
+function destroyDash() {
+  dashWanted = null;
+  dashReps = [];
+  if (!activeDash) return;
+  const el = activeDash.getVideoElement?.() as HTMLVideoElement | null;
+  if (engineScope) lastStreamAt = { key: engineScope, at: el?.currentTime || 0 };
+  activeDash.destroy();
+  activeDash = null;
+}
+
+/** Tear down the module-level engine, whichever one runs (surface unmount /
+ *  movie close / another source taking the element). */
 function destroyHls() {
   stopEngine();
   if (disposeTokenRefresh) {
@@ -205,6 +269,7 @@ function destroyHls() {
     disposeTokenRefresh = null;
   }
   activeTokenCtx = null;
+  destroyDash();
 }
 
 /** The viewer closed the film: its half-watched position must not follow the
@@ -290,6 +355,112 @@ function buildHls(el: HTMLVideoElement, src: string) {
   hls.attachMedia(el);
 }
 
+/** Wire a DASH manifest into the element through dash.js. Only the HEVC
+ *  renditions of a few providers arrive this way; everything else about the
+ *  player — the element, its controls, position and rate — stays the same. */
+async function buildDash(
+  el: HTMLVideoElement,
+  src: string,
+  opts: { base?: string; autoVideo?: boolean; pin?: number } = {},
+) {
+  destroyHls();
+  dashWanted = src;
+  const base = opts.base ?? src;
+  const mod = (await import("dashjs")) as unknown as DashModule & { default?: DashModule };
+  const dashjs: DashModule = mod.default ?? mod;
+  /* The viewer may have picked another server while the library loaded. */
+  if (dashWanted !== src) return;
+  /* A different manifest means a different ladder; a pinned rebuild of the
+     same one must keep it. */
+  if (dashBaseSrc !== base) dashLadder = null;
+  dashBaseSrc = base;
+  dashPinned = opts.pin ?? null;
+  engineScope = pendingScope || engineScope;
+  const outgoing = lastStreamAt;
+  lastStreamAt = null;
+  const resumeAt =
+    outgoing && outgoing.key === engineScope ? (el.currentTime || outgoing.at) : 0;
+  const rate = el.playbackRate || 1;
+
+  const player = dashjs.MediaPlayer().create();
+  activeDash = player;
+  dashAutoVideo = opts.autoVideo ?? true;
+  /* Its ladder and its audio list, in the same shapes hls.js reports, so the
+     Quality and Language chips read the stream instead of the catalog. */
+  const reportAudio = () => {
+    const tracks = player.getTracksFor("audio") ?? [];
+    const playing = player.getCurrentTrackFor("audio");
+    const current = (playing as { index?: number } | null)?.index;
+    audioTracksSink?.(
+      tracks.map((t, i) => ({
+        id: typeof t.index === "number" ? t.index : i,
+        name: t.labels?.audio?.join(", ") || t.lang || `Audio ${i + 1}`,
+        lang: t.lang,
+        isDefault: Boolean((t as { default?: boolean }).default),
+      })),
+      typeof current === "number" ? current : null,
+    );
+  };
+  const reportLevels = () => {
+    const reps = player.getRepresentationsByType("video") ?? [];
+    if (!dashLadder || reps.length > dashLadder.length)
+      dashLadder = reps.map((r) => ({
+        id: r.id,
+        height: r.height || 0,
+        bandwidth: r.bandwidth || 0,
+      }));
+    const ladder = dashLadder;
+    dashReps = ladder.map((r) => r.id);
+    const playingId = player.getCurrentRepresentationForType("video")?.id;
+    const playing = ladder.findIndex((r) => r.id === playingId);
+    levelsSink?.(
+      ladder.map((r, i) => ({
+        id: i,
+        height: r.height,
+        bitrate: r.bandwidth,
+        playing: i === playing,
+      })),
+      dashAutoVideo || playing < 0 ? null : playing,
+    );
+  };
+  const events = dashjs.MediaPlayer.events;
+  player.on(events.STREAM_INITIALIZED, () => {
+    reportAudio();
+    reportLevels();
+    if (resumeAt > 0) el.currentTime = resumeAt;
+    el.playbackRate = rate;
+    el.play().catch(() => undefined);
+  });
+  player.on(events.QUALITY_CHANGE_RENDERED, reportLevels);
+  player.on(events.TRACK_CHANGE_RENDERED, reportAudio);
+  /* One retry of the same manifest before the stage is told: provider CDNs
+     blip the same way they do for HLS, and a black stage on the first 502 is
+     what the viewer would otherwise see. */
+  let retried = false;
+  player.on(events.ERROR, (e?: { error?: string }) => {
+    /* This instance may already have been replaced by a pinned rebuild. */
+    if (activeDash !== player) return;
+    if (e?.error === "capability") {
+      reportPlaybackFailure(src);
+      return;
+    }
+    /* A pinned manifest this decoder rejects must not take the film down:
+       rebuild on the full manifest and keep the position. */
+    if (!dashAutoVideo) {
+      if (dashBaseSrc)
+        void buildDash(el, dashBaseSrc, { base: dashBaseSrc, autoVideo: true });
+      return;
+    }
+    if (!retried) {
+      retried = true;
+      player.attachSource(src);
+      return;
+    }
+    reportPlaybackFailure(src);
+  });
+  player.initialize(el, src, false);
+}
+
 export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   const [movie, setMovie] = useState<MiniPlayerMovie | null>(null);
   const [mode, setModeState] = useState<"inline" | "mini">("inline");
@@ -354,6 +525,18 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
   }, []);
   /** Hear the film in another of its own languages, in place. */
   const setAudioTrack = useCallback((id: number) => {
+    /* dash.js indexes its audio tracks the same way its chip does, so the id
+       travels straight through. */
+    if (activeDash) {
+      const track = (activeDash.getTracksFor("audio") ?? []).find(
+        (t, i) => (typeof t.index === "number" ? t.index : i) === id,
+      );
+      if (track) {
+        activeDash.setCurrentTrack(track);
+        setActiveAudioTrack(id);
+      }
+      return;
+    }
     if (!activeHls) return;
     activeHls.audioTrack = id;
     setActiveAudioTrack(id);
@@ -390,8 +573,39 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       levelsSink = null;
     };
   }, []);
-  /** Watch at one resolution instead of letting hls.js decide. -1 = Auto. */
+  /** Watch at one resolution instead of letting the engine decide. -1 = Auto. */
   const setLevel = useCallback((id: number) => {
+    if (activeDash) {
+      const el = videoRef.current;
+      if (id < 0) {
+        /* Auto means the full manifest again, not just ABR on: the pinned
+           build only carries the rung the viewer chose. */
+        if (dashPinned !== null && el && dashBaseSrc)
+          void buildDash(el, dashBaseSrc, { base: dashBaseSrc, autoVideo: true });
+        else if (!dashAutoVideo)
+          activeDash.updateSettings({
+            streaming: { abr: { autoSwitchBitrate: { video: true } } },
+          });
+        dashAutoVideo = true;
+        dashPinned = null;
+        setActiveLevel(null);
+        return;
+      }
+      const repId = dashReps[id];
+      /* Chrome refuses to swap HEVC renditions inside one MediaSource
+         (MEDIA_ERR_SRC_NOT_SUPPORTED), so the pick rebuilds the engine on a
+         manifest filtered to that rendition, resuming where it was. */
+      if (el && repId && dashBaseSrc && dashPinned !== id) {
+        const sep = dashBaseSrc.includes("?") ? "&" : "?";
+        void buildDash(el, `${dashBaseSrc}${sep}rep=${encodeURIComponent(repId)}`, {
+          base: dashBaseSrc,
+          autoVideo: false,
+          pin: id,
+        });
+      }
+      setActiveLevel(id);
+      return;
+    }
     if (!activeHls) return;
     activeHls.currentLevel = id;
     setActiveLevel(id < 0 ? null : id);
@@ -519,6 +733,12 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
     const el = videoRef.current;
     const m = movieRef.current;
     if (!el || !m) return;
+    /* A DASH stream's renditions belong to its engine: swapping the element's
+       src to the pipe URL would replace the MediaSource the engine feeds. */
+    if (m.isDash) {
+      setActiveQuality(label);
+      return;
+    }
     const q = label ? (m.qualities ?? []).find((x) => x.label === label) : undefined;
     const nextSrc = playableVideoUrl(
       q ? q.videoUrl : m.videoUrl,
@@ -911,6 +1131,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
                 : playableVideoUrl(movie.videoUrl, convexSiteUrl(), movie)
             }
             isHls={movie.isHls}
+            isDash={movie.isDash}
             onSourceChanged={destroyHls}
             subtitles={movie.subtitles ?? []}
             activeSubtitle={activeSubtitle}
@@ -976,7 +1197,7 @@ export function MiniPlayerProvider({ children }: { children: ReactNode }) {
       {miniActive && movie && (
         <div
           data-slot="mini-player"
-          className={`fixed bottom-3 right-3 z-[60] overflow-hidden rounded-xl border border-white/15 bg-black shadow-[0_24px_64px_-16px_rgba(0,0,0,0.95)] backdrop-blur max-sm:bottom-[max(0.75rem,env(safe-area-inset-bottom))] max-sm:right-[max(0.75rem,env(safe-area-inset-right))] ${
+          className={`fixed bottom-3 right-3 z-[60] overflow-hidden rounded-xl border border-white/15 bg-black shadow-[0_24px_64px_-16px_rgba(0,0,0,0.95)] backdrop-blur max-md:bottom-[calc(4.75rem+env(safe-area-inset-bottom))] max-sm:right-[max(0.75rem,env(safe-area-inset-right))] ${
             miniSmall
               ? "w-[30vw] max-w-[132px] min-w-[96px]"
               : "w-[min(92vw,460px)]"
@@ -1206,6 +1427,7 @@ function VideoSurface({
   videoRef,
   src,
   isHls,
+  isDash,
   subtitles,
   activeSubtitle,
   onStreamTracks,
@@ -1239,6 +1461,8 @@ function VideoSurface({
   /** The Worker read `#EXTM3U` off this source even though its path has no
    *  .m3u8 (vixsrc signs `…/playlist/{id}?token=…`) — hls.js must take it. */
   isHls?: boolean;
+  /** The source is a DASH manifest: dash.js drives the element. */
+  isDash?: boolean;
   subtitles: { label: string; url: string }[];
   activeSubtitle: string | null;
   /** Reports the caption labels the current stream carries. */
@@ -1329,6 +1553,9 @@ function VideoSurface({
      small badge so users know playback itself is fine. */
   const [audioOnly, setAudioOnly] = useState(false);
   const isHlsSrc = isHlsUrl(src) || isHls === true;
+  /* DASH also delivers duration before its first frame, so it is checked the
+     same way, and its element is driven by dash.js rather than `src`. */
+  const isDashSrc = isDash === true && Boolean(src);
   useEffect(() => {
     setAudioOnly(false);
     const el = videoRef.current;
@@ -1341,7 +1568,7 @@ function VideoSurface({
       const noVideo = el.videoHeight === 0;
       setAudioOnly(noVideo && Number.isFinite(el.duration) && el.duration > 0);
     };
-    if (isHlsSrc) {
+    if (isHlsSrc || isDashSrc) {
       el.addEventListener("loadeddata", check);
       return () => el.removeEventListener("loadeddata", check);
     }
@@ -1352,7 +1579,7 @@ function VideoSurface({
       el.removeEventListener("loadedmetadata", check);
       el.removeEventListener("durationchange", check);
     };
-  }, [src, isHlsSrc, videoRef]);
+  }, [src, isHlsSrc, isDashSrc, videoRef]);
 
   /* Unplayable sources (dead links, HTML download pages, wrong formats)
      would otherwise leave a silent black box — surface a short reason.
@@ -1385,6 +1612,13 @@ function VideoSurface({
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
+    if (isDashSrc) {
+      void buildDash(el, src);
+      return () => {
+        dashWanted = null;
+        onSourceChanged();
+      };
+    }
     if (!isHlsSrc) {
       /* Leaving HLS (next movie is MP4): the plain-src path must own the
          element — tear down the token loader and old engine first. */
@@ -1402,7 +1636,7 @@ function VideoSurface({
     return () => {
       onSourceChanged();
     };
-  }, [src, isHlsSrc, videoRef, onSourceChanged]);
+  }, [src, isHlsSrc, isDashSrc, videoRef, onSourceChanged]);
 
   /* Caption tracks are ours to control, every one of them. hls.js imports the
      provider's subtitle group and switches a FORCED track on by itself, so an
@@ -1836,7 +2070,7 @@ function VideoSurface({
           /* undefined, never "": an empty src attribute makes the browser
              resolve it against the current URL and refetch this very page as
              media, which React warns about and the element then errors on. */
-          src={isHlsSrc || !src ? undefined : src}
+          src={isHlsSrc || isDashSrc || !src ? undefined : src}
           loop={loop}
           className="absolute inset-0 size-full object-contain"
           style={{

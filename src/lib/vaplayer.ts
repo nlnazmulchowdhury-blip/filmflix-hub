@@ -6,6 +6,9 @@
  *              several upstream hosts by itself. Its stream is extracted
  *              server-side and pulled through our proxy, so it plays under
  *              our controls.
+ *   • screenscape → nxsha.screenscape.me: the same nxsha player through a
+ *              plain query-string embed. No token, no reader of ours — the
+ *              provider's own frame is where it runs.
  *   • vixsrc  → vixsrc.to. Took over the slot vidapi.ru left behind when that
  *              provider moved its player behind a Cloudflare Turnstile
  *              challenge (nextgencloudfabric.com), which cannot pass inside a
@@ -37,6 +40,7 @@
 const VIDBOX_BASE = "https://vidlink.pro";
 const VIXSRC_BASE = "https://vixsrc.to";
 const NXSHA_BASE = "https://web.nxsha.app";
+const SCREENSCAPE_BASE = "https://nxsha.screenscape.me";
 const XPASS_BASE = "https://play.xpass.top";
 
 export interface EmbedTarget {
@@ -106,6 +110,27 @@ export function nxshaEmbedUrl(target: EmbedTarget): string {
   return target.kind === "series"
     ? `${NXSHA_BASE}/embed/tv/${t}/${target.season ?? 1}/${target.episode ?? 1}`
     : `${NXSHA_BASE}/embed/movie/${t}`;
+}
+
+/** Screenscape server — the same nxsha player, served from Screenscape's own
+ *  embed route: `…/embed?tmdb=<id>&type=movie|tv`, with season/episode as plain
+ *  query params for a series. It is one shared page, so no id but the numeric
+ *  TMDB one is read; everything else gets no chip.
+ *
+ *  The Worker's nxsha reader is pinned to web.nxsha.app, so this host resolves
+ *  no further than the provider's own frame — that is what the chip is for. */
+export function screenscapeEmbedUrl(target: EmbedTarget): string {
+  const t = target.tmdbId;
+  if (!t || !/^\d+$/.test(String(t))) return "";
+  const u = new URL(`${SCREENSCAPE_BASE}/embed`);
+  u.searchParams.set("tmdb", String(t));
+  const series = target.kind === "series";
+  u.searchParams.set("type", series ? "tv" : "movie");
+  if (series) {
+    u.searchParams.set("season", String(target.season ?? 1));
+    u.searchParams.set("episode", String(target.episode ?? 1));
+  }
+  return u.toString();
 }
 
 /** viduki server — the player page behind that site's fourth API.

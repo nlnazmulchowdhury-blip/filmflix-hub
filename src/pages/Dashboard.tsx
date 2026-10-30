@@ -1,5 +1,14 @@
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -13,6 +22,8 @@ import {
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
 import AdBanner from "@/components/AdBanner";
+import ReferralPanel from "@/components/ReferralPanel";
+import { initialsOf } from "@/lib/account-display";
 import { AD_BANNERS } from "@/lib/ad-banners";
 import { readSavedTitles, removeSavedTitle, type SavedTitle } from "@/lib/saved-titles";
 import { api } from "@/convex/_generated/api";
@@ -23,12 +34,14 @@ import {
   ArrowLeft,
   Bookmark,
   CalendarClock,
+  ChevronDown,
   Clapperboard,
   CreditCard,
   Heart,
   LogOut,
   Sparkles,
   Trash2,
+  UserRound,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import { useEffect, useState } from "react";
@@ -95,17 +108,42 @@ export default function Dashboard() {
                 <span className="hidden sm:inline">Browse</span>
               </Link>
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={async () => {
-                await signOut();
-              }}
-            >
-              <LogOut className="size-4" />
-              <span className="hidden sm:inline">Sign out</span>
-            </Button>
+            {/* The corner account button opens the profile — that is where a
+                referrer sees the full earnings breakdown. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-2" aria-label="Open profile menu">
+                  <Avatar className="size-6">
+                    <AvatarFallback className="bg-primary/15 text-[10px] font-bold text-primary">
+                      {user ? initialsOf(user) : <UserRound className="size-3.5" />}
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="hidden max-w-28 truncate sm:inline">
+                    {user?.name?.split(" ")[0] || "Profile"}
+                  </span>
+                  <ChevronDown className="hidden size-3.5 text-muted-foreground sm:inline" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="truncate">
+                  {user?.email ?? "Your account"}
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => navigate("/profile")} className="gap-2">
+                  <UserRound className="size-4" />
+                  প্রোফাইল
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={async () => {
+                    await signOut();
+                  }}
+                  className="gap-2"
+                >
+                  <LogOut className="size-4" />
+                  সাইন আউট
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <ThemeToggle />
           </div>
         </div>
@@ -180,6 +218,8 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
+
+        <ReferralPanel />
 
         {/* Watchlist */}
         <Card className="overflow-hidden p-0">

@@ -5,13 +5,14 @@ import {
   type PlayerLevel,
 } from "@/components/mini-player-context";
 import { animeEmbedUrl, dramaEmbedUrl } from "@/lib/autoembed";
-import { vidboxEmbedUrl, vixsrcEmbedUrl, nxshaEmbedUrl, vidukiEmbedUrl } from "@/lib/vaplayer";
+import { vidboxEmbedUrl, vixsrcEmbedUrl, nxshaEmbedUrl, screenscapeEmbedUrl, vidukiEmbedUrl } from "@/lib/vaplayer";
 import {
   isEmbedUrl,
   probeEmbedPage,
   raceEmbedStreams,
   fetchEmbedQualities,
   fetchTitleDownloads,
+  forgetEmbedStreams,
   type EmbedCandidate,
   type EmbedRaceResult,
   type TitleDownloadProvider,
@@ -29,6 +30,7 @@ import {
   fetchServerAudio,
   type ServerAudio,
 } from "@/lib/embed-languages";
+import { fetchScreenscapeLangs, type ScreenscapeLang } from "@/lib/screenscape-langs";
 import { browserDecodesHevc, onPlaybackFailure } from "@/lib/playback-health";
 import { AD_TEST_SECONDS, fetchHilltopVast, type VastAd } from "@/lib/vast";
 import PreRollAd from "@/components/PreRollAd";
@@ -225,6 +227,7 @@ export default function PlayerStage({
     embedSource || vidboxEmbedUrl({ tmdbId, imdbId, kind, season, episode });
   const vixsrcTarget = vixsrcEmbedUrl({ tmdbId, imdbId, kind, season, episode });
   const nxshaTarget = nxshaEmbedUrl({ tmdbId, imdbId, kind, season, episode });
+  const screenscapeTarget = screenscapeEmbedUrl({ tmdbId, imdbId, kind, season, episode });
   const vidukiTarget = vidukiEmbedUrl({ tmdbId, imdbId, kind, season, episode });
 
   /* vidlink.pro ships most titles as HEVC-only files, and a browser without
@@ -279,6 +282,15 @@ export default function PlayerStage({
       label: `Server ${++serverNo}`,
       sub: "viduki · xpass ladders",
     });
+  /* The same player through Screenscape's query-string embed. It is a provider
+     frame, not one of our streams, so it sits below the chains the Worker can
+     read — a viewer who wants that page can still pick it. */
+  if (screenscapeTarget && !off("screenscape"))
+    servers.push({
+      key: "screenscape",
+      label: `Server ${++serverNo}`,
+      sub: "nxsha · screenscape",
+    });
   /* VidBox second to last: its page used to mint the stream token inside a
      libsodium/WASM handshake in the viewer's browser, which no server-side
      resolver could reproduce — so it could only ever run on the provider's own
@@ -318,7 +330,7 @@ export default function PlayerStage({
     defaultServer && usableKeys.includes(defaultServer) ? defaultServer : baseDefault;
   const initialServer = usableKeys.includes(wanted) ? wanted : (usableKeys[0] ?? baseDefault);
   const [server, setServer] = useState<
-    "original" | "vidbox" | "vidapi" | "nxsha" | "anime" | "viduki" | "drama"
+    "original" | "vidbox" | "vidapi" | "nxsha" | "screenscape" | "anime" | "viduki" | "drama"
   >(initialServer as any);
   const [serverOpen, setServerOpen] = useState(false);
 
@@ -351,6 +363,7 @@ export default function PlayerStage({
     server === "vidbox" ||
     server === "vidapi" ||
     server === "nxsha" ||
+    server === "screenscape" ||
     server === "anime" ||
     server === "viduki";
   const currentEmbedTarget =
@@ -358,11 +371,13 @@ export default function PlayerStage({
       ? vixsrcTarget
       : server === "nxsha"
         ? nxshaTarget
-        : server === "anime"
-          ? autoembedUrl
-          : server === "viduki"
-            ? vidukiTarget
-            : vidboxTarget;
+        : server === "screenscape"
+          ? screenscapeTarget
+          : server === "anime"
+            ? autoembedUrl
+            : server === "viduki"
+              ? vidukiTarget
+              : vidboxTarget;
 
   useEffect(() => {
     const target = dramaEmbedUrl({ tmdbId, kind, season: 1, episode: 1 });
@@ -446,14 +461,17 @@ export default function PlayerStage({
 
   /* Our player is what loads first on every embed server, and for the servers
      that can hand us a stream it is what *stays*: their provider page is never
-     framed here. VidBox and Drama are the two chips that often have nothing of
-     ours to play — vidlink keeps most titles as HEVC its own player decodes, and
-     Videasy answers nobody — so for them the box goes to the provider once we
-     stop asking. The moment VidBox does resolve an H.264 stream, `embedStream`
-     supersedes its frame and the viewer is back under our controls. A page the
+     framed here. VidBox, Drama and Screenscape are the chips that can have
+     nothing of ours to play — vidlink keeps most titles as HEVC its own player
+     decodes, Videasy answers nobody, and Screenscape's embed is a Next.js shell
+     that hands a server-side reader no stream at all — so for them the box goes
+     to the provider once we stop asking. The moment one does resolve a stream
+     of ours, `embedStream` supersedes its frame and the viewer is back under
+     our controls. A page the
      provider itself 500s stays hidden either way: its error wall is not a
      player. */
-  const iframeOnlyServer = server === "vidbox" || server === "drama";
+  const iframeOnlyServer =
+    server === "vidbox" || server === "drama" || server === "screenscape";
   const [providerDue, setProviderDue] = useState(false);
   /* The provider's page is ready to be shown, but the box stays ours until the
      viewer presses our own play button. Their player starts by itself once
@@ -493,7 +511,16 @@ export default function PlayerStage({
        On a machine that decodes HEVC its file answer is playable for us too,
        so the handshake gets longer still rather than having its box taken away
        mid-flight by the provider's own player. */
-    const wait = server === "vidbox" ? (hevc ? 14_000 : 6_000) : 1_500;
+    const wait =
+      server === "vidbox"
+        ? (hevc ? 14_000 : 6_000)
+        : server === "screenscape"
+          ? /* Its chip asks the whole lineup, not one page, so the hand-off to
+               Screenscape's own player is offered only after the chains have had
+               a real chance to answer — a press that framed it early is what
+               left the viewer inside a page our bar cannot drive. */
+            5_000
+          : 1_500;
     const t = setTimeout(() => setProviderDue(true), wait);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -618,6 +645,7 @@ export default function PlayerStage({
       { key: "vidapi", url: vixsrcTarget },
       { key: "anime", url: autoembedUrl },
       { key: "viduki", url: vidukiTarget },
+      { key: "screenscape", url: screenscapeTarget },
       { key: "vidbox", url: vidboxTarget },
     ].filter((c) => c.url && !off(c.key)) as { key: string; url: string }[];
 
@@ -663,6 +691,7 @@ export default function PlayerStage({
           title,
           videoUrl: c.url,
           isHls: c.kind === "hls",
+          isDash: c.kind === "dash",
           posterUrl,
           backdropUrl,
         },
@@ -670,6 +699,29 @@ export default function PlayerStage({
       );
     },
     [start, movieId, raceKey, title, posterUrl, backdropUrl],
+  );
+
+  /* A language picked from Screenscape's own list plays in our player, not in
+     their frame: its row already handed the Worker the stream that voice lives
+     on, so it goes down the same path a race win does and the label moves to the
+     chip the pick came from. `playedEmbedTarget` says "this page's stream is
+     what plays", which is what keeps the resolver effect from racing the title
+     again and swapping the language back out. */
+  const playScreenscapeLang = useCallback(
+    (entry: ScreenscapeLang) => {
+      const c: EmbedCandidate = { url: entry.url, via: "screenscape", kind: entry.kind };
+      playedEmbedTarget.current = screenscapeTarget;
+      racedFor.current = raceKey;
+      streamedFor.current = raceKey;
+      setEmbedCandidates([c]);
+      setEmbedStatus("ready");
+      setEmbedError("");
+      setEmbedLive(true);
+      setLangOpen(false);
+      if (server !== "screenscape") setServer("screenscape");
+      playEmbedCandidate(c);
+    },
+    [screenscapeTarget, raceKey, server, playEmbedCandidate],
   );
 
   /* A provider page is only as good as the stream we can pull out of it
@@ -807,7 +859,16 @@ export default function PlayerStage({
              the server the viewer chose stays exactly where it is. */
           streamedFor.current = raceKey;
           playedEmbedTarget.current = race.direct ? "" : race.win.url;
-          if (!race.direct && step && step.key !== activeKey)
+          /* A win from a chip the viewer tapped stays under that label — except
+             on Screenscape, whose own page is only ever a frame: the film it
+             asked the lineup for belongs to the chip they chose, so the tab must
+             not slide away to whichever provider answered first. */
+          if (
+            !race.direct &&
+            activeKey !== "screenscape" &&
+            step &&
+            step.key !== activeKey
+          )
             setServer(step.key as typeof server);
           /* A candidate whose CDN refuses cross-origin reads can only be played
              by the provider's own session; keep it listed but do not let it
@@ -826,6 +887,7 @@ export default function PlayerStage({
          provider again instead of replaying the same links out of the warm map.
          The other servers keep theirs; they are still waiting to be opened. */
       racedStreams.current.delete(only || chains.find((c) => c.key === activeKey)?.url || "");
+      forgetEmbedStreams();
       /* A chip that can feed our own player keeps the stage and asks again —
          the providers rotate their scrapers, so the second or third pass often
          answers when the first was empty. VidBox is in that group now: its
@@ -851,6 +913,7 @@ export default function PlayerStage({
     (url: string) => {
       /* Asking again means not replaying what this page already handed us. */
       racedStreams.current.delete(url);
+      forgetEmbedStreams();
       return raceServers(server, [{ key: server, url }], [{ key: server, url }]);
     },
     [raceServers, server],
@@ -913,6 +976,21 @@ export default function PlayerStage({
       });
       return;
     }
+    /* Screenscape's page is a shell that hands the server-side reader no stream
+       at all, so asking that page alone can only ever end in framing it — and a
+       framed page is where our play, seek, volume and language all go dead. A
+       tap on that chip therefore asks the whole lineup: the first chain with a
+       link puts the film in our own player with our bar live. The frame stays
+       for the titles no chain can serve. */
+    const only = server === "screenscape" ? "" : tapped;
+    if (tapped && !only && embedStream) {
+      /* The film is already running in our player; moving the label onto the
+         frame-only chip must not restart it under another provider's name. */
+      streamedFor.current = raceKey;
+      setEmbedStatus("ready");
+      setEmbedLive(true);
+      return;
+    }
     if (tapped) tappedServer.current = "";
     racedFor.current = raceKey;
     streamedFor.current = "";
@@ -921,7 +999,7 @@ export default function PlayerStage({
     setEmbedStream(null);
     setEmbedLive(null);
     setEmbedCarried(false);
-    void raceServers(server, chains, chains, tapped);
+    void raceServers(server, chains, chains, only);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usingEmbed, currentEmbedTarget, raceKey, raceNonce]);
 
@@ -944,6 +1022,7 @@ export default function PlayerStage({
          providers again rather than reuse a lineup that just failed. */
       racedFor.current = "";
       streamedFor.current = "";
+      forgetEmbedStreams();
       /* Put the provider page back as the movie's source so the media element
          goes empty instead of retrying the link that just died. */
       const page = currentEmbedTarget || embedSource;
@@ -1109,6 +1188,7 @@ export default function PlayerStage({
       | "vidbox"
       | "vidapi"
       | "nxsha"
+      | "screenscape"
       | "anime"
       | "viduki"
       | "drama" =
@@ -1118,13 +1198,15 @@ export default function PlayerStage({
           ? "vidapi"
           : key === "nxsha"
             ? "nxsha"
-            : key === "anime"
-              ? "anime"
-              : key === "viduki"
-                ? "viduki"
-                : key === "drama"
-                  ? "drama"
-                  : "original";
+            : key === "screenscape"
+              ? "screenscape"
+              : key === "anime"
+                ? "anime"
+                : key === "viduki"
+                  ? "viduki"
+                  : key === "drama"
+                    ? "drama"
+                    : "original";
     /* Remember the choice for this title: the resolvers answer that server
        alone instead of leaving the race's winner on screen under a new name. */
     tappedServer.current = next === server ? "" : `${raceKey}|${next}`;
@@ -1210,6 +1292,7 @@ export default function PlayerStage({
 
   const embedTargets: Record<string, string> = {
     nxsha: nxshaTarget || "",
+    screenscape: screenscapeTarget || "",
     vidapi: vixsrcTarget || "",
     viduki: vidukiTarget || "",
     vidbox: vidboxTarget || "",
@@ -1253,6 +1336,40 @@ export default function PlayerStage({
      the last one's voices. */
   const serverAudio = sweep.key === audioSweepKey ? sweep.map : {};
   const audioProbe = sweep.key === audioSweepKey ? sweep.status : "idle";
+
+  /* Screenscape's own language rows. Its player lists a title's voices as
+     separate streams ("Hindi Wesker", "English Leon") which no fetch can read —
+     the rows come from a signed route — so the Worker opens that page in a real
+     browser and keeps each row's stream. Asked once per title+episode when the
+     menu first opens, and only for titles that give it a TMDB id. */
+  const [scSweep, setScSweep] = useState<{
+    key: string;
+    status: "idle" | "loading" | "done" | "off";
+    list: ScreenscapeLang[];
+  }>({ key: "", status: "idle", list: [] });
+  const scSweepFor = useRef("");
+  useEffect(() => {
+    if (!langOpen || !screenscapeTarget || scSweepFor.current === audioSweepKey) return;
+    scSweepFor.current = audioSweepKey;
+    setScSweep({ key: audioSweepKey, status: "loading", list: [] });
+    void fetchScreenscapeLangs({
+      tmdbId: tmdbId ?? undefined,
+      kind: kind ?? "movie",
+      season,
+      episode: usingAutoembed ? aeEpisode : episode,
+    }).then((list) => {
+      setScSweep({
+        key: audioSweepKey,
+        status: list === null ? "off" : "done",
+        list: list ?? [],
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [langOpen, audioSweepKey]);
+  const scLangs =
+    scSweep.key === audioSweepKey
+      ? scSweep
+      : { key: "", status: "idle" as const, list: [] as ScreenscapeLang[] };
 
   /* Land the language once its server is playing. The list in state is refused
      until it is a *new* one, so a pick made against Server 2 can never set a
@@ -1772,11 +1889,8 @@ export default function PlayerStage({
             element has not painted a frame yet. Clicks pass straight through, so
             the viewer can still press play while the first segment downloads. */}
         {streamWarming && (
-          <div className="pointer-events-none absolute inset-0 z-[62] flex flex-col items-center justify-center gap-2.5">
+          <div className="pointer-events-none absolute inset-0 z-[62] flex items-center justify-center">
             <LoadingOrbit className="text-[4.25rem] sm:text-[5.25rem]" />
-            <p className="rounded-full bg-black/55 px-3 py-1 text-xs text-white/80 backdrop-blur-sm">
-              {`Loading the first frame from ${providerName}…`}
-            </p>
           </div>
         )}
 
@@ -2201,7 +2315,11 @@ export default function PlayerStage({
                   </span>
                 </button>
               </div>
-            ) : servers.length > 1 || dubs.length > 0 || audioTracks.length > 0 ? (
+            ) : servers.length > 1 ||
+              dubs.length > 0 ||
+              audioTracks.length > 0 ||
+              scLangs.list.length > 0 ||
+              scLangs.status === "loading" ? (
               <LanguageMenu
                 tracks={audioTracks}
                 activeTrack={activeAudioTrack}
@@ -2215,6 +2333,10 @@ export default function PlayerStage({
                 currentServer={server}
                 probe={audioProbe}
                 onHandOff={handOffLanguage}
+                streams={scLangs.list}
+                streamProbe={scLangs.status}
+                activeStream={embedStream}
+                onPlayStream={playScreenscapeLang}
                 open={langOpen}
                 setOpen={setLangOpen}
               />
@@ -2272,9 +2394,8 @@ export default function PlayerStage({
 
             {/* The one thing on this row that always reaches a framed page: the
                 provider's own tab, where its play, seek and volume do work.
-                Below `sm` it steps out — Share › Open provider page under the
-                box says the same thing, and the extra chip is what pushed our
-                phone bar onto a third row over a 275 px picture. */}
+                Below `sm` it steps out — the extra chip is what pushed our phone
+                bar onto a third row over a 275 px picture. */}
             {providerMode && (
               <a
                 href={providerUrl}
@@ -2526,7 +2647,7 @@ export default function PlayerStage({
               {saved ? "Saved" : "Save"}
             </button>
           )}
-          <ShareMenu providerUrl={providerUrl} />
+          <ShareMenu />
         </div>
       )}
     </div>
@@ -3213,6 +3334,10 @@ function LanguageMenu({
   currentServer,
   probe,
   onHandOff,
+  streams,
+  streamProbe,
+  activeStream,
+  onPlayStream,
   open,
   setOpen,
 }: {
@@ -3233,6 +3358,12 @@ function LanguageMenu({
     server: string;
     dubLabel?: string | null;
   }) => void;
+  /** Voices Screenscape's own player lists for this title, each with the stream
+   *  that row plays — read off its page by the Worker. */
+  streams: ScreenscapeLang[];
+  streamProbe: "idle" | "loading" | "done" | "off";
+  activeStream: string | null;
+  onPlayStream: (entry: ScreenscapeLang) => void;
   open: boolean;
   setOpen: (open: boolean) => void;
 }) {
@@ -3250,12 +3381,15 @@ function LanguageMenu({
         : "";
 
   /** One server's claim on a language: a rendition of its own stream, one of
-   *  the catalog's dub files, or an audio line its playlist offered. */
+   *  the catalog's dub files, an audio line its playlist offered, or a separate
+   *  stream Screenscape's own player lists that voice on. */
   type Entry = {
     server: string;
-    kind: "track" | "dub" | "audio";
+    kind: "track" | "dub" | "audio" | "stream";
     label: string;
     id?: number;
+    url?: string;
+    hls?: boolean;
   };
   const rows: { key: string; label: string; entries: Entry[] }[] = [];
   const rowAt = new Map<string, number>();
@@ -3301,6 +3435,18 @@ function LanguageMenu({
       }),
     ),
   );
+  /* Screenscape's voices are whole separate streams, not renditions of the one
+     playing, so each row keeps its own URL: picking it starts that voice in our
+     player instead of hunting the servers for it. */
+  streams.forEach((s) =>
+    add(audioKeyOf({ name: s.lang }), s.lang, {
+      server: "screenscape",
+      kind: "stream",
+      label: s.lang,
+      url: s.url,
+      hls: s.kind === "hls",
+    }),
+  );
 
   const options = rows.map((row) => {
     /* Prefer acting on the server already playing: a rendition of its stream
@@ -3310,21 +3456,39 @@ function LanguageMenu({
       row.entries.find((e) => e.kind === "track" && e.server === currentServer) ??
       row.entries.find((e) => e.kind === "dub" && e.server === currentServer) ??
       row.entries.find((e) => e.server === currentServer);
-    const target = local ?? row.entries[0];
-    const on = row.key === playingKey;
+    /* The row whose stream is on screen right now, whatever the other servers
+       claim — a Screenscape pick is its URL, not a track id. */
+    const streamHere = row.entries.find(
+      (e) => e.kind === "stream" && e.url && e.url === activeStream,
+    );
+    const target = streamHere ?? local ?? row.entries[0];
+    const on = Boolean(streamHere) || row.key === playingKey;
     const elseWhere = row.entries
       .filter((e) => e.server !== currentServer)
       .map((e) => serverName(e.server).replace(/\D+/g, ""))
       .filter(Boolean);
+    /* A Screenscape pick is not a server to visit or a rendition to pin: it is
+       its own stream, so the row says what tapping it does. */
     const hint = on
       ? "✓"
-      : elseWhere.length === 0
-        ? "Here"
-        : elseWhere.length === 1
-          ? `Server ${elseWhere[0]}`
-          : `Servers ${elseWhere.join(" · ")}`;
+      : target.kind === "stream"
+        ? "Play"
+        : elseWhere.length === 0
+          ? "Here"
+          : elseWhere.length === 1
+            ? `Server ${elseWhere[0]}`
+            : `Servers ${elseWhere.join(" · ")}`;
     const choose = () => {
       if (on) return;
+      if (target.kind === "stream" && target.url) {
+        onPlayStream({
+          lang: row.label,
+          url: target.url,
+          kind: target.hls ? "hls" : "file",
+          server: target.server,
+        });
+        return;
+      }
       if (target.kind === "track" && target.id !== undefined) {
         onSelectTrack(target.id);
         return;
@@ -3404,12 +3568,12 @@ function LanguageMenu({
               </span>
             </button>
           ))}
-          {probe !== "done" && (
+          {(probe !== "done" || streamProbe === "loading") && (
             <p className="px-3 py-2 text-[11px] text-white/50">
               Checking every server…
             </p>
           )}
-          {probe === "done" && count === 0 && (
+          {probe === "done" && streamProbe !== "loading" && count === 0 && (
             <p className="px-3 py-2 text-[11px] text-white/50">
               None of these servers says which language it carries.
             </p>
@@ -3574,10 +3738,10 @@ function QualityMenu({
 
 /* ------------------------- Share menu (under the box) ------------------------- */
 
-/** Copy the link, or open the provider's own page. This is a decision about the
- *  title, not about playback, so it lives under the box where the bar's
- *  auto-hide can never take it away mid-share. */
-function ShareMenu({ providerUrl }: { providerUrl?: string }) {
+/** Copy the title's link. This is a decision about the title, not about
+ *  playback, so it lives under the box where the bar's auto-hide can never take
+ *  it away mid-share. */
+function ShareMenu() {
   const [open, setOpen] = useState(false);
   const url = typeof window === "undefined" ? "" : window.location.href;
   const item =
@@ -3626,21 +3790,6 @@ function ShareMenu({ providerUrl }: { providerUrl?: string }) {
               <Link2 className="size-3.5" />
               Copy link
             </button>
-            {providerUrl && (
-              <>
-                <div className="my-1 h-px bg-border/60" />
-                <a
-                  href={providerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => setOpen(false)}
-                  className={item}
-                >
-                  <ExternalLink className="size-3.5" />
-                  Open provider page
-                </a>
-              </>
-            )}
           </div>
         </>
       )}

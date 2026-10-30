@@ -10,6 +10,14 @@
  */
 import { api } from "@/lib/api";
 import { browserDecodesHevc } from "@/lib/playback-health";
+import {
+  nxshaEmbedUrl,
+  screenscapeEmbedUrl,
+  vidboxEmbedUrl,
+  vidukiEmbedUrl,
+  vixsrcEmbedUrl,
+  type EmbedTarget,
+} from "@/lib/vaplayer";
 import { isHlsUrl } from "@/lib/video-url";
 
 /** Hosts that serve a player page (not a stream) — candidates for resolution. */
@@ -52,7 +60,9 @@ export interface EmbedCandidate {
   via: string;
   /** Resolution label the provider attached, when it offered one. */
   quality?: string;
-  kind?: "hls" | "file";
+  /** `"dash"` is an MPD served through the Worker's own pipe: its segments are
+   *  named relatively, so only the path-shaped pipe can carry it. */
+  kind?: "hls" | "file" | "dash";
   /** What the Worker actually read off the stream, not what the provider claims. */
   codec?: "h264" | "hevc" | "unknown";
   /** False means the CDN refuses the player's own fetch — only the provider's
@@ -82,6 +92,52 @@ export function isEmbedUrl(raw: string | null | undefined): boolean {
  *  provider page twice — the answer is minted for one session either way. */
 const streamAsks = new Map<string, Promise<EmbedResolveResult>>();
 
+/** Answers already paid for, kept briefly: a chip switch, a remount or the
+ *  resolver effect re-running asks the same page again, and a provider walk
+ *  costs seconds. Only a real answer is kept — a miss must stay askable — and
+ *  the moment a resolved link dies in the player every entry is dropped, so a
+ *  retry asks the providers again instead of replaying the dead link. */
+const ANSWERS_TTL_MS = 120_000;
+const answers = new Map<string, { at: number; value: EmbedResolveResult }>();
+/** Asks made in this window skip the Worker's edge cache (`fresh=1`). */
+let freshUntil = 0;
+
+export function forgetEmbedStreams(): void {
+  answers.clear();
+  streamAsks.clear();
+  freshUntil = Date.now() + 5_000;
+}
+
+function remembered(ask: string): EmbedResolveResult | null {
+  const hit = answers.get(ask);
+  if (!hit) return null;
+  if (Date.now() - hit.at > ANSWERS_TTL_MS) {
+    answers.delete(ask);
+    return null;
+  }
+  return hit.value;
+}
+
+/** One resolver ask, deduped in flight and remembered for a couple of minutes. */
+function askResolver(ask: string): Promise<EmbedResolveResult> {
+  const known = remembered(ask);
+  if (known) return Promise.resolve(known);
+  const running = streamAsks.get(ask);
+  if (running) return running;
+  const url = Date.now() < freshUntil
+    ? `${ask}${ask.includes("?") ? "&" : "?"}fresh=1`
+    : ask;
+  const prom = api
+    .get<EmbedResolveResult>(url)
+    .then((value) => {
+      if (value.candidates?.length) answers.set(ask, { at: Date.now(), value });
+      return value;
+    })
+    .finally(() => streamAsks.delete(ask));
+  streamAsks.set(ask, prom);
+  return prom;
+}
+
 /** Ask the Worker to resolve an embed page URL to playable stream candidates. */
 export async function resolveEmbedStream(
   embedUrl: string,
@@ -91,14 +147,25 @@ export async function resolveEmbedStream(
      can decode that, and the Worker must not guess: say so once, and a title
      that would otherwise show the provider's player runs under our controls. */
   if (browserDecodesHevc()) q.set("hevc", "1");
-  const ask = `/embed/stream?${q.toString()}`;
-  const running = streamAsks.get(ask);
-  if (running) return running;
-  const prom = api
-    .get<EmbedResolveResult>(ask)
-    .finally(() => streamAsks.delete(ask));
-  streamAsks.set(ask, prom);
-  return prom;
+  return askResolver(`/embed/stream?${q.toString()}`);
+}
+
+/** Start the provider walks for a title *before* its player mounts.
+ *
+ *  A card can tell the next route which title is about to open, and the route
+ *  itself needs a beat for its own data before the player exists — that beat is
+ *  free resolving time. Every ask here is the one the race would make, deduped
+ *  in flight and remembered, so a warm card costs nothing extra when the player
+ *  finally asks. */
+export function warmTitleStreams(target: EmbedTarget): void {
+  const urls = [
+    nxshaEmbedUrl(target),
+    vixsrcEmbedUrl(target),
+    vidboxEmbedUrl(target),
+    vidukiEmbedUrl(target),
+    screenscapeEmbedUrl(target),
+  ];
+  for (const url of urls) if (url) void resolveEmbedStream(url).catch(() => undefined);
 }
 
 /** Ask a provider API that needs nothing but the TMDB id for a stream.
@@ -119,7 +186,7 @@ export async function resolveDirectStream(ids: {
   q.set("kind", ids.kind === "series" ? "tv" : "movie");
   q.set("season", String(ids.season ?? 1));
   q.set("episode", String(ids.episode ?? 1));
-  return api.get<EmbedResolveResult>(`/embed/direct?${q.toString()}`);
+  return askResolver(`/embed/direct?${q.toString()}`);
 }
 
 /** Can the viewer's own browser fetch this stream?
@@ -169,6 +236,22 @@ export async function browserStreamUsable(
     }
     void reader.cancel().catch(() => undefined);
     return head.includes("#EXTM3U");
+  } catch {
+    return false;
+  }
+}
+
+/** Is this link one of our own pipes? The Worker already fetched it while
+ *  minting the answer, and the page reads it same-origin, so a second browser
+ *  probe would only add a round trip before the player may start. */
+function isPipedStream(url: string): boolean {
+  try {
+    const path = new URL(url, window.location.href).pathname;
+    return (
+      path.endsWith("/embed/proxy") ||
+      path.endsWith("/embed/dash") ||
+      path.includes("/embed/dash/")
+    );
   } catch {
     return false;
   }
@@ -241,7 +324,7 @@ export async function raceEmbedStreams(
           .slice(0, 3)
           .map(async (c) => ({
             c,
-            ok: await browserStreamUsable(c.url, c.kind === "hls"),
+            ok: isPipedStream(c.url) || (await browserStreamUsable(c.url, c.kind === "hls")),
           })),
       );
       const usable = tested.filter((t) => t.ok).map((t) => t.c);

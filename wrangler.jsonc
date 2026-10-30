@@ -15,10 +15,18 @@
       "database_id": "7f734098-dc9a-4e75-9305-6483aad82b84"
     }
   ],
+  // Browser Rendering: one real Chrome, used only to read Screenscape's
+  // language rows off its own player (see worker/src/screenscapeLangs.ts).
+  // Needs the Workers Paid plan; without it that route answers 501 and the
+  // language menu simply shows our own servers.
+  "browser": { "binding": "BROWSER" },
   "triggers": {
-    "crons": ["0 */6 * * *"]
+    /* 6-hourly link health, and 17:59 UTC = 23:59 Asia/Dhaka: the referral
+       settlement divides that day's ad revenue across the day's visits. */
+    "crons": ["0 */6 * * *", "59 17 * * *"]
   },
   "vars": {
-    "OTP_FROM_NAME": "FilmFlix"
+    "OTP_FROM_NAME": "FilmFlix",
+    "REFERRAL_SHARE_PCT": "50"
   }
 }

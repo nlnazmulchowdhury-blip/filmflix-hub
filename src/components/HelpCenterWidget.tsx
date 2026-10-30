@@ -10,6 +10,9 @@ const LONG_PRESS_MS = 450;
 /** Floating help-center button (bottom-right) + live chat with the admin. */
 export default function HelpCenterWidget() {
   const { isLoading, isAuthenticated, user } = useAuth();
+  /* The phone tab bar owns the bottom edge on every route — float above it. */
+  const spotClass =
+    "bottom-[calc(4.75rem+env(safe-area-inset-bottom))] right-4 md:bottom-6 sm:right-6";
   const messages = useQuery(api.support.listMine, isAuthenticated ? {} : "skip");
   const unread = useQuery(api.support.unreadForUser, isAuthenticated ? {} : "skip");
   const send = useMutation(api.support.sendFromUser);
@@ -128,7 +131,7 @@ export default function HelpCenterWidget() {
           aria-label="Help center"
           title="Help center — chat with us"
           onClick={() => setOpen(true)}
-          className="fixed bottom-4 right-4 z-50 flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/40 transition-transform hover:scale-105 sm:bottom-6 sm:right-6"
+          className={`fixed ${spotClass} z-50 flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/40 transition-transform hover:scale-105`}
         >
           <Headset className="size-6" />
           {(unread ?? 0) > 0 && (
@@ -141,7 +144,7 @@ export default function HelpCenterWidget() {
 
       {/* Chat panel */}
       {open && (
-        <div className="fixed bottom-4 right-4 z-50 flex h-[28rem] w-[calc(100vw-2rem)] max-w-sm flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl sm:bottom-6 sm:right-6">
+        <div className={`fixed ${spotClass} z-50 flex h-[28rem] w-[calc(100vw-2rem)] max-w-sm flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl`}>
           {/* Header */}
           <div className="flex items-center gap-2.5 border-b border-border/60 bg-primary px-4 py-3 text-primary-foreground">
             <span className="flex size-9 items-center justify-center rounded-full bg-primary-foreground/15">

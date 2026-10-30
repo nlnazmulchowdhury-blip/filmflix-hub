@@ -86,4 +86,5 @@ export interface ApiUser {
   name: string | null;
   role: string | null;
   isAnonymous: boolean;
+  createdAt?: number;
 }

@@ -177,6 +177,13 @@ html:not(.dark) {
       padding-bottom: env(safe-area-inset-bottom);
     }
   }
+  /* The phone tab bar is fixed over every route; this keeps the last row of
+     each page scrollable to above it. */
+  @media (max-width: 767px) {
+    body {
+      padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+    }
+  }
   button:not([disabled]),
   [role="button"]:not([disabled]) {
     cursor: pointer;

@@ -61,6 +61,9 @@ export interface MiniPlayerMovie {
   /** True when the Worker read a playlist off `videoUrl` even though its path
    *  has no .m3u8 — the player must run it through hls.js, not `video.src`. */
   isHls?: boolean;
+  /** True when `videoUrl` is a DASH manifest (vidlink's HEVC titles): dash.js
+   *  drives the same media element through MSE. */
+  isDash?: boolean;
   posterUrl?: string | null;
   backdropUrl?: string | null;
   /** Alternate language versions; empty for original-only movies. */
