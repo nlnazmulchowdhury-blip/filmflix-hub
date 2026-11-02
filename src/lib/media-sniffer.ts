@@ -76,6 +76,34 @@ let snapshot: SniffedStream[] = [];
 const listeners = new Set<() => void>();
 let defaultReferer = "";
 
+/* Pre-roll creatives are media the page really fetched, so the sniffer would
+ * otherwise offer the ad as a "download" beside the film. They are keyed by
+ * origin+path (a creative's query carries rotating tokens) and dropped both on
+ * arrival and retroactively, since the element can be polled before the ad
+ * component has told us about it. */
+const AD_MEDIA = new Set<string>();
+
+const mediaKey = (url: string): string => {
+  try {
+    const u = new URL(url, location.href);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return "";
+  }
+};
+
+/** Never list this creative in the Download menu (see AD_MEDIA). */
+export function markAdMedia(raw: string): void {
+  const url = normalize(raw);
+  if (!url) return;
+  const key = mediaKey(url);
+  if (!key || AD_MEDIA.has(key)) return;
+  AD_MEDIA.add(key);
+  const before = streams.length;
+  streams = streams.filter((s) => mediaKey(s.url) !== key);
+  if (streams.length !== before) emit();
+}
+
 function emit() {
   snapshot = [...streams].sort(
     (a, b) => b.height - a.height || b.bitrate - a.bitrate || a.at - b.at,
@@ -141,6 +169,7 @@ export function noteMediaUrl(
 ): void {
   const url = normalize(raw);
   if (!url) return;
+  if (AD_MEDIA.has(mediaKey(url))) return;
   const referer = info?.referer || defaultReferer || document.referrer || "";
   const existing = streams.find((s) => s.url === url);
   if (existing) {
@@ -237,6 +266,13 @@ export function startMediaSniffer(): void {
     for (const el of Array.from(document.querySelectorAll("video"))) {
       const src = el.currentSrc || el.src || "";
       if (!src || src.startsWith("blob:")) continue;
+      /* The pre-roll's element is marked by its own overlay: its creative is
+         an ad, never a row the viewer can save. Marking it here also covers a
+         creative that redirected before painting. */
+      if (el.closest("[data-preroll-ad]")) {
+        markAdMedia(src);
+        continue;
+      }
       noteMediaUrl(src, { height: el.videoHeight || 0 });
     }
   };

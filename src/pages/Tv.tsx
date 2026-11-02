@@ -1,10 +1,11 @@
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { api } from "@/convex/_generated/api";
 import { useQuery } from "convex/react";
 import {
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -13,16 +14,14 @@ import {
   Play,
   Search,
   Tv,
-  Users,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
 import Hls from "hls.js";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import {
-  FAMELACK_CREDIT,
   IPTV_CREDIT,
   loadChannels,
   loadCountries,
@@ -49,7 +48,10 @@ function isDirectStream(url: string): boolean {
   const MEDIA = /\.(m3u8|m3u|mpd|mp4|ts|mkv|webm|mov)(\?|$)/i;
   if (MEDIA.test(url)) return true;
   try {
-    const u = new URL(url);
+    /* `playTarget` hands back a root-relative path when the api base is one
+       (`/api/embed/proxy?…`), so resolve against the page before reading the
+       path — otherwise every piped channel looks like a website link. */
+    const u = new URL(url, window.location.href);
     /* A pipe link is a stream by definition — and the file type it carries is
        the upstream's, so judging the link's own path would call it a website. */
     if (u.pathname.endsWith("/embed/proxy")) return true;
@@ -102,8 +104,17 @@ function StreamPlayer({
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [full, setFull] = useState(false);
+  /* Counts arrivals of real media (manifest, fragment, metadata) so the dead-
+     feed watchdog can tell "slow" from "silent". */
+  const [beat, setBeat] = useState(0);
+  const bump = useCallback(() => setBeat((n) => n + 1), []);
 
   const src = sources[Math.min(active, sources.length - 1)];
+
+  /* Which source the element is buffering, and whether it has a picture yet.
+     Keyed by src so a new source reads as "connecting" without a reset pass. */
+  const [buffer, setBuffer] = useState({ src: "", waiting: true });
+  const buffering = buffer.src !== src || buffer.waiting;
 
   const advance = useRef(() => {});
   const giveUp = useRef(onGiveUp);
@@ -129,16 +140,18 @@ function StreamPlayer({
 
   /* A dead feed can hang without ever erroring: our pipe keeps its socket open
      while the broadcaster's server stays silent, and hls.js will wait a very
-     long time for a manifest that is never coming. Nothing on screen after 15 s
-     is a failed source, so move on to the backup — or to the cover. */
+     long time for a manifest that is never coming. But a healthy feed is not
+     fast either — segments here run up to 27 s, so the first picture can take
+     20 s to arrive. The clock therefore restarts on every bit of progress
+     (`beat`), and only 25 s of total silence counts as a failed source. */
   useEffect(() => {
     if (allFailed) return;
     const timer = window.setTimeout(() => {
       const video = videoRef.current;
       if (video && video.readyState < 3 && !video.videoWidth) advance.current();
-    }, 15000);
+    }, 25000);
     return () => window.clearTimeout(timer);
-  }, [src, allFailed]);
+  }, [src, allFailed, beat]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -157,8 +170,12 @@ function StreamPlayer({
       hls.loadSource(src);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        bump();
         video.play().catch(() => {});
       });
+      hls.on(Hls.Events.LEVEL_LOADED, bump);
+      hls.on(Hls.Events.FRAG_LOADED, bump);
+      hls.on(Hls.Events.FRAG_BUFFERED, bump);
       hls.on(Hls.Events.ERROR, (_evt, data) => {
         if (destroyed || !data.fatal) return;
         advance.current();
@@ -174,17 +191,21 @@ function StreamPlayer({
       advance.current();
     };
     video.addEventListener("error", onVideoError);
+    for (const e of ["loadedmetadata", "canplay", "playing"] as const)
+      video.addEventListener(e, bump);
 
     return () => {
       destroyed = true;
       video.removeEventListener("error", onVideoError);
+      for (const e of ["loadedmetadata", "canplay", "playing"] as const)
+        video.removeEventListener(e, bump);
       if (advanceTimer.current != null) {
         window.clearTimeout(advanceTimer.current);
         advanceTimer.current = null;
       }
       if (hls) hls.destroy();
     };
-  }, [src, allFailed]);
+  }, [src, allFailed, bump]);
 
   /* The element is the truth about sound and about playing: a server switch or
      a browser that refused to start audio moves it under us, and an icon that
@@ -203,6 +224,29 @@ function StreamPlayer({
     return () => {
       for (const e of ["play", "pause", "volumechange"] as const)
         video.removeEventListener(e, sync);
+    };
+  }, [src, allFailed]);
+
+  /* A live feed buffers for a long time before its first frame — up to half a
+     minute when the broadcaster publishes 27-second segments. Black silence is
+     indistinguishable from "broken", so say which one it is. */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || allFailed) return;
+    const hold = () => setBuffer({ src, waiting: true });
+    const release = () => setBuffer({ src, waiting: false });
+    const settle = () => setBuffer({ src, waiting: video.readyState < 3 });
+    video.addEventListener("waiting", hold);
+    video.addEventListener("stalled", hold);
+    video.addEventListener("playing", release);
+    video.addEventListener("canplay", settle);
+    video.addEventListener("loadeddata", settle);
+    return () => {
+      video.removeEventListener("waiting", hold);
+      video.removeEventListener("stalled", hold);
+      video.removeEventListener("playing", release);
+      video.removeEventListener("canplay", settle);
+      video.removeEventListener("loadeddata", settle);
     };
   }, [src, allFailed]);
 
@@ -285,6 +329,13 @@ function StreamPlayer({
         onClick={togglePlay}
       />
 
+      {buffering && (
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/35 text-white/90">
+          <Loader2 className="size-7 animate-spin" />
+          <span className="text-xs font-medium">Connecting…</span>
+        </div>
+      )}
+
       {/* No autoplay gesture means no picture moving, and with the browser's own
           controls gone the only way back is this — it is a play button, not a
           decoration, so it stays until the video is actually running. */}
@@ -348,6 +399,230 @@ function StreamPlayer({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Close on an outside press or Escape — the menus in this app never open on
+ *  hover and never stay pinned. */
+function useDismiss(open: boolean, close: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, close]);
+  return ref;
+}
+
+/** Country filter. A native `<select>` opens an OS-grey list that ignores the
+ *  page's design and cannot be searched with 180 countries in it, so the list
+ *  is ours: a glass panel with a finder and the counts that matter. */
+function CountryPicker({
+  value,
+  onChange,
+  countries,
+  meta,
+}: {
+  value: string;
+  onChange: (code: string) => void;
+  countries: { code: string; n: number; name: string }[];
+  meta: Record<string, CountryMeta>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [up, setUp] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  const ref = useDismiss(open, close);
+
+  /* The toolbar sits low on a tall page, and a 180-country panel opened
+     downward runs off the screen. Open toward whichever side has the room. */
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      const below = window.innerHeight - r.bottom;
+      setUp(below < 380 && r.top > below);
+    }
+    setOpen((v) => !v);
+  };
+  const current = countries.find((c) => c.code === value);
+  const needle = q.trim().toLowerCase();
+  const list = needle
+    ? countries.filter(
+        (c) => c.name.toLowerCase().includes(needle) || c.code.toLowerCase() === needle,
+      )
+    : countries;
+  const total = countries.reduce((n, c) => n + c.n, 0);
+
+  const pick = (code: string) => {
+    onChange(code);
+    setOpen(false);
+    setQ("");
+  };
+  const rowClass = (active: boolean) =>
+    `flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+      active ? "bg-primary/15 text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+    }`;
+
+  return (
+    <div className="relative shrink-0" ref={ref}>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={toggle}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border border-border/60 bg-secondary/40 pl-3 pr-2.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+      >
+        <span className="max-w-[9.5rem] truncate">
+          {current ? `${meta[current.code]?.flag ?? ""} ${current.name}` : "All countries"}
+        </span>
+        <ChevronDown
+          className={`size-3.5 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div
+          className={`absolute right-0 z-50 w-[min(86vw,330px)] overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_28px_70px_-24px_rgba(0,0,0,0.85)] backdrop-blur-xl ${
+            up ? "bottom-full mb-2" : "top-full mt-2"
+          }`}
+        >
+          <div className="border-b border-border/50 p-2">
+            <Input
+              autoFocus
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Find a country…"
+              aria-label="Find a country"
+              className="h-8 text-xs"
+            />
+          </div>
+          <div
+            role="listbox"
+            aria-label="Countries"
+            className="max-h-72 overflow-y-auto p-1 [scrollbar-width:thin]"
+          >
+            <button type="button" onClick={() => pick("All")} className={rowClass(value === "All")}>
+              <span className="flex-1">All countries</span>
+              <span className="tabular-nums text-[10px] text-muted-foreground">
+                {total.toLocaleString()}
+              </span>
+              {value === "All" && <Check className="size-3.5 text-primary" />}
+            </button>
+            {list.map((c) => (
+              <button
+                key={c.code}
+                type="button"
+                onClick={() => pick(c.code)}
+                className={rowClass(value === c.code)}
+              >
+                <span className="w-5 shrink-0 text-center">{meta[c.code]?.flag ?? ""}</span>
+                <span className="flex-1 truncate">{c.name}</span>
+                <span className="tabular-nums text-[10px] text-muted-foreground">
+                  {c.n.toLocaleString()}
+                </span>
+                {value === c.code && <Check className="size-3.5 text-primary" />}
+              </button>
+            ))}
+            {list.length === 0 && (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                No country matched “{q.trim()}”.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Categories as one rail; the leftovers live behind “More” instead of six
+ *  wrapped rows pushing the channels off a phone screen. */
+function CategoryRail({
+  categories,
+  value,
+  onChange,
+}: {
+  categories: string[];
+  value: string;
+  onChange: (c: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [up, setUp] = useState(false);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  const ref = useDismiss(open, close);
+
+  const toggle = () => {
+    if (!open && moreRef.current) {
+      const r = moreRef.current.getBoundingClientRect();
+      const below = window.innerHeight - r.bottom;
+      setUp(below < 340 && r.top > below);
+    }
+    setOpen((v) => !v);
+  };
+
+  const chip = (c: string) => {
+    const active = value === c;
+    return (
+      <button
+        key={c}
+        type="button"
+        onClick={() => onChange(c)}
+        aria-pressed={active}
+        className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+          active
+            ? "bg-primary text-primary-foreground"
+            : "border border-border/60 bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
+        }`}
+      >
+        {c !== "All" && (
+          <span
+            className={`size-1.5 rounded-full ${active ? "bg-primary-foreground/80" : "bg-primary/60"}`}
+          />
+        )}
+        {c}
+      </button>
+    );
+  };
+
+  return (
+    <div className="relative flex min-w-0 items-center gap-1.5" ref={ref}>
+      {/* The rail scrolls; “More” does not. Pinning it keeps the leftovers one
+          tap away instead of at the far end of a scroll nobody notices. */}
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {categories.map((c) => chip(c))}
+      </div>
+      <button
+        ref={moreRef}
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-dashed border-border/70 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+      >
+        More
+        <ChevronDown className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div
+          className={`absolute right-0 z-50 w-[min(88vw,460px)] rounded-xl border border-border/60 bg-card p-2.5 shadow-[0_28px_70px_-24px_rgba(0,0,0,0.85)] backdrop-blur-xl ${
+            up ? "bottom-full mb-2" : "top-full mt-2"
+          }`}
+        >
+          <div className="flex flex-wrap gap-1.5">{categories.map((c) => chip(c))}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -479,14 +754,40 @@ export default function TvPage() {
      limit: past that the strip is the honest answer. */
   const dead = useRef(new Set<string>());
   useEffect(() => {
-    if (selected || !curated || dead.current.size >= 3) return;
+    if (tapped.current || selected || !curated || dead.current.size >= 3) return;
     const first = (curated as LiveChannel[]).find(
       (c) => isDirectStream(c.streamUrl) && !dead.current.has(c._id),
     );
     if (first) setSelected(first);
   }, [curated, selected]);
 
+  /* The empty stage is the first thing a visitor sees, so it offers a way in
+     instead of a sign pointing down at the strip. */
+  const quick = useMemo(
+    () =>
+      (filtered ?? channels)
+        .filter((c) => c.embedUrl || isDirectStream(c.streamUrl))
+        .slice(0, 6),
+    [filtered, channels],
+  );
+
   const selectedIsDirect = selected ? isDirectStream(selected.streamUrl) : false;
+  const selectedCountry = selected
+    ? meta[selected.country ?? ""]?.name ?? selected.country ?? ""
+    : "";
+
+  const openChannel = (c: LiveChannel) => {
+    tapped.current = true;
+    /* A channel that is only a website has no stream to open in the player;
+       it belongs in a tab of its own. */
+    if (c.embedUrl || isDirectStream(c.streamUrl)) setSelected(c);
+    else window.open(c.streamUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const closeStage = () => {
+    tapped.current = true;
+    setSelected(null);
+  };
 
   const scrollBy = (dir: 1 | -1) => {
     scrollerRef.current?.scrollBy({ left: dir * 480, behavior: "smooth" });
@@ -511,10 +812,6 @@ export default function TvPage() {
             </span>
           </div>
           <nav className="flex shrink-0 items-center gap-2 sm:gap-4">
-            {/* Live viewer count — placeholder until real presence lands. */}
-            <span className="hidden items-center gap-1.5 rounded-full border border-border/60 bg-secondary/40 px-3 py-1 text-xs font-semibold text-muted-foreground sm:inline-flex">
-              <Users className="size-3.5 text-emerald-400" /> 135 watching
-            </span>
             <Link to="/" className={navLinkClass}>
               Home
             </Link>
@@ -523,11 +820,16 @@ export default function TvPage() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-3 pb-4 pt-4 sm:px-6">
-        {/* Big inline player (first/selected direct stream) */}
-        <section className="relative">
+      <main className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col px-3 pb-24 pt-4 sm:px-6 sm:pt-5 md:pb-6">
+        <h1 className="mb-3 font-display text-xl font-semibold leading-tight sm:text-3xl">
+          Live TV
+        </h1>
+
+        {/* The stage is capped, not stretched: a 1400px-wide empty black box
+            pushed the controls off the screen and left nothing in it. */}
+        <section className="relative isolate mx-auto w-full max-w-[820px]">
           {selected?.embedUrl ? (
-            <div className="overflow-hidden rounded-lg border border-border/60 bg-black shadow-[0_32px_96px_-40px_rgba(0,0,0,0.9)]">
+            <div className="overflow-hidden rounded-2xl border border-border/60 bg-black shadow-[0_36px_100px_-44px_rgba(0,0,0,0.95)]">
               <div className="relative aspect-video w-full">
                 {/* A YouTube live page, not a stream: no <video> element can open
                     it, so this is the one channel we show as a frame. */}
@@ -542,12 +844,12 @@ export default function TvPage() {
               </div>
             </div>
           ) : selected && selectedIsDirect ? (
-            <div className="overflow-hidden rounded-lg border border-border/60 bg-black shadow-[0_32px_96px_-40px_rgba(0,0,0,0.9)]">
+            <div className="overflow-hidden rounded-2xl border border-border/60 bg-black shadow-[0_36px_100px_-44px_rgba(0,0,0,0.95)]">
               <div className="relative aspect-video w-full">
                 <StreamPlayer
                   sources={[selected.streamUrl, ...(selected.backupUrls ?? [])]}
                   onGiveUp={() => {
-                    if (tapped.current || !selected) return;
+                    if (!selected) return;
                     dead.current.add(selected._id);
                     setSelected(null);
                   }}
@@ -555,49 +857,119 @@ export default function TvPage() {
               </div>
             </div>
           ) : (
-            <div className="flex aspect-video w-full items-center justify-center rounded-lg border border-dashed border-border/60 bg-card/40">
+            <div className="relative flex min-h-[220px] w-full flex-col items-center justify-center gap-3 overflow-hidden rounded-2xl border border-border/60 bg-[#070b14] px-4 py-6 text-center sm:aspect-video sm:gap-4 sm:py-0">
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(59,130,246,0.20),transparent_62%)]" />
               {iptvLoading && !channels.length ? (
-                <div className="flex flex-col items-center gap-3 px-6 text-center">
-                  <Loader2 className="size-7 animate-spin text-muted-foreground" />
-                  <p className="max-w-sm text-sm text-muted-foreground">
+                <div className="relative z-10 flex flex-col items-center gap-3">
+                  <Loader2 className="size-7 animate-spin text-primary" />
+                  <p className="text-sm text-muted-foreground">
                     Loading the live channel list…
                   </p>
                 </div>
               ) : iptvFailed && !channels.length ? (
-                <div className="flex flex-col items-center gap-3 px-6 text-center">
-                  <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <div className="relative z-10 flex flex-col items-center gap-2.5">
+                  <span className="flex size-12 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 text-primary">
                     <Tv className="size-6" />
                   </span>
                   <p className="font-display text-lg font-semibold">
                     The channel list did not load
                   </p>
                   <p className="max-w-sm text-sm text-muted-foreground">
-                    {IPTV_CREDIT.name} was not reachable. Reload to try again.
+                    {IPTV_CREDIT.name} was not reachable.
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => setReloadKey((n) => n + 1)}
+                    className="mt-1 cursor-pointer rounded-full bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+                  >
+                    Try again
+                  </button>
                 </div>
               ) : (
-                <div className="flex flex-col items-center gap-3 px-6 text-center">
-                  <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                    <Tv className="size-6" />
+                <div className="relative z-10 flex w-full max-w-[560px] flex-col items-center gap-2.5">
+                  <span className="flex size-12 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 text-primary shadow-[0_0_44px_-10px_rgba(59,130,246,0.65)] sm:size-14">
+                    <Tv className="size-6 sm:size-7" />
                   </span>
-                  <p className="font-display text-lg font-semibold">
-                    Pick a channel below
+                  <p className="font-display text-lg font-semibold sm:text-xl">
+                    {search.trim() ? "Nothing matched" : "Pick a channel"}
                   </p>
-                  <p className="max-w-sm text-sm text-muted-foreground">
-                    {search.trim()
-                      ? "No direct stream matched your search."
-                      : "Choose any channel from the strip underneath to start watching right here."}
-                  </p>
+                  {quick.length > 0 && (
+                    <div className="mt-1 hidden w-full grid-cols-3 gap-2 sm:grid">
+                      {quick.map((c) => (
+                        <button
+                          key={c._id}
+                          type="button"
+                          onClick={() => openChannel(c)}
+                          title={c.name}
+                          className="group flex min-w-0 items-center gap-2 rounded-xl border border-border/50 bg-card/70 px-2 py-1.5 text-left backdrop-blur transition-colors hover:border-primary/50 hover:bg-card"
+                        >
+                          <span className="relative flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-md bg-secondary/70 text-[10px] font-bold uppercase text-muted-foreground">
+                            <span className="flex size-full items-center justify-center">
+                              {meta[c.country ?? ""]?.flag ?? c.name.slice(0, 2)}
+                            </span>
+                            {c.logoUrl && (
+                              <img
+                                src={c.logoUrl}
+                                alt=""
+                                loading="lazy"
+                                onLoad={(e) =>
+                                  e.currentTarget.previousElementSibling?.classList.add("hidden")
+                                }
+                                onError={(e) => e.currentTarget.remove()}
+                                className="absolute inset-0 size-full object-contain"
+                              />
+                            )}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[11px] font-semibold text-foreground">
+                              {c.name}
+                            </span>
+                            <span className="block truncate text-[10px] text-muted-foreground">
+                              {meta[c.country ?? ""]?.flag ?? ""}{" "}
+                              {meta[c.country ?? ""]?.name ?? c.country ?? ""}
+                            </span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           )}
         </section>
 
-        {/* Search + country + category chips */}
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="flex shrink-0 items-center gap-2">
-            <div className="relative w-full sm:w-48 md:w-56">
+        {/* While a channel plays, the stage says which one and offers a way
+            out — ending a broadcast needs a visible target, not a guess. */}
+        {selected && (selectedIsDirect || selected.embedUrl) && (
+          <div className="mx-auto mt-2 flex w-full max-w-[820px] items-center gap-2.5 rounded-xl border border-border/60 bg-card/60 px-3 py-2 backdrop-blur">
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-400">
+              <span className="size-1.5 animate-pulse rounded-full bg-red-500" /> Live
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold">{selected.name}</p>
+              <p className="truncate text-[11px] text-muted-foreground">
+                {meta[selected.country ?? ""]?.flag ?? ""} {selectedCountry}
+                {(selected.categories ?? []).length > 0 &&
+                  ` · ${(selected.categories ?? []).slice(0, 2).join(" · ")}`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={closeStage}
+              aria-label="Close player"
+              className="shrink-0 cursor-pointer rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        )}
+
+        {/* One glass toolbar: finder, country, categories. It owns the stacking
+            context its menus open in, so a lifted stage never paints over them. */}
+        <div className="relative z-30 mt-4 rounded-2xl border border-border/60 bg-card/50 p-2.5 backdrop-blur-xl sm:p-3">
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1 sm:max-w-[280px]">
               <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
@@ -619,158 +991,147 @@ export default function TvPage() {
             </div>
             {/* Countries are a picker, not chips: iptv-org has ~180 of them with
                 something live, and no chip row survives that on a phone. */}
-            <label className="relative inline-flex shrink-0 items-center">
-              <span className="sr-only">Filter channels by country</span>
-              <select
-                value={country}
-                onChange={(e) => setCountry(e.target.value)}
-                className="h-9 max-w-[150px] cursor-pointer appearance-none rounded-full border border-border/60 bg-secondary/40 py-0 pl-3 pr-7 text-xs font-semibold text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus:border-primary/60"
-              >
-                <option value="All">All countries</option>
-                {countries.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {`${meta[c.code]?.flag ?? ""} ${c.name} (${c.n})`}
-                  </option>
-                ))}
-              </select>
-              <ChevronRight className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 rotate-90 text-muted-foreground" />
-            </label>
-            <span className="shrink-0 text-[11px] font-semibold text-muted-foreground">
+            <CountryPicker
+              value={country}
+              onChange={setCountry}
+              countries={countries}
+              meta={meta}
+            />
+            <span className="ml-auto hidden shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground sm:block">
               {filtered ? `${filtered.length.toLocaleString()} channels` : "…"}
             </span>
           </div>
-          {/* One scrolling row on phones instead of six wrapped chip rows. */}
-          <div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:px-0 sm:pb-0">
-            {categories.map((c) => {
-              const active = category === c;
-              return (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => setCategory(c)}
-                  aria-pressed={active}
-                  className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-                    active
-                      ? "bg-primary text-primary-foreground"
-                      : "border border-border/60 bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                  }`}
-                >
-                  {c !== "All" && (
-                    <span
-                      className={`size-1.5 rounded-full ${
-                        active ? "bg-primary-foreground/80" : "bg-emerald-400"
-                      }`}
-                    />
-                  )}
-                  {c}
-                </button>
-              );
-            })}
+          <div className="mt-2">
+            <CategoryRail
+              categories={categories}
+              value={category}
+              onChange={setCategory}
+            />
           </div>
         </div>
 
-        {/* Bottom channel scroller */}
-        <div className="mt-3 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => scrollBy(-1)}
-            aria-label="Scroll channels left"
-            className="hidden size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/60 bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground sm:flex"
-          >
-            <ChevronLeft className="size-4" />
-          </button>
-
-          <div className="relative flex-1 overflow-hidden">
-            <div
-              ref={scrollerRef}
-              className="flex gap-2.5 overflow-x-auto scroll-smooth pb-1 [scrollbar-width:thin]"
-            >
-              {!filtered ? (
-                <div className="flex w-full items-center justify-center py-10">
-                  <Loader2 className="size-6 animate-spin text-muted-foreground" />
-                </div>
-              ) : filtered.length === 0 ? (
-                <div className="flex w-full flex-col items-center gap-2 py-10 text-center">
-                  <p className="text-sm font-semibold">
-                    {search.trim() || country !== "All"
-                      ? "No channels matched"
-                      : "No channels yet"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {search.trim() || country !== "All"
-                      ? "Try a different spelling, or pick another country."
-                      : "Live TV channels will appear here once an admin adds them."}
-                  </p>
-                </div>
-              ) : (
-                <>
-                  {filtered.slice(0, shown).map((c) => {
-                    const active = selected?._id === c._id;
-                    return (
-                      <button
-                        key={c._id}
-                        type="button"
-                        onClick={() => {
-                          tapped.current = true;
-                          setSelected(c);
-                        }}
-                        aria-label={`Watch ${c.name}`}
-                        className={`group w-[104px] shrink-0 cursor-pointer text-left ${
-                          active ? "" : "opacity-90 transition-opacity hover:opacity-100"
-                        }`}
-                      >
-                        <div
-                          className={`relative flex h-[72px] items-center justify-center overflow-hidden rounded-xl border bg-card p-2 transition-colors ${
-                            active
-                              ? "border-primary ring-2 ring-primary/40"
-                              : "border-border/50 group-hover:border-primary/50"
-                          }`}
-                        >
-                          <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-red-500" />
-                          {c.logoUrl ? (
-                            <img
-                              src={c.logoUrl}
-                              alt={c.name}
-                              loading="lazy"
-                              className="max-h-full max-w-full object-contain"
-                            />
-                          ) : (
-                            <Tv className="size-7 text-muted-foreground/50" />
-                          )}
-                        </div>
-                        <p className="mt-1.5 truncate px-0.5 text-[11px] font-medium text-muted-foreground">
-                          {/* A flag tells the viewer which of these is theirs
-                              once every country is on screen at once. */}
-                          {meta[c.country ?? ""]?.flag ?? ""} {c.name}
-                        </p>
-                      </button>
-                    );
-                  })}
-                  {filtered.length > shown && (
-                    <button
-                      type="button"
-                      onClick={() => setShown((n) => n + CHANNEL_PAGE)}
-                      aria-label="Load more channels"
-                      className="flex h-[72px] w-[104px] shrink-0 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border/60 bg-card/40 text-[11px] font-semibold text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-                    >
-                      <ChevronRight className="size-4 -rotate-90" />
-                      {Math.min(CHANNEL_PAGE, filtered.length - shown).toLocaleString()} more
-                    </button>
-                  )}
-                </>
-              )}
+        {/* Channel strip */}
+        <section className="mt-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <h2 className="font-display shrink-0 text-sm font-semibold sm:text-base">
+                Channels
+              </h2>
+              <span className="truncate text-[11px] font-semibold text-muted-foreground">
+                {filtered ? `${filtered.length.toLocaleString()} found` : "…"}
+                {category !== "All" && ` · ${category}`}
+                {country !== "All" && ` · ${meta[country]?.name ?? country}`}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => scrollBy(-1)}
+                aria-label="Scroll channels left"
+                className="hidden size-8 cursor-pointer items-center justify-center rounded-full border border-border/60 bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground sm:flex"
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollBy(1)}
+                aria-label="Scroll channels right"
+                className="hidden size-8 cursor-pointer items-center justify-center rounded-full border border-border/60 bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground sm:flex"
+              >
+                <ChevronRight className="size-4" />
+              </button>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => scrollBy(1)}
-            aria-label="Scroll channels right"
-            className="hidden size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/60 bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground sm:flex"
+          {/* A phone scrolls down, not sideways: below `sm` the same tiles are a
+              grid of rows and columns, and the strip returns on wider screens. */}
+          <div
+            ref={scrollerRef}
+            className="grid grid-cols-3 gap-2 pb-2 [scrollbar-width:thin] sm:flex sm:gap-2 sm:overflow-x-auto sm:scroll-smooth"
           >
-            <ChevronRight className="size-4" />
-          </button>
-        </div>
+            {!filtered ? (
+              <div className="col-span-full flex w-full items-center justify-center py-10">
+                <Loader2 className="size-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="col-span-full flex w-full flex-col items-center gap-2 py-10 text-center">
+                <p className="text-sm font-semibold">
+                  {search.trim() || country !== "All" ? "No channels matched" : "No channels yet"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {search.trim() || country !== "All"
+                    ? "Try a different spelling, or pick another country."
+                    : "Live TV channels will appear here once an admin adds them."}
+                </p>
+              </div>
+            ) : (
+              <>
+                {filtered.slice(0, shown).map((c) => {
+                  const active = selected?._id === c._id;
+                  return (
+                    <button
+                      key={c._id}
+                      type="button"
+                      onClick={() => openChannel(c)}
+                      aria-label={`Watch ${c.name}`}
+                      className="group min-w-0 cursor-pointer text-left sm:w-[100px] sm:shrink-0"
+                    >
+                      <div
+                        className={`relative flex h-[68px] items-center justify-center overflow-hidden rounded-xl border bg-card p-2 transition-colors ${
+                          active
+                            ? "border-primary ring-2 ring-primary/40"
+                            : "border-border/50 group-hover:border-primary/50"
+                        }`}
+                      >
+                        <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-red-500" />
+                        {/* A logo host that refuses leaves no picture, and the
+                            browser's alt text is not a logo — show the country
+                            code until a real image paints over it. */}
+                        <span className="relative flex size-full items-center justify-center">
+                          <span className="flex size-full items-center justify-center text-xs font-bold uppercase tracking-wide text-muted-foreground/60">
+                            {meta[c.country ?? ""]?.flag ?? c.name.slice(0, 2)}
+                          </span>
+                          {c.logoUrl && (
+                            <img
+                              src={c.logoUrl}
+                              alt=""
+                              loading="lazy"
+                              onLoad={(e) =>
+                                e.currentTarget.previousElementSibling?.classList.add("hidden")
+                              }
+                              onError={(e) => e.currentTarget.remove()}
+                              className="absolute inset-0 size-full object-contain"
+                            />
+                          )}
+                        </span>
+                      </div>
+                      <p
+                        className={`mt-1.5 truncate px-0.5 text-[11px] font-medium ${
+                          active ? "text-foreground" : "text-muted-foreground"
+                        }`}
+                      >
+                        {/* A flag tells the viewer which of these is theirs
+                            once every country is on screen at once. */}
+                        {meta[c.country ?? ""]?.flag ?? ""} {c.name}
+                      </p>
+                    </button>
+                  );
+                })}
+                {filtered.length > shown && (
+                  <button
+                    type="button"
+                    onClick={() => setShown((n) => n + CHANNEL_PAGE)}
+                    aria-label="Load more channels"
+                    className="col-span-3 flex h-11 w-full shrink-0 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border/60 bg-card/40 text-[11px] font-semibold text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground sm:col-span-1 sm:h-[68px] sm:w-[100px]"
+                  >
+                    <ChevronRight className="size-4 -rotate-90" />
+                    {Math.min(CHANNEL_PAGE, filtered.length - shown).toLocaleString()} more
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </section>
 
         {/* Where all of this comes from: the open list is what makes the page
             ten thousand channels instead of the handful an admin could add. */}
@@ -803,33 +1164,6 @@ export default function TvPage() {
             </button>
           </p>
         )}
-        <p className="mt-3 text-[11px] text-muted-foreground">
-          {channels.length.toLocaleString()} live channels from{" "}
-          <a
-            href={IPTV_CREDIT.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="font-semibold underline-offset-2 hover:underline"
-          >
-            {IPTV_CREDIT.name}
-          </a>
-          {fam.length > 0 && (
-            <>
-              {" and "}
-              <a
-                href={FAMELACK_CREDIT.url}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="font-semibold underline-offset-2 hover:underline"
-              >
-                {FAMELACK_CREDIT.name}
-              </a>
-            </>
-          )}
-          , open collections of publicly available streams. A few of them only
-          play through our server, because their broadcaster blocks direct
-          links.
-        </p>
       </main>
 
       {/* Full-page player for non-direct (website) links opens in a new tab;

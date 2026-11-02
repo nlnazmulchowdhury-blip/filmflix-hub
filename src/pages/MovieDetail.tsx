@@ -584,6 +584,7 @@ export default function MovieDetail() {
       const providers = await fetchTitleDownloads({
         tmdbId: seriesTmdbId,
         imdbId: seriesImdbId,
+        title: showTitle,
         kind: "series",
         season,
         episode: row.episode,
@@ -594,11 +595,13 @@ export default function MovieDetail() {
         return;
       }
       window.location.assign(
-        downloadFileUrl(
-          file.url,
-          convexSiteUrl(),
-          `${showTitle} - S${season}E${row.episode} - ${file.label}`,
-        ),
+        file.direct
+          ? file.url
+          : downloadFileUrl(
+              file.url,
+              convexSiteUrl(),
+              `${showTitle} - S${season}E${row.episode} - ${file.label}`,
+            ),
       );
     } catch {
       toast.error("ডাউনলোড শুরু করা গেল না");

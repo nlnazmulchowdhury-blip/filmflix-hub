@@ -136,7 +136,11 @@ const RE_NSFW = /(adult|xxx|porn|18\+)/i;
  *  that are not allowed to. */
 function playTarget(url: string, referer: string): { url: string; piped: boolean } {
   if (/^https:/i.test(url) && !referer) return { url, piped: false };
-  const q = new URLSearchParams({ url, rewrite: "1" });
+  /* `base` is where the browser reaches the pipe (absolute in production,
+     root-relative when the api base is a proxied path); the Worker rewrites
+     every URI in the manifest against it, because its own origin is not
+     necessarily an address the page can open. */
+  const q = new URLSearchParams({ url, rewrite: "1", base: `${apiBase()}/embed/proxy` });
   if (referer) q.set("ref", referer);
   return { url: `${apiBase()}/embed/proxy?${q.toString()}`, piped: true };
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2, Pause, Play, SkipForward, Volume2, VolumeX } from "lucide-react";
 import { apiBase } from "@/lib/apiConfig";
 import { adSkipSeconds, ping, type VastAd } from "@/lib/vast";
+import { markAdMedia } from "@/lib/media-sniffer";
 
 /** How long we wait for a creative to produce a picture before giving the box
  *  back. An ad that never paints is a black rectangle over a film that is
@@ -66,6 +67,10 @@ export default function PreRollAd({ ad, onDone }: { ad: VastAd; onDone: () => vo
     ping(ad.impressions);
     fired.current.add("start");
     ping(ad.trackings.start);
+    /* The creative is a media file the page really fetched, so the Download
+       menu's sniffer would offer it as a download beside the film. It is an ad,
+       not a source the viewer came for. */
+    markAdMedia(ad.videoUrl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -161,6 +166,7 @@ export default function PreRollAd({ ad, onDone }: { ad: VastAd; onDone: () => vo
   return (
     <div
       ref={wrapRef}
+      data-preroll-ad
       className="absolute inset-0 z-[63] select-none bg-black"
       /* The stage toggles playback on a box click; a tap on the ad, its skip or
          its mute must never reach that handler. */

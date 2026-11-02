@@ -414,7 +414,7 @@ export async function fetchEmbedQualities(
 
 export interface TitleDownloadProvider {
   name: string;
-  entries: { label: string; url: string }[];
+  entries: { label: string; url: string; direct?: boolean }[];
 }
 
 /** Ask the Worker to probe every server-side-extractable provider for this
@@ -422,6 +422,8 @@ export interface TitleDownloadProvider {
 export async function fetchTitleDownloads(ids: {
   tmdbId?: string | number | null;
   imdbId?: string | null;
+  /** Display name — 4KHDHub's search takes a title, not an id. */
+  title?: string | null;
   kind?: "movie" | "series" | null;
   season?: number;
   episode?: number;
@@ -429,6 +431,7 @@ export async function fetchTitleDownloads(ids: {
   const q = new URLSearchParams();
   if (ids.tmdbId) q.set("tmdb", String(ids.tmdbId));
   if (ids.imdbId) q.set("imdb", ids.imdbId);
+  if (ids.title) q.set("title", ids.title);
   q.set("kind", ids.kind === "series" ? "tv" : "movie");
   if (ids.season) q.set("season", String(ids.season));
   if (ids.episode) q.set("episode", String(ids.episode));

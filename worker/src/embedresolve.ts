@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "./index";
+import { fourkhdhubFiles } from "./fourkhdhub";
 import { NXSHA_HOST, nxshaStreams, nxshaTmdbOf, type NxshaTitle } from "./nxsha";
 import { vidlinkSources, vidlinkTitleOf } from "./vidlink";
 import { vidnestSources, vidnestTitleOf } from "./vidnest";
@@ -49,12 +50,16 @@ function safeUrl(raw: string): URL | null {
     return null;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-  const h = u.hostname.toLowerCase();
+  /* WHATWG keeps IPv6 brackets and a trailing root dot on hostnames; dropping
+     both lets the range checks below see "[::1]" and "localhost." for what
+     they are. (A dotted IPv4 keeps its shape: "2130706433" already parses to
+     "127.0.0.1".) */
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
   if (
     h === "localhost" ||
     h.endsWith(".localhost") ||
     h === "0.0.0.0" ||
-    /^\d+$/.test(h.replace(/\./g, "")) // bare integer "URL"
+    /^\d+$/.test(h) // a bare integer host ("http://2130706433/") is an IP without dots
   )
     return null;
   // IPv4 private/loopback/link-local ranges and IPv6 equivalents
@@ -1008,6 +1013,14 @@ interface QualityEntry {
   url: string;
   height?: number;
   bandwidth?: number;
+  /** The host already answers with `Content-Disposition: attachment`, so the
+   *  menu links straight at it instead of piping gigabytes through us. */
+  direct?: boolean;
+}
+
+/** "Oppenheimer (1080p BluRay REMUX x264)" → "1080p BluRay REMUX x264". */
+function stripTitle(quality: string): string {
+  return quality.match(/\(([^()]+)\)\s*$/)?.[1]?.trim() || quality;
 }
 
 function qualityLabel(height: number | undefined, bandwidth: number): string {
@@ -1132,6 +1145,8 @@ embedResolveRoutes.get("/qualities", async (c) => {
 interface TitleRef {
   tmdb: string;
   imdb: string;
+  /** Display title — the only id 4KHDHub understands (it searches by name). */
+  title: string;
   kind: "movie" | "tv";
   season: number;
   episode: number;
@@ -1212,6 +1227,26 @@ const downloadExtractors: { name: string; extract: Extractor }[] = [
       ? `https://player.videasy.to/tv/${t.tmdb}/${t.season}/${t.episode}`
       : `https://player.videasy.to/movie/${t.tmdb}`,
   ),
+  /* 4KHDHub searches by name, not id, and its releases are MKV — a browser's
+     `<video>` refuses that container, so these files belong in the Download
+     menu rather than in the server lineup (see fourkhdhub.ts). */
+  {
+    name: "4KHDHub",
+    async extract(t) {
+      if (!t.title) return [];
+      const { files } = await fourkhdhubFiles({
+        title: t.title,
+        kind: t.kind,
+        season: t.season,
+        episode: t.episode,
+      });
+      return files.map((f) => ({
+        label: [stripTitle(f.quality), f.size, f.audio].filter(Boolean).join(" · "),
+        url: f.url,
+        direct: true,
+      }));
+    },
+  },
 ];
 
 embedResolveRoutes.get("/downloads", async (c) => {
@@ -1221,6 +1256,7 @@ embedResolveRoutes.get("/downloads", async (c) => {
   const ref: TitleRef = {
     tmdb,
     imdb,
+    title: (c.req.query("title") ?? "").replace(/\s+/g, " ").trim().slice(0, 120),
     kind: c.req.query("kind") === "tv" ? "tv" : "movie",
     season: Math.min(200, Math.max(1, Number(c.req.query("season")) || 1)),
     episode: Math.min(1000, Math.max(1, Number(c.req.query("episode")) || 1)),
@@ -1590,7 +1626,14 @@ embedResolveRoutes.get("/proxy", async (c) => {
     ) {
       const text = await res.text();
       const base = safeUrl(res.url)?.href ?? safe.href;
-      const self = `${new URL(c.req.url).origin}/embed/proxy`;
+      /* The client can name the address it reached us by. Behind a dev proxy
+         (page on :5199, Worker on :8793) our own origin is not reachable from
+         the browser, so a manifest rewritten with it plays nothing. */
+      const asked = c.req.query("base") ?? "";
+      const self =
+        asked.startsWith("/") || /^https?:\/\//i.test(asked)
+          ? asked
+          : `${new URL(c.req.url).origin}/embed/proxy`;
       const answer = new Response(
         rewritePlaylist(text, new URL(base), referer, self, cookie, headerless),
         {

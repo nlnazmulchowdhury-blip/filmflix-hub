@@ -2915,7 +2915,7 @@ function DownloadMenu({
     // Provider sweep works on every embed server (iframe-only ones included);
     // the master-playlist probe only applies once a raw stream is resolved.
     Promise.all([
-      (ids.tmdbId || ids.imdbId ? fetchTitleDownloads(ids) : Promise.resolve([])).catch(
+      (ids.tmdbId || ids.imdbId ? fetchTitleDownloads({ ...ids, title }) : Promise.resolve([])).catch(
         () => [] as TitleDownloadProvider[],
       ),
       streamUrl
@@ -2934,13 +2934,25 @@ function DownloadMenu({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, probeKey, attempt]);
 
-  /* Sniffed URLs the probing above did not already list. */
-  const listed = new Set([
-    ...files.map((f) => f.url),
-    ...qualities.map((q) => q.url),
-    ...providers.flatMap((p) => p.entries.map((e) => e.url)),
-  ]);
-  const detected: SniffedStream[] = sniffed.filter((s) => !listed.has(s.url));
+  /* Sniffed URLs the probing above did not already list. Compare parsed URLs,
+     not raw strings: the probe fetch percent-encodes the spaces a provider's
+     link hands out literally, and the same file would otherwise be listed twice
+     (once as the provider's row, once as "Sniffed"). */
+  const urlKey = (u: string) => {
+    try {
+      return new URL(u, location.href).href;
+    } catch {
+      return u;
+    }
+  };
+  const listed = new Set(
+    [
+      ...files.map((f) => f.url),
+      ...qualities.map((q) => q.url),
+      ...providers.flatMap((p) => p.entries.map((e) => e.url)),
+    ].map(urlKey),
+  );
+  const detected: SniffedStream[] = sniffed.filter((s) => !listed.has(urlKey(s.url)));
 
   /* Whichever Referer this CDN's host answered our player with beats the page
      the viewer happens to be standing on: a sweep row from another server is
@@ -3006,14 +3018,16 @@ function DownloadMenu({
 
   /* Direct files go through the byte pipe with an attachment header: a plain
      cross-origin `download` link is silently ignored by browsers, which is why
-     these rows used to just open the video in a new tab. */
-  const row = (label: string, sub: string, url: string) =>
+     these rows used to just open the video in a new tab. A host that already
+     sends `Content-Disposition: attachment` (a multi-GB release link) is
+     linked as-is — piping tens of gigabytes through our Worker is waste. */
+  const row = (label: string, sub: string, url: string, direct = false) =>
     line(
       label,
       sub,
       url,
       <a
-        href={proxyUrl(url, refFor(url) || undefined, downloadName(title, label, url))}
+        href={direct ? url : proxyUrl(url, refFor(url) || undefined, downloadName(title, label, url))}
         download={downloadName(title, label, url)}
         target="_blank"
         rel="noopener noreferrer"
@@ -3028,8 +3042,8 @@ function DownloadMenu({
     );
 
   /* HLS rows download in-browser (segments → remuxed .mp4) with live progress. */
-  const streamRow = (label: string, sub: string, url: string) => {
-    if (!isStream(url)) return row(label, sub, url);
+  const streamRow = (label: string, sub: string, url: string, direct = false) => {
+    if (direct || !isStream(url)) return row(label, sub, url, direct);
     const pct = progress[url];
     const busy = pct !== undefined && pct >= 0 && pct < 1;
     const start = () => {
@@ -3138,7 +3152,7 @@ function DownloadMenu({
           </p>
           {files.map((f) => streamRow(f.label, "This site's file", f.url))}
           {qualities.map((q) => streamRow(q.label, "Now-playing stream", q.url))}
-          {providers.flatMap((p) => p.entries.map((e) => streamRow(e.label, p.name, e.url)))}
+          {providers.flatMap((p) => p.entries.map((e) => streamRow(e.label, p.name, e.url, e.direct)))}
           {detected.length > 0 && (
             <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-white/50">
               Detected on this page

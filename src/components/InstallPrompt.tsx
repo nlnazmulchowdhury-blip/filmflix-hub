@@ -24,6 +24,11 @@ export default function InstallPrompt() {
       (window.navigator as any).standalone === true;
     if (standalone) return;
 
+    /* This card is for phones. The fallback timer used to put a phone banner
+       over a wide desktop window as well, where it covered the page instead of
+       helping anyone install anything. */
+    if (!window.matchMedia("(max-width: 767px)").matches) return;
+
     let dismissed: string | null = null;
     try {
       dismissed = localStorage.getItem(KEY);
